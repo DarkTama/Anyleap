@@ -6,6 +6,41 @@ Goal: expose scrcpy's options as **typed GUI controls**, never raw command input
 
 > ⚠️ **Flag names change across scrcpy versions** (e.g. `--bit-rate` → `--video-bit-rate` in v2.0; codec/input options expanded in v2.x–3.x). The exact flags below must be verified against the **pinned bundled scrcpy version** when we implement. Treat this as the intended *mapping*, not a frozen contract.
 
+## Quality presets (game-style)
+
+For the wide range of users who don't want to think about individual flags, a single **Quality** selector picks a bundle of the performance-vs-fidelity settings — exactly like Low / Medium / High / Highest in games. Picking a preset fills in the underlying settings; touching any individual setting flips the selector to **Custom**.
+
+| Preset | Max resolution (`--max-size`) | Bitrate (`--video-bit-rate`) | Max FPS (`--max-fps`) | Codec (`--video-codec`) | Best for |
+|--------|------|---------|------|-------|----------|
+| **Low** — _Smooth_ | 800 | 2 Mbps | 30 | h264 | Weak/busy Wi-Fi, lowest latency, older phones |
+| **Medium** — _Balanced_ ★ default | 1280 | 8 Mbps | 60 | h264 | Most users on decent Wi-Fi |
+| **High** | 1600 | 16 Mbps | 60 | h265 | Strong 5 GHz Wi-Fi or USB; sharper text |
+| **Highest** — _Crisp_ | 0 (native) | 30 Mbps | 60 | h265 | USB or excellent Wi-Fi; max fidelity |
+| **Custom** | — | — | — | — | Unlocks all manual controls |
+
+Notes:
+- Lower presets favor **latency and bandwidth** (best for wireless); higher presets favor **fidelity** (best for USB / strong Wi-Fi). For this app, the quality slider is effectively a "how good is your connection" slider.
+- h265/av1 give better quality-per-bit but depend on the **phone's encoder** — fall back to h264 automatically if unsupported. AV1 (Android 14+, capable hardware) stays opt-in, not in any default preset.
+- Numbers above are starting points — tune after real-world testing.
+- Future: detect stutter / wireless-vs-USB and **suggest** stepping a preset down/up.
+
+## Per-setting help text
+
+Every setting carries plain-language help so users aren't guessing — surfaced as an ⓘ tooltip/popover next to each control: a one-line **what it does** plus a concrete **example/guidance**. Examples:
+
+| Setting | Help (what it does) | Example / guidance |
+|---------|---------------------|--------------------|
+| Max resolution | Caps the long side of the mirrored video. | Lower = smoother & less lag. `1280` is smooth on Wi-Fi; `0` = phone's full resolution. |
+| Video bitrate | How much data the video stream uses. | Higher = sharper but needs better Wi-Fi. `8 Mbps` is plenty for 1080p. |
+| Max FPS | Frame-rate cap. | `60` is smooth; `30` saves bandwidth & battery. |
+| Turn screen off | Blanks the phone's own screen while mirroring. | Saves battery; touch/control still works. |
+| Keep awake | Stops the phone sleeping while connected. | Useful over USB during long sessions. |
+| Codec | Video compression format. | `h264` = most compatible; `h265` = sharper at same bitrate if the phone supports it. |
+
+Each quality preset also gets its own one-line "best for…" caption (the right-hand column in the preset table), shown under the selector.
+
+---
+
 ## Control types
 
 `toggle` (bool flag) · `select` (enum) · `number` (with min/max/step) · `text` · `file` (path picker) · `size` (W×H).
@@ -89,7 +124,7 @@ The everyday knobs, shown on the main mirror screen.
 
 ## Implementation note: schema-driven form
 
-Rather than hand-code each widget, define settings as a **schema** (id, flag, type, default, min/max/options, tier) and render the form from it. Adding a new scrcpy flag = one schema entry. This keeps us aligned with scrcpy releases and makes the core/advanced tiering trivial (just a field on each entry).
+Rather than hand-code each widget, define settings as a **schema** (id, flag, type, default, min/max/options, tier, `help`, `example`, and per-preset values) and render the form from it. Adding a new scrcpy flag = one schema entry. This keeps us aligned with scrcpy releases and makes everything else trivial: core/advanced tiering, the ⓘ help tooltips, and applying a quality preset (just read each entry's value for the chosen preset) all fall out of the same schema.
 
 ## To seed the "core" tier well
 

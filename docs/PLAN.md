@@ -42,12 +42,14 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 - **One-click Mirror** — launch scrcpy with a curated **core** settings subset.
 - **Session management** — list running mirrors, stop/kill them.
 - Per-device saved config + **import/export** of settings.
+- **Quality presets** (Low / Medium / High / Highest + Custom), game-settings style, so non-technical users pick one option instead of tuning flags.
+- **Plain-language help text** (what it does + an example) on each core setting, shown as an ⓘ tooltip.
 
 ### v2+ — "Full control"
 - Full **schema-driven settings form** covering the entire scrcpy flag set (see [SETTINGS-MAP.md](SETTINGS-MAP.md)).
 - In-window **control bar** (rotate, screenshot, file push/APK install, etc.) — escrcpy-style.
 - Reverse tethering (share PC internet to phone) via Gnirehtet.
-- Profiles/presets ("gaming", "low-bandwidth", "recording").
+- **Use-case profiles** ("gaming", "low-bandwidth", "recording") — bundles of *many* settings for a scenario; distinct from the v1 quality presets, which only cover the fidelity/performance knobs.
 - macOS / Linux builds.
 
 ### Non-goals
