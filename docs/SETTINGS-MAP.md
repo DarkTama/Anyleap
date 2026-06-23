@@ -122,9 +122,20 @@ The everyday knobs, shown on the main mirror screen.
 | TCP/IP mode | `--tcpip` | (handled by wireless flows) |
 | Port range | `--port` | number |
 
+## Finding settings (search & quick-jump)
+
+With the full flag set exposed, a **search bar** at the top of the Settings view keeps it usable:
+
+- Matches against each setting's **label, help text, and scrcpy flag** (incl. short aliases like `-b`, `-m`) — so both newcomers ("frame rate") and power users (`--max-fps`) find it.
+- Typing **filters / highlights** matching settings live; selecting a result **scrolls to and highlights** that control (expanding its tier/section if collapsed).
+- Optional **command-palette quick-jump** (e.g. Ctrl/Cmd+K) for keyboard users.
+- Graceful empty state when nothing matches.
+
+Like the tiering, help tooltips, and presets, this **falls out of the same schema** — the search index is just each entry's `label` + `help` + `flag`/aliases.
+
 ## Implementation note: schema-driven form
 
-Rather than hand-code each widget, define settings as a **schema** (id, flag, type, default, min/max/options, tier, `help`, `example`, and per-preset values) and render the form from it. Adding a new scrcpy flag = one schema entry. This keeps us aligned with scrcpy releases and makes everything else trivial: core/advanced tiering, the ⓘ help tooltips, and applying a quality preset (just read each entry's value for the chosen preset) all fall out of the same schema.
+Rather than hand-code each widget, define settings as a **schema** (id, flag, `aliases`, type, default, min/max/options, tier, `help`, `example`, and per-preset values) and render the form from it. Adding a new scrcpy flag = one schema entry. This keeps us aligned with scrcpy releases and makes everything else trivial: core/advanced tiering, the ⓘ help tooltips, applying a quality preset (read each entry's value for the chosen preset), and **settings search** (index each entry's label/help/flag/aliases) all fall out of the same schema.
 
 ## To seed the "core" tier well
 

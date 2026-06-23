@@ -47,6 +47,7 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 
 ### v2+ — "Full control"
 - Full **schema-driven settings form** covering the entire scrcpy flag set (see [SETTINGS-MAP.md](SETTINGS-MAP.md)).
+- **Settings search / quick-jump** — find any setting by name, description, or scrcpy flag and jump straight to it; keeps the full list usable once everything is exposed.
 - In-window **control bar** (rotate, screenshot, file push/APK install, etc.) — escrcpy-style.
 - Reverse tethering (share PC internet to phone) via Gnirehtet.
 - **Use-case profiles** ("gaming", "low-bandwidth", "recording") — bundles of *many* settings for a scenario; distinct from the v1 quality presets, which only cover the fidelity/performance knobs.
