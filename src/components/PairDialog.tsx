@@ -1,23 +1,33 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { selectClass } from "@/lib/styles";
 import { useAppStore } from "@/store/useAppStore";
 import { connectDevice, discoverWireless, listDevices, pairDevice } from "@/lib/tauri";
 import { upsertSaved } from "@/lib/savedDevices";
+import { generatePairingChallenge, type PairingChallenge } from "@/lib/qr";
 import type { MdnsService, SavedDevice } from "@/lib/types";
 
-type Mode = "mdns" | "manual";
+type Mode = "qr" | "mdns" | "manual";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function PairDialog({ onClose }: { onClose: () => void }) {
   const setDevices = useAppStore((s) => s.setDevices);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
 
-  const [mode, setMode] = useState<Mode>("mdns");
+  const [mode, setMode] = useState<Mode>("qr");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+
+  // QR mode
+  const [challenge, setChallenge] = useState<PairingChallenge | null>(() =>
+    generatePairingChallenge(),
+  );
+  const [qrStatus, setQrStatus] = useState<string | null>(null);
 
   // mDNS mode
   const [services, setServices] = useState<MdnsService[]>([]);
@@ -29,6 +39,19 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
   const [pairPort, setPairPort] = useState("");
   const [pairCode, setPairCode] = useState("");
   const [connectPort, setConnectPort] = useState("");
+
+  async function finishConnected(host: string, port: number) {
+    const device: SavedDevice = {
+      id: host,
+      label: host,
+      host,
+      port,
+      lastSerial: `${host}:${port}`,
+    };
+    setSavedDevices(await upsertSaved(device));
+    setDevices(await listDevices());
+    onClose();
+  }
 
   async function refreshServices() {
     setBusy(true);
@@ -46,18 +69,78 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     if (mode === "mdns") void refreshServices();
   }, [mode]);
 
-  async function finishConnected(host: string, port: number) {
-    const device: SavedDevice = {
-      id: host,
-      label: host,
-      host,
-      port,
-      lastSerial: `${host}:${port}`,
+  // QR pairing state machine: poll for the pairing service the phone advertises
+  // after scanning, pair with the embedded password, then discover + connect.
+  useEffect(() => {
+    if (mode !== "qr" || !challenge) return;
+    let cancelled = false;
+    (async () => {
+      setError(null);
+      setQrStatus("Waiting for the phone to scan…");
+      const scanDeadline = Date.now() + 120_000;
+      let pairing: MdnsService | undefined;
+      while (!cancelled && Date.now() < scanDeadline) {
+        const found = await discoverWireless().catch(() => []);
+        if (cancelled) return;
+        const pairings = found.filter((s) => s.serviceType.includes("pairing"));
+        pairing =
+          pairings.find((s) => s.name === challenge.name) ??
+          (pairings.length === 1 ? pairings[0] : undefined);
+        if (pairing) break;
+        await sleep(1500);
+      }
+      if (cancelled) return;
+      if (!pairing) {
+        setQrStatus(null);
+        setError(
+          "Timed out waiting for a scan. Keep the phone on the same Wi-Fi, or try Manual.",
+        );
+        return;
+      }
+
+      setQrStatus("Pairing…");
+      try {
+        await pairDevice(pairing.host, pairing.port, challenge.password);
+      } catch (e) {
+        setQrStatus(null);
+        setError(`Pairing failed: ${String(e)}`);
+        return;
+      }
+      if (cancelled) return;
+
+      setQrStatus("Paired. Connecting…");
+      const host = pairing.host;
+      const connectDeadline = Date.now() + 30_000;
+      let connect: MdnsService | undefined;
+      while (!cancelled && Date.now() < connectDeadline) {
+        const found = await discoverWireless().catch(() => []);
+        if (cancelled) return;
+        connect = found.find(
+          (s) => s.host === host && s.serviceType.includes("connect"),
+        );
+        if (connect) break;
+        await sleep(1500);
+      }
+      if (cancelled) return;
+      if (!connect) {
+        setQrStatus(null);
+        setError("Paired, but no connect service appeared. Use Auto-discover/Manual to finish.");
+        return;
+      }
+      try {
+        await connectDevice(connect.host, connect.port);
+      } catch (e) {
+        setQrStatus(null);
+        setError(`Connect failed: ${String(e)}`);
+        return;
+      }
+      if (cancelled) return;
+      await finishConnected(connect.host, connect.port);
+    })();
+    return () => {
+      cancelled = true;
     };
-    setSavedDevices(await upsertSaved(device));
-    setDevices(await listDevices());
-    onClose();
-  }
+  }, [mode, challenge]);
 
   async function pairViaMdns() {
     const pairing = services.find((s) => `${s.host}:${s.port}` === selected);
@@ -119,6 +202,14 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  function switchMode(next: Mode) {
+    setError(null);
+    setStatus(null);
+    setQrStatus(null);
+    setMode(next);
+    setChallenge(next === "qr" ? generatePairingChallenge() : null);
+  }
+
   const pairingServices = services.filter((s) => s.serviceType.includes("pairing"));
 
   return (
@@ -130,30 +221,69 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-xs text-zinc-500">
-          On your phone: Settings → Developer options → <b>Wireless debugging</b> →{" "}
-          <b>Pair device with pairing code</b>. Keep that screen open while pairing.
-        </p>
-
         <div className="flex gap-2">
           <Button
             size="sm"
+            variant={mode === "qr" ? "default" : "outline"}
+            onClick={() => switchMode("qr")}
+          >
+            QR code
+          </Button>
+          <Button
+            size="sm"
             variant={mode === "mdns" ? "default" : "outline"}
-            onClick={() => setMode("mdns")}
+            onClick={() => switchMode("mdns")}
           >
             Auto-discover
           </Button>
           <Button
             size="sm"
             variant={mode === "manual" ? "default" : "outline"}
-            onClick={() => setMode("manual")}
+            onClick={() => switchMode("manual")}
           >
             Manual
           </Button>
         </div>
 
-        {mode === "mdns" ? (
+        {mode === "qr" && (
+          <div className="space-y-3">
+            <p className="text-xs text-zinc-500">
+              On your phone: Settings → Developer options → <b>Wireless debugging</b> →{" "}
+              <b>Pair device with QR code</b>, then scan this:
+            </p>
+            {challenge && (
+              <div className="flex justify-center rounded-md bg-white p-4">
+                <QRCodeSVG
+                  value={challenge.payload}
+                  size={208}
+                  fgColor="#000000"
+                  bgColor="#ffffff"
+                />
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-zinc-500">{qrStatus ?? "Ready to scan."}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setError(null);
+                  setChallenge(generatePairingChallenge());
+                }}
+              >
+                <RefreshCw className="h-4 w-4" />
+                New code
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {mode === "mdns" && (
           <div className="space-y-2">
+            <p className="text-xs text-zinc-500">
+              On your phone: <b>Wireless debugging</b> → <b>Pair device with pairing code</b>,
+              then Refresh.
+            </p>
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-zinc-500">
                 Discovered pairing endpoints
@@ -165,8 +295,8 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
             </div>
             {pairingServices.length === 0 ? (
               <p className="text-xs text-zinc-500">
-                None found yet. Open "Pair device with pairing code" on the phone, then Refresh.
-                If nothing appears, your network may block mDNS — use Manual.
+                None found yet. Open the pairing screen, then Refresh. If nothing appears,
+                your network may block mDNS — use Manual.
               </p>
             ) : (
               <select
@@ -196,8 +326,13 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
               Pair &amp; connect
             </Button>
           </div>
-        ) : (
+        )}
+
+        {mode === "manual" && (
           <div className="space-y-2">
+            <p className="text-xs text-zinc-500">
+              On your phone: <b>Wireless debugging</b> → <b>Pair device with pairing code</b>.
+            </p>
             <input
               className={selectClass}
               placeholder="Phone IP (e.g. 192.168.1.42)"
