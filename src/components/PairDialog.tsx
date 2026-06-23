@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { Loader2, RefreshCw, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import type { MdnsService, SavedDevice } from "@/lib/types";
 type Mode = "qr" | "mdns" | "manual";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const POLL_MS = 800;
 
 export function PairDialog({ onClose }: { onClose: () => void }) {
   const setDevices = useAppStore((s) => s.setDevices);
@@ -28,6 +29,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     generatePairingChallenge(),
   );
   const [qrStatus, setQrStatus] = useState<string | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
 
   // mDNS mode
   const [services, setServices] = useState<MdnsService[]>([]);
@@ -76,9 +78,11 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     let cancelled = false;
     (async () => {
       setError(null);
-      setQrStatus("Waiting for the phone to scan…");
+      setQrBusy(true);
+      setQrStatus("Waiting for the phone to scan the code…");
       const scanDeadline = Date.now() + 120_000;
       let pairing: MdnsService | undefined;
+      let connect: MdnsService | undefined;
       while (!cancelled && Date.now() < scanDeadline) {
         const found = await discoverWireless().catch(() => []);
         if (cancelled) return;
@@ -86,11 +90,19 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
         pairing =
           pairings.find((s) => s.name === challenge.name) ??
           (pairings.length === 1 ? pairings[0] : undefined);
-        if (pairing) break;
-        await sleep(1500);
+        if (pairing) {
+          // Grab the connect endpoint from the same round if it's already up,
+          // so we usually skip the separate connect-wait below.
+          connect = found.find(
+            (s) => s.host === pairing!.host && s.serviceType.includes("connect"),
+          );
+          break;
+        }
+        await sleep(POLL_MS);
       }
       if (cancelled) return;
       if (!pairing) {
+        setQrBusy(false);
         setQrStatus(null);
         setError(
           "Timed out waiting for a scan. Keep the phone on the same Wi-Fi, or try Manual.",
@@ -98,31 +110,30 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
         return;
       }
 
-      setQrStatus("Pairing…");
+      setQrStatus("Scanned ✓ — pairing…");
       try {
         await pairDevice(pairing.host, pairing.port, challenge.password);
       } catch (e) {
+        setQrBusy(false);
         setQrStatus(null);
         setError(`Pairing failed: ${String(e)}`);
         return;
       }
       if (cancelled) return;
 
-      setQrStatus("Paired. Connecting…");
+      setQrStatus("Paired ✓ — connecting (this can take a few seconds)…");
       const host = pairing.host;
       const connectDeadline = Date.now() + 30_000;
-      let connect: MdnsService | undefined;
-      while (!cancelled && Date.now() < connectDeadline) {
+      while (!cancelled && !connect && Date.now() < connectDeadline) {
         const found = await discoverWireless().catch(() => []);
         if (cancelled) return;
-        connect = found.find(
-          (s) => s.host === host && s.serviceType.includes("connect"),
-        );
+        connect = found.find((s) => s.host === host && s.serviceType.includes("connect"));
         if (connect) break;
-        await sleep(1500);
+        await sleep(POLL_MS);
       }
       if (cancelled) return;
       if (!connect) {
+        setQrBusy(false);
         setQrStatus(null);
         setError("Paired, but no connect service appeared. Use Auto-discover/Manual to finish.");
         return;
@@ -130,6 +141,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
       try {
         await connectDevice(connect.host, connect.port);
       } catch (e) {
+        setQrBusy(false);
         setQrStatus(null);
         setError(`Connect failed: ${String(e)}`);
         return;
@@ -206,6 +218,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     setError(null);
     setStatus(null);
     setQrStatus(null);
+    setQrBusy(false);
     setMode(next);
     setChallenge(next === "qr" ? generatePairingChallenge() : null);
   }
@@ -262,7 +275,10 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
             <div className="flex items-center justify-between">
-              <p className="text-xs text-zinc-500">{qrStatus ?? "Ready to scan."}</p>
+              <p className="flex items-center gap-2 text-xs text-zinc-500">
+                {qrBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {qrStatus ?? "Ready to scan."}
+              </p>
               <Button
                 size="sm"
                 variant="outline"
