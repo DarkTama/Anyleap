@@ -4,6 +4,7 @@ import type {
   CoreSettings,
   DeviceInfo,
   MdnsService,
+  MirrorRect,
   SessionExited,
   SessionInfo,
 } from "./types";
@@ -48,3 +49,9 @@ export const sendKeyevent = (serial: string, keycode: number) =>
 
 export const openNotifications = (serial: string) =>
   invoke<void>("open_notifications", { serial });
+
+export const restartWithScreenOff = (serial: string, off: boolean) =>
+  invoke<SessionInfo>("restart_with_screen_off", { serial, off });
+
+export const mirrorRect = (title: string) =>
+  invoke<MirrorRect | null>("mirror_rect", { title });

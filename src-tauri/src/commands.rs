@@ -274,18 +274,10 @@ pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
     Ok(parse_adb_devices(&text))
 }
 
-/// Launch scrcpy for a device and track the session.
-#[tauri::command]
-pub fn start_mirror(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    serial: String,
-    settings: CoreSettings,
-) -> Result<SessionInfo, String> {
-    let server = resolve_server_path(&app)
+/// Spawn scrcpy with a prepared arg vector and register a tracked session.
+fn spawn_session(app: &AppHandle, serial: String, args: Vec<String>) -> Result<SessionInfo, String> {
+    let server = resolve_server_path(app)
         .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
-
-    let args = build_scrcpy_args(&serial, &settings);
 
     let mut cmd = app
         .shell()
@@ -297,7 +289,7 @@ pub fn start_mirror(
         cmd = cmd.env("ADB", adb.to_string_lossy().to_string());
     }
 
-    let (mut rx, child) = cmd.args(args).spawn().map_err(|e| e.to_string())?;
+    let (mut rx, child) = cmd.args(args.clone()).spawn().map_err(|e| e.to_string())?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let pid = child.pid();
@@ -309,7 +301,7 @@ pub fn start_mirror(
         started_at,
     };
 
-    state.sessions.lock().unwrap().insert(
+    app.state::<AppState>().sessions.lock().unwrap().insert(
         id.clone(),
         Session {
             id: id.clone(),
@@ -317,6 +309,7 @@ pub fn start_mirror(
             pid,
             started_at,
             child,
+            args,
         },
     );
 
@@ -358,6 +351,44 @@ pub fn start_mirror(
     });
 
     Ok(info)
+}
+
+/// Launch scrcpy for a device and track the session.
+#[tauri::command]
+pub fn start_mirror(
+    app: AppHandle,
+    serial: String,
+    settings: CoreSettings,
+) -> Result<SessionInfo, String> {
+    let args = build_scrcpy_args(&serial, &settings);
+    spawn_session(&app, serial, args)
+}
+
+/// Restart a device's mirror with scrcpy's screen-off toggled (true scrcpy
+/// "dark screen, still mirroring"). Reuses the original args, flipping the flag.
+#[tauri::command]
+pub fn restart_with_screen_off(
+    app: AppHandle,
+    serial: String,
+    off: bool,
+) -> Result<SessionInfo, String> {
+    let old = {
+        let state = app.state::<AppState>();
+        let mut map = state.sessions.lock().unwrap();
+        let key = map
+            .iter()
+            .find(|(_, s)| s.serial == serial)
+            .map(|(k, _)| k.clone());
+        key.and_then(|k| map.remove(&k))
+    };
+    let old = old.ok_or_else(|| "no active mirror for this device".to_string())?;
+    let mut args = old.args.clone();
+    let _ = old.child.kill();
+    args.retain(|a| a != "--turn-screen-off");
+    if off {
+        args.push("--turn-screen-off".to_string());
+    }
+    spawn_session(&app, serial, args)
 }
 
 /// Stop a running session by killing its scrcpy child.
@@ -511,6 +542,71 @@ pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), St
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Geometry of a scrcpy mirror window + its monitor's work area (for docking).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub minimized: bool,
+    pub work_left: i32,
+    pub work_top: i32,
+    pub work_right: i32,
+    pub work_bottom: i32,
+}
+
+/// Find a scrcpy mirror window by exact title and return its screen rect so the
+/// floating control strip can dock to it. Windows-only; `None` elsewhere.
+#[tauri::command]
+pub fn mirror_rect(title: String) -> Option<MirrorRect> {
+    #[cfg(windows)]
+    {
+        use std::mem::size_of;
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect, IsIconic};
+
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok()?;
+        let minimized = unsafe { IsIconic(hwnd) }.as_bool();
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
+
+        let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let mut mi = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let work = if unsafe { GetMonitorInfoW(hmon, &mut mi) }.as_bool() {
+            mi.rcWork
+        } else {
+            rect
+        };
+
+        Some(MirrorRect {
+            x: rect.left,
+            y: rect.top,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+            minimized,
+            work_left: work.left,
+            work_top: work.top,
+            work_right: work.right,
+            work_bottom: work.bottom,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = title;
+        None
     }
 }
 

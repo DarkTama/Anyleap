@@ -11,6 +11,8 @@ pub struct Session {
     pub started_at: i64,
     /// Handle to the spawned scrcpy child, used to kill it on demand.
     pub child: CommandChild,
+    /// The scrcpy args this session was launched with (for restart-with-screen-off).
+    pub args: Vec<String>,
 }
 
 /// App-wide state held in Tauri's managed state.

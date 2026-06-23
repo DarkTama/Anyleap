@@ -1,7 +1,21 @@
-import { ArrowLeft, Bell, Camera, Circle, Power, Square, Volume2, VolumeX } from "lucide-react";
+import { useState } from "react";
+import {
+  ArrowLeft,
+  Bell,
+  Camera,
+  Circle,
+  Monitor,
+  MonitorOff,
+  Moon,
+  Power,
+  Square,
+  Sun,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
-import { openNotifications, sendKeyevent } from "@/lib/tauri";
+import { openNotifications, restartWithScreenOff, sendKeyevent } from "@/lib/tauri";
 import { KEYCODE } from "@/lib/keycodes";
 
 const btn = "h-14 w-16 flex-col gap-1 px-1 text-[10px]";
@@ -17,9 +31,27 @@ export function ControlBar({
   orientation?: "horizontal" | "vertical";
 }) {
   const setError = useAppStore((s) => s.setError);
+  const [asleep, setAsleep] = useState(false);
+  const [screenOff, setScreenOff] = useState(false);
+
   const key = (code: number) => () =>
     sendKeyevent(serial, code).catch((e) => setError(String(e)));
   const notif = () => openNotifications(serial).catch((e) => setError(String(e)));
+
+  // Instant adb sleep/wake (phone really sleeps; mirror shows lock screen).
+  const toggleSleep = () => {
+    const next = !asleep;
+    sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
+      .then(() => setAsleep(next))
+      .catch((e) => setError(String(e)));
+  };
+  // True scrcpy screen-off: restart the mirror with --turn-screen-off toggled.
+  const toggleScreenOff = () => {
+    const next = !screenOff;
+    restartWithScreenOff(serial, next)
+      .then(() => setScreenOff(next))
+      .catch((e) => setError(String(e)));
+  };
 
   const container =
     orientation === "vertical"
@@ -61,6 +93,14 @@ export function ControlBar({
         <Button variant="outline" className={btn} onClick={notif}>
           <Bell className="h-4 w-4" />
           Notif
+        </Button>
+        <Button variant="outline" className={btn} onClick={toggleSleep}>
+          {asleep ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          {asleep ? "Wake" : "Sleep"}
+        </Button>
+        <Button variant="outline" className={btn} onClick={toggleScreenOff}>
+          {screenOff ? <Monitor className="h-4 w-4" /> : <MonitorOff className="h-4 w-4" />}
+          {screenOff ? "Scr on" : "Scr off"}
         </Button>
       </div>
     </div>

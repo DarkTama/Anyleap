@@ -104,3 +104,15 @@ export interface SavedDevice {
   port: number; // last-known connect port
   lastSerial: string; // "host:port" as last seen by listDevices
 }
+
+export interface MirrorRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  minimized: boolean;
+  workLeft: number;
+  workTop: number;
+  workRight: number;
+  workBottom: number;
+}

@@ -7,4 +7,6 @@ export const KEYCODE = {
   VOLUME_DOWN: 25,
   POWER: 26,
   SCREENSHOT: 120, // KEYCODE_SYSRQ
+  SLEEP: 223,
+  WAKEUP: 224,
 } as const;

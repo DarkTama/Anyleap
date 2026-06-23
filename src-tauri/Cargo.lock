@@ -58,6 +58,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-store",
  "uuid",
+ "windows",
 ]
 
 [[package]]
