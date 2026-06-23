@@ -19,6 +19,8 @@ pub fn run() {
             commands::pair_device,
             commands::connect_device,
             commands::disconnect_device,
+            commands::send_keyevent,
+            commands::open_notifications,
         ])
         .on_window_event(|window, event| {
             // Kill any running scrcpy children when the main window closes,

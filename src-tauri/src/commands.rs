@@ -483,6 +483,37 @@ pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Resul
     }
 }
 
+/// Send an Android key event to a device (`adb shell input keyevent`).
+#[tauri::command]
+pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Result<(), String> {
+    let kc = keycode.to_string();
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "input", "keyevent", &kc])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Expand the notification shade on a device.
+#[tauri::command]
+pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "cmd", "statusbar", "expand-notifications"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

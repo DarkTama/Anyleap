@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
-import { DevicesPanel } from "@/components/DevicesPanel";
+import { DevicesTab } from "@/components/DevicesTab";
 import { SettingsPanel } from "@/components/SettingsPanel";
-import { SessionsPanel } from "@/components/SessionsPanel";
-import { SavedDevicesPanel } from "@/components/SavedDevicesPanel";
 import { PairDialog } from "@/components/PairDialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/useAppStore";
 import {
   connectDevice,
@@ -17,6 +16,8 @@ import {
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
 
+type Tab = "devices" | "settings";
+
 function App() {
   const error = useAppStore((s) => s.error);
   const setDevices = useAppStore((s) => s.setDevices);
@@ -26,6 +27,7 @@ function App() {
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
   const [pairOpen, setPairOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("devices");
 
   // Event listeners + initial hydrate.
   useEffect(() => {
@@ -55,8 +57,6 @@ function App() {
       if (cancelled) return;
       setSavedDevices(saved);
       if (saved.length) {
-        // Wireless-debugging connect ports are dynamic; discover the current one
-        // per saved host, falling back to the last-known port.
         const services = await discoverWireless().catch(() => []);
         if (cancelled) return;
         await Promise.allSettled(
@@ -87,11 +87,34 @@ function App() {
             Effortless Android mirroring — USB &amp; wireless
           </p>
         </div>
-        <Button size="sm" onClick={() => setPairOpen((v) => !v)}>
+        <Button
+          size="sm"
+          onClick={() => {
+            setTab("devices");
+            setPairOpen((v) => !v);
+          }}
+        >
           <Plus className="h-4 w-4" />
           Add wireless device
         </Button>
       </header>
+
+      <nav className="flex gap-1 border-b border-zinc-200 px-6 dark:border-zinc-800">
+        {(["devices", "settings"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+              tab === t
+                ? "border-zinc-900 text-zinc-900 dark:border-zinc-50 dark:text-zinc-50"
+                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",
+            )}
+          >
+            {t === "devices" ? "Devices" : "Settings"}
+          </button>
+        ))}
+      </nav>
 
       {error && (
         <div className="mx-6 mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
@@ -99,14 +122,15 @@ function App() {
         </div>
       )}
 
-      <main className="grid gap-4 p-6 lg:grid-cols-[1fr_360px]">
-        <div className="space-y-4">
-          {pairOpen && <PairDialog onClose={() => setPairOpen(false)} />}
-          <DevicesPanel />
-          <SavedDevicesPanel />
-          <SessionsPanel />
-        </div>
-        <SettingsPanel />
+      <main className="space-y-4 p-6">
+        {tab === "devices" ? (
+          <>
+            {pairOpen && <PairDialog onClose={() => setPairOpen(false)} />}
+            <DevicesTab />
+          </>
+        ) : (
+          <SettingsPanel />
+        )}
       </main>
     </div>
   );

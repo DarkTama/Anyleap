@@ -40,3 +40,11 @@ export const connectDevice = (host: string, port: number) =>
 
 export const disconnectDevice = (host: string, port: number) =>
   invoke<void>("disconnect_device", { host, port });
+
+// --- Control (M4) ---
+
+export const sendKeyevent = (serial: string, keycode: number) =>
+  invoke<void>("send_keyevent", { serial, keycode });
+
+export const openNotifications = (serial: string) =>
+  invoke<void>("open_notifications", { serial });
