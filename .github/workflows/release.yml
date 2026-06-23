@@ -1,0 +1,94 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # tauri-action creates the Release and uploads assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Rust first: fetch-binaries.ps1 derives the target triple from rustc.
+      - name: Setup Rust (stable-msvc)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      # postinstall runs scripts/fetch-binaries.ps1 (downloads + SHA-256-verifies
+      # scrcpy v4.0 into src-tauri/binaries/) — the gitignored sidecars/resources.
+      - name: Install deps (runs fetch-binaries via postinstall)
+        run: npm ci
+
+      - name: Ensure bundled binaries present
+        run: npm run fetch-binaries
+
+      # Builds the frontend + Rust, produces the NSIS installer, creates the
+      # GitHub Release and uploads the installer.
+      - name: Build app + create Release (NSIS)
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'AnyLeap ${{ github.ref_name }}'
+          releaseDraft: false
+          prerelease: false
+          releaseBody: |
+            AnyLeap ${{ github.ref_name }} (Windows x64)
+
+            Assets:
+            - `AnyLeap_*_x64-setup.exe` — installer
+            - `AnyLeap-*-portable-win64.zip` — portable (unzip and run anyleap.exe)
+
+            Builds are unsigned — Windows SmartScreen may warn on first run
+            ("More info" → "Run anyway"). Requires the WebView2 runtime
+            (preinstalled on Windows 11 / most Windows 10).
+
+      # Assemble a portable ZIP that mirrors the bundler's resource layout, so
+      # the same runtime path resolution in src-tauri/src/commands.rs succeeds.
+      - name: Assemble portable ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rel = 'src-tauri/target/release'
+          $bin = 'src-tauri/binaries'
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $stage = Join-Path $env:RUNNER_TEMP 'portable'
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Force -Path $stage, (Join-Path $stage 'scrcpy') | Out-Null
+
+          Copy-Item "$rel/anyleap.exe" $stage -Force
+          Copy-Item "$bin/adb-x86_64-pc-windows-msvc.exe"    $stage -Force
+          Copy-Item "$bin/scrcpy-x86_64-pc-windows-msvc.exe" $stage -Force
+          Copy-Item "$bin/dll/*.dll" $stage -Force
+          Copy-Item "$bin/*.png"     $stage -Force
+          Copy-Item "$bin/scrcpy-server" (Join-Path $stage 'scrcpy/scrcpy-server') -Force
+          if (Test-Path "$rel/WebView2Loader.dll") { Copy-Item "$rel/WebView2Loader.dll" $stage -Force }
+
+          $zip = "AnyLeap-$ver-portable-win64.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
+          "PORTABLE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload portable ZIP to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} "$env:PORTABLE_ZIP" --clobber
