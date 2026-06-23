@@ -15,11 +15,13 @@ import {
   onSessionStarted,
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 type Tab = "devices" | "settings";
 
 function App() {
   const error = useAppStore((s) => s.error);
+  const sessions = useAppStore((s) => s.sessions);
   const setDevices = useAppStore((s) => s.setDevices);
   const setSessions = useAppStore((s) => s.setSessions);
   const upsertSession = useAppStore((s) => s.upsertSession);
@@ -77,6 +79,37 @@ function App() {
       cancelled = true;
     };
   }, [setSavedDevices, setDevices]);
+
+  // Floating, always-on-top control window: open while mirroring, close when idle.
+  useEffect(() => {
+    (async () => {
+      const existing = await WebviewWindow.getByLabel("controls");
+      if (sessions.length > 0) {
+        if (!existing) {
+          const serial = sessions[sessions.length - 1].serial;
+          try {
+            const w = new WebviewWindow("controls", {
+              url: `index.html?control=1&serial=${encodeURIComponent(serial)}`,
+              title: "AnyLeap Controls",
+              width: 88,
+              height: 560,
+              x: 24,
+              y: 80,
+              resizable: false,
+              decorations: false,
+              alwaysOnTop: true,
+              skipTaskbar: true,
+            });
+            w.once("tauri://error", (e) => console.error("controls window:", e));
+          } catch (e) {
+            console.error("controls window create failed:", e);
+          }
+        }
+      } else if (existing) {
+        await existing.close();
+      }
+    })();
+  }, [sessions]);
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
