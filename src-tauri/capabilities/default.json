@@ -12,6 +12,8 @@
     "core:window:allow-set-focus",
     "core:window:allow-set-position",
     "core:window:allow-outer-size",
+    "core:window:allow-hide",
+    "core:window:allow-show",
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/scrcpy", "sidecar": true, "args": true }]

@@ -12,16 +12,34 @@ export function ControlWindow({ serial }: { serial: string }) {
     const title = `AnyLeap — ${serial}`;
     const win = getCurrentWindow();
     let active = true;
+    let visible = true;
+    let lastX = Number.NaN;
+    let lastY = Number.NaN;
+    let stripW = 88;
+    win.outerSize().then((s) => (stripW = s.width)).catch(() => {});
 
     const tick = async () => {
       if (!active) return;
       try {
         const r = await mirrorRect(title);
-        if (r && !r.minimized) {
-          const w = (await win.outerSize()).width;
-          let x = r.x + r.width; // dock to the right of the mirror
-          if (x + w > r.workRight) x = r.x - w; // no room right -> dock left
-          if (x < r.workLeft) x = r.workRight - w; // no room either -> overlay right edge
+        if (!r || r.minimized) {
+          // Mirror minimized / gone -> hide the strip until it returns.
+          if (visible) {
+            visible = false;
+            await win.hide();
+          }
+          return;
+        }
+        if (!visible) {
+          visible = true;
+          await win.show();
+        }
+        let x = r.x + r.width; // dock to the right of the mirror
+        if (x + stripW > r.workRight) x = r.x - stripW; // no room right -> dock left
+        if (x < r.workLeft) x = r.workRight - stripW; // no room either -> right edge
+        if (x !== lastX || r.y !== lastY) {
+          lastX = x;
+          lastY = r.y;
           await win.setPosition(new PhysicalPosition(x, r.y));
         }
       } catch {
@@ -29,7 +47,7 @@ export function ControlWindow({ serial }: { serial: string }) {
       }
     };
 
-    const id = setInterval(tick, 300);
+    const id = setInterval(tick, 50);
     void tick();
     return () => {
       active = false;
