@@ -32,7 +32,8 @@
     ],
     "resources": {
       "binaries/scrcpy-server": "scrcpy/scrcpy-server",
-      "binaries/dll/*.dll": ""
+      "binaries/dll/*.dll": "",
+      "binaries/*.png": ""
     },
     "icon": [
       "icons/32x32.png",

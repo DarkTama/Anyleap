@@ -102,6 +102,10 @@ Copy-Item (Join-Path $srcDir "scrcpy-server") $serverDst -Force
 Get-ChildItem -Path $srcDir -Filter *.dll | ForEach-Object {
     Copy-Item $_.FullName (Join-Path $dllDir $_.Name) -Force
 }
+# scrcpy window icons (scrcpy.png / disconnected.png) — loaded from next to scrcpy.exe.
+Get-ChildItem -Path $srcDir -Filter *.png | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $binDir $_.Name) -Force
+}
 
 Write-Host ""
 Write-Host "Done. Layout under src-tauri/binaries/ :"
