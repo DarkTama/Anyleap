@@ -43,6 +43,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   const sessions = useAppStore((s) => s.sessions);
   const setDevices = useAppStore((s) => s.setDevices);
   const setError = useAppStore((s) => s.setError);
+  const controlConfig = useAppStore((s) => s.controlConfig);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
 
@@ -140,7 +141,9 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
           )}
         </span>
       </div>
-      {open && status !== "offline" && <ControlBar serial={device.serial} />}
+      {open && status !== "offline" && (
+        <ControlBar serial={device.serial} config={controlConfig} orientation="horizontal" />
+      )}
     </div>
   );
 }
@@ -153,6 +156,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const setDevices = useAppStore((s) => s.setDevices);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
+  const controlConfig = useAppStore((s) => s.controlConfig);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
 
@@ -283,7 +287,9 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
           </Button>
         </span>
       </div>
-      {open && serial && status !== "offline" && <ControlBar serial={serial} />}
+      {open && serial && status !== "offline" && (
+        <ControlBar serial={serial} config={controlConfig} orientation="horizontal" />
+      )}
     </div>
   );
 }

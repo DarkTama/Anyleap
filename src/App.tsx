@@ -15,6 +15,7 @@ import {
   onSessionStarted,
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
+import { loadControlConfig } from "@/lib/controlConfig";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 type Tab = "devices" | "settings";
@@ -27,6 +28,7 @@ function App() {
   const upsertSession = useAppStore((s) => s.upsertSession);
   const removeSession = useAppStore((s) => s.removeSession);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
+  const setControlConfig = useAppStore((s) => s.setControlConfig);
   const setError = useAppStore((s) => s.setError);
   const [pairOpen, setPairOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("devices");
@@ -79,6 +81,11 @@ function App() {
       cancelled = true;
     };
   }, [setSavedDevices, setDevices]);
+
+  // Load the persisted control-bar config on launch.
+  useEffect(() => {
+    loadControlConfig().then(setControlConfig).catch(() => {});
+  }, [setControlConfig]);
 
   // Floating, always-on-top control window: open while mirroring, close when idle.
   useEffect(() => {

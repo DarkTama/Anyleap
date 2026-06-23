@@ -7,6 +7,8 @@ import type {
   SessionInfo,
 } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "@/lib/types";
+import type { ControlConfig } from "@/lib/controlConfig";
+import { DEFAULT_CONTROL_CONFIG } from "@/lib/controlConfig";
 
 interface AppStore {
   devices: DeviceInfo[];
@@ -14,6 +16,7 @@ interface AppStore {
   savedDevices: SavedDevice[];
   settings: CoreSettings;
   preset: QualityPreset;
+  controlConfig: ControlConfig;
   error: string | null;
 
   setDevices: (d: DeviceInfo[]) => void;
@@ -23,6 +26,7 @@ interface AppStore {
   setSavedDevices: (d: SavedDevice[]) => void;
   setSettings: (s: CoreSettings) => void;
   setPreset: (p: QualityPreset) => void;
+  setControlConfig: (c: ControlConfig) => void;
   setError: (e: string | null) => void;
 }
 
@@ -32,6 +36,7 @@ export const useAppStore = create<AppStore>((set) => ({
   savedDevices: [],
   settings: DEFAULT_SETTINGS,
   preset: "medium",
+  controlConfig: DEFAULT_CONTROL_CONFIG,
   error: null,
 
   setDevices: (devices) => set({ devices }),
@@ -47,5 +52,6 @@ export const useAppStore = create<AppStore>((set) => ({
   setSavedDevices: (savedDevices) => set({ savedDevices }),
   setSettings: (settings) => set({ settings }),
   setPreset: (preset) => set({ preset }),
+  setControlConfig: (controlConfig) => set({ controlConfig }),
   setError: (error) => set({ error }),
 }));

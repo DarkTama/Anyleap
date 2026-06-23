@@ -1,29 +1,64 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { PhysicalPosition } from "@tauri-apps/api/dpi";
+import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
+import { listen } from "@tauri-apps/api/event";
 import { GripHorizontal, X } from "lucide-react";
 import { ControlBar } from "@/components/ControlBar";
 import { mirrorRect } from "@/lib/tauri";
+import {
+  DEFAULT_CONTROL_CONFIG,
+  loadControlConfig,
+  type ControlConfig,
+} from "@/lib/controlConfig";
 
-/** Root of the floating, always-on-top control window (separate webview).
- *  Docks itself to the scrcpy mirror window and follows it. */
+const THICKNESS: Record<ControlConfig["size"], number> = { sm: 80, md: 92, lg: 112 };
+const STEP: Record<ControlConfig["size"], number> = { sm: 56, md: 64, lg: 76 };
+
+const countButtons = (c: ControlConfig) => Object.values(c.buttons).filter(Boolean).length;
+
+/** Floating, always-on-top control window. Reads the user's control-bar config
+ *  (dock side / size / buttons) and docks itself to the scrcpy mirror window. */
 export function ControlWindow({ serial }: { serial: string }) {
+  const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
+
+  // Load config + live updates from the main window.
   useEffect(() => {
+    loadControlConfig().then(setConfig).catch(() => {});
+    const un = listen<ControlConfig>("control-config", (e) => setConfig(e.payload));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  const vertical =
+    config.dock === "left" || config.dock === "right" || config.dock === "undocked";
+  const orientation = vertical ? "vertical" : "horizontal";
+
+  // Size the window from the config (logical px so it matches the CSS layout).
+  useEffect(() => {
+    const long = 48 + countButtons(config) * STEP[config.size];
+    const thick = THICKNESS[config.size];
+    const w = vertical ? thick : long;
+    const h = vertical ? long : thick + 28;
+    getCurrentWindow().setSize(new LogicalSize(w, h)).catch(() => {});
+  }, [config, vertical]);
+
+  // Dock to the mirror window and follow it (skip when undocked = free-floating).
+  useEffect(() => {
+    if (config.dock === "undocked") return;
+    const dock = config.dock;
     const title = `AnyLeap — ${serial}`;
     const win = getCurrentWindow();
     let active = true;
     let visible = true;
     let lastX = Number.NaN;
     let lastY = Number.NaN;
-    let stripW = 88;
-    win.outerSize().then((s) => (stripW = s.width)).catch(() => {});
 
     const tick = async () => {
       if (!active) return;
       try {
         const r = await mirrorRect(title);
         if (!r || r.minimized) {
-          // Mirror minimized / gone -> hide the strip until it returns.
           if (visible) {
             visible = false;
             await win.hide();
@@ -34,16 +69,33 @@ export function ControlWindow({ serial }: { serial: string }) {
           visible = true;
           await win.show();
         }
-        let x = r.x + r.width; // dock to the right of the mirror
-        if (x + stripW > r.workRight) x = r.x - stripW; // no room right -> dock left
-        if (x < r.workLeft) x = r.workRight - stripW; // no room either -> right edge
-        if (x !== lastX || r.y !== lastY) {
+        const sz = await win.outerSize(); // physical px
+        const w = sz.width;
+        const h = sz.height;
+        let x: number;
+        let y: number;
+        if (dock === "right") {
+          x = r.x + r.width;
+          y = r.y;
+        } else if (dock === "left") {
+          x = r.x - w;
+          y = r.y;
+        } else if (dock === "top") {
+          x = r.x;
+          y = r.y - h;
+        } else {
+          x = r.x; // bottom
+          y = r.y + r.height;
+        }
+        x = Math.max(r.workLeft, Math.min(x, r.workRight - w));
+        y = Math.max(r.workTop, Math.min(y, r.workBottom - h));
+        if (x !== lastX || y !== lastY) {
           lastX = x;
-          lastY = r.y;
-          await win.setPosition(new PhysicalPosition(x, r.y));
+          lastY = y;
+          await win.setPosition(new PhysicalPosition(x, y));
         }
       } catch {
-        // mirror window may not be up yet, or moved off a monitor — ignore
+        // mirror window not up yet / off a monitor — ignore
       }
     };
 
@@ -53,7 +105,7 @@ export function ControlWindow({ serial }: { serial: string }) {
       active = false;
       clearInterval(id);
     };
-  }, [serial]);
+  }, [serial, config.dock]);
 
   return (
     <div className="flex h-screen flex-col bg-zinc-900 text-zinc-50">
@@ -71,7 +123,7 @@ export function ControlWindow({ serial }: { serial: string }) {
         </button>
       </div>
       <div className="flex-1 overflow-auto">
-        <ControlBar serial={serial} orientation="vertical" />
+        <ControlBar serial={serial} config={config} orientation={orientation} />
       </div>
     </div>
   );
