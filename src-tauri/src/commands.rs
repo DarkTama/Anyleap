@@ -63,11 +63,45 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Absolute path to the bundled adb sidecar (sits next to the app executable).
+/// Locate the bundled adb across dev (`adb.exe`, sidecar staged unsuffixed) and
+/// production (`adb-<triple>.exe` in the install root) layouts.
 fn adb_path() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .map(|p| p.with_file_name(ADB_SIDECAR))
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let candidates = [
+        dir.join("adb.exe"),
+        dir.join(ADB_SIDECAR),
+        // dev fallback: src-tauri/target/debug -> src-tauri/binaries
+        dir.join("..").join("..").join("binaries").join(ADB_SIDECAR),
+    ];
+    candidates.into_iter().find(|c| c.exists())
+}
+
+/// Locate the scrcpy-server jar across production (bundled resource) and dev layouts.
+fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    // Production: bundled as a resource under scrcpy/.
+    if let Ok(p) = app.path().resolve("scrcpy/scrcpy-server", BaseDirectory::Resource) {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // Dev / fallback: relative to the executable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidates = [
+                dir.join("scrcpy-server"),
+                dir.join("scrcpy").join("scrcpy-server"),
+                // dev: src-tauri/target/debug -> src-tauri/binaries/scrcpy-server
+                dir.join("..").join("..").join("binaries").join("scrcpy-server"),
+            ];
+            for cand in candidates {
+                if cand.exists() {
+                    return Some(cand);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Parse `adb devices -l` output into structured device records.
@@ -175,10 +209,8 @@ pub fn start_mirror(
     serial: String,
     settings: CoreSettings,
 ) -> Result<SessionInfo, String> {
-    let server = app
-        .path()
-        .resolve("scrcpy/scrcpy-server", BaseDirectory::Resource)
-        .map_err(|e| e.to_string())?;
+    let server = resolve_server_path(&app)
+        .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
 
     let args = build_scrcpy_args(&serial, &settings);
 
