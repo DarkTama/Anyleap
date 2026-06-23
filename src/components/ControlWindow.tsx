@@ -58,7 +58,11 @@ export function ControlWindow({ serial }: { serial: string }) {
       if (!active) return;
       try {
         const r = await mirrorRect(title);
-        if (!r || r.minimized) {
+        // Follow the mirror's focus: only show while an AnyLeap window (the
+        // mirror or this strip) is foreground — hide when another app is active,
+        // or when the mirror is minimized/gone.
+        const active = !!r && !r.minimized && r.foreground.startsWith("AnyLeap");
+        if (!r || !active) {
           if (visible) {
             visible = false;
             await win.hide();

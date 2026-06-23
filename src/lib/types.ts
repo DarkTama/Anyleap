@@ -115,4 +115,5 @@ export interface MirrorRect {
   workTop: number;
   workRight: number;
   workBottom: number;
+  foreground: string;
 }

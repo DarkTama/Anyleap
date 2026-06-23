@@ -558,6 +558,8 @@ pub struct MirrorRect {
     pub work_top: i32,
     pub work_right: i32,
     pub work_bottom: i32,
+    /// Title of the current foreground window (so the strip can follow focus).
+    pub foreground: String,
 }
 
 /// Find a scrcpy mirror window by exact title and return its screen rect so the
@@ -572,7 +574,9 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
         use windows::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
         };
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect, IsIconic};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetForegroundWindow, GetWindowRect, GetWindowTextW, IsIconic,
+        };
 
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok()?;
@@ -591,6 +595,10 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
             rect
         };
 
+        let mut buf = [0u16; 512];
+        let n = unsafe { GetWindowTextW(GetForegroundWindow(), &mut buf) };
+        let foreground = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+
         Some(MirrorRect {
             x: rect.left,
             y: rect.top,
@@ -601,6 +609,7 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
             work_top: work.top,
             work_right: work.right,
             work_bottom: work.bottom,
+            foreground,
         })
     }
     #[cfg(not(windows))]
