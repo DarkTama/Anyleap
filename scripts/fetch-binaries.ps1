@@ -76,7 +76,15 @@ if (-not $ExpectedSha256) {
         Write-Warning "Could not fetch SHA256SUMS.txt; skipping integrity check."
     }
 }
-$actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash
+# Compute SHA-256 via .NET (Get-FileHash is unavailable on some CI PowerShell hosts).
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$stream = [System.IO.File]::OpenRead($zip)
+try {
+    $actual = [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '')
+} finally {
+    $stream.Dispose()
+    $sha256.Dispose()
+}
 if ($ExpectedSha256) {
     if ($actual -ne $ExpectedSha256.ToUpper()) {
         throw "SHA-256 mismatch for $asset`n  expected $($ExpectedSha256.ToUpper())`n  actual   $actual"
