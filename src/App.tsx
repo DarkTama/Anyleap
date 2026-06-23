@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
 import {
   connectDevice,
+  discoverWireless,
   listDevices,
   listSessions,
   onSessionExited,
@@ -53,9 +54,24 @@ function App() {
       const saved = await listSaved().catch(() => []);
       if (cancelled) return;
       setSavedDevices(saved);
-      await Promise.allSettled(saved.map((d) => connectDevice(d.host, d.port)));
-      if (cancelled) return;
-      listDevices().then(setDevices).catch(() => {});
+      if (saved.length) {
+        // Wireless-debugging connect ports are dynamic; discover the current one
+        // per saved host, falling back to the last-known port.
+        const services = await discoverWireless().catch(() => []);
+        if (cancelled) return;
+        await Promise.allSettled(
+          saved.map((d) => {
+            const svc = services.find(
+              (s) => s.host === d.host && s.serviceType.includes("connect"),
+            );
+            return connectDevice(d.host, svc?.port ?? d.port);
+          }),
+        );
+        if (cancelled) return;
+        listDevices()
+          .then(setDevices)
+          .catch(() => {});
+      }
     })();
     return () => {
       cancelled = true;

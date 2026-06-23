@@ -91,6 +91,25 @@ fn adb_path() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|c| c.exists())
 }
 
+/// Build an `adb` sidecar command with the working mDNS backend forced on.
+///
+/// platform-tools r37 defaults to the Openscreen mDNS backend, which discovers
+/// nothing on Windows; the legacy backend (`ADB_MDNS_OPENSCREEN=0`) works. The
+/// backend is fixed when the adb *server* starts, so we set it on every adb call
+/// — whichever invocation starts the server configures it correctly.
+fn adb_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+    app.shell()
+        .sidecar("adb")
+        .map(|cmd| {
+            // Working mDNS backend (Openscreen discovers nothing on Windows), and
+            // disable mDNS auto-connect — we manage connections explicitly, which
+            // avoids duplicate/auto-connected device entries.
+            cmd.env("ADB_MDNS_OPENSCREEN", "0")
+                .env("ADB_MDNS_AUTO_CONNECT", "0")
+        })
+        .map_err(|e| e.to_string())
+}
+
 /// Locate the scrcpy-server jar across production (bundled resource) and dev layouts.
 fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     // Production: bundled as a resource under scrcpy/.
@@ -242,10 +261,7 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
 /// List USB/TCP devices known to adb.
 #[tauri::command]
 pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
-    let output = app
-        .shell()
-        .sidecar("adb")
-        .map_err(|e| e.to_string())?
+    let output = adb_cmd(&app)?
         .args(["devices", "-l"])
         .output()
         .await
@@ -375,10 +391,7 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
 /// Discover wireless adb services on the LAN via `adb mdns services`.
 #[tauri::command]
 pub async fn discover_wireless(app: AppHandle) -> Result<Vec<MdnsService>, String> {
-    let output = app
-        .shell()
-        .sidecar("adb")
-        .map_err(|e| e.to_string())?
+    let output = adb_cmd(&app)?
         .args(["mdns", "services"])
         .output()
         .await
@@ -403,10 +416,7 @@ pub async fn pair_device(
     code: String,
 ) -> Result<String, String> {
     let target = format!("{host}:{port}");
-    let output = app
-        .shell()
-        .sidecar("adb")
-        .map_err(|e| e.to_string())?
+    let output = adb_cmd(&app)?
         .args(["pair", &target, &code])
         .output()
         .await
@@ -429,10 +439,7 @@ pub async fn pair_device(
 #[tauri::command]
 pub async fn connect_device(app: AppHandle, host: String, port: u16) -> Result<String, String> {
     let target = format!("{host}:{port}");
-    let output = app
-        .shell()
-        .sidecar("adb")
-        .map_err(|e| e.to_string())?
+    let output = adb_cmd(&app)?
         .args(["connect", &target])
         .output()
         .await
@@ -456,10 +463,7 @@ pub async fn connect_device(app: AppHandle, host: String, port: u16) -> Result<S
 #[tauri::command]
 pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Result<(), String> {
     let target = format!("{host}:{port}");
-    let output = app
-        .shell()
-        .sidecar("adb")
-        .map_err(|e| e.to_string())?
+    let output = adb_cmd(&app)?
         .args(["disconnect", &target])
         .output()
         .await
