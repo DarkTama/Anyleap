@@ -87,3 +87,20 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   noAudio: false,
   noControl: false,
 };
+
+// --- Wireless (M2) ---
+
+export interface MdnsService {
+  name: string;
+  serviceType: string; // "_adb-tls-pairing._tcp" | "_adb-tls-connect._tcp" | "_adb._tcp"
+  host: string;
+  port: number;
+}
+
+export interface SavedDevice {
+  id: string; // pragmatic key = host (M2)
+  label: string;
+  host: string;
+  port: number; // last-known connect port
+  lastSerial: string; // "host:port" as last seen by listDevices
+}

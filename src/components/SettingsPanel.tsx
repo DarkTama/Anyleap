@@ -8,14 +8,10 @@ import {
   type CoreSettings,
   type QualityPreset,
 } from "@/lib/types";
+import { optionClass, selectClass } from "@/lib/styles";
 
 const CODECS: Codec[] = ["h264", "h265", "av1"];
 const PRESETS: QualityPreset[] = ["low", "medium", "high", "highest", "custom"];
-
-const selectClass =
-  "w-full rounded-md border border-zinc-300 bg-white text-zinc-900 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
-
-const optionClass = "bg-white text-zinc-900 dark:bg-zinc-900 dark:text-zinc-50";
 
 export function SettingsPanel() {
   const settings = useAppStore((s) => s.settings);

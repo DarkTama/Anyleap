@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
-import type { CoreSettings, DeviceInfo, SessionExited, SessionInfo } from "./types";
+import type {
+  CoreSettings,
+  DeviceInfo,
+  MdnsService,
+  SessionExited,
+  SessionInfo,
+} from "./types";
 
 // --- Commands ---
 
@@ -21,3 +27,16 @@ export const onSessionStarted = (cb: EventCallback<SessionInfo>): Promise<Unlist
 
 export const onSessionExited = (cb: EventCallback<SessionExited>): Promise<UnlistenFn> =>
   listen<SessionExited>("session-exited", cb);
+
+// --- Wireless (M2) ---
+
+export const discoverWireless = () => invoke<MdnsService[]>("discover_wireless");
+
+export const pairDevice = (host: string, port: number, code: string) =>
+  invoke<string>("pair_device", { host, port, code });
+
+export const connectDevice = (host: string, port: number) =>
+  invoke<string>("connect_device", { host, port });
+
+export const disconnectDevice = (host: string, port: number) =>
+  invoke<void>("disconnect_device", { host, port });

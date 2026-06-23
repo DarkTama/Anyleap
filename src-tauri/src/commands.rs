@@ -56,6 +56,20 @@ pub struct CoreSettings {
     pub no_control: bool,
 }
 
+/// An adb mDNS service entry, as listed by `adb mdns services`.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MdnsService {
+    pub name: String,
+    pub service_type: String,
+    pub host: String,
+    pub port: u16,
+}
+
+const SVC_PAIRING: &str = "_adb-tls-pairing._tcp";
+const SVC_CONNECT: &str = "_adb-tls-connect._tcp";
+const SVC_LEGACY: &str = "_adb._tcp";
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -140,6 +154,49 @@ fn parse_adb_devices(text: &str) -> Vec<DeviceInfo> {
             }
         }
         out.push(DeviceInfo { serial, state, model, product });
+    }
+    out
+}
+
+/// Parse `adb mdns services` output into structured entries.
+///
+/// Anchors on the known service-type token (instance names can contain spaces),
+/// then reads the following token as `host:port`. Skips the header and any
+/// `* daemon ...` noise.
+fn parse_mdns_services(text: &str) -> Vec<MdnsService> {
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("List of discovered") || line.starts_with('*') {
+            continue;
+        }
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        let svc_idx = match toks
+            .iter()
+            .position(|t| matches!(*t, SVC_PAIRING | SVC_CONNECT | SVC_LEGACY))
+        {
+            Some(i) if i > 0 && i + 1 < toks.len() => i,
+            _ => continue,
+        };
+        let name = toks[..svc_idx].join(" ");
+        let service_type = toks[svc_idx].to_string();
+        let (host, port_str) = match toks[svc_idx + 1].rsplit_once(':') {
+            Some(hp) => hp,
+            None => continue,
+        };
+        let port = match port_str.parse::<u16>() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if host.is_empty() {
+            continue;
+        }
+        out.push(MdnsService {
+            name,
+            service_type,
+            host: host.to_string(),
+            port,
+        });
     }
     out
 }
@@ -313,4 +370,151 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
             started_at: s.started_at,
         })
         .collect()
+}
+
+/// Discover wireless adb services on the LAN via `adb mdns services`.
+#[tauri::command]
+pub async fn discover_wireless(app: AppHandle) -> Result<Vec<MdnsService>, String> {
+    let output = app
+        .shell()
+        .sidecar("adb")
+        .map_err(|e| e.to_string())?
+        .args(["mdns", "services"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    // Empty discovery is normal (not an error); only surface a real failure.
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let err = err.trim();
+        if !err.is_empty() {
+            return Err(format!("adb mdns services failed: {err}"));
+        }
+    }
+    Ok(parse_mdns_services(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Pair with a device using a 6-digit pairing code (Android 11+ wireless debugging).
+#[tauri::command]
+pub async fn pair_device(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    code: String,
+) -> Result<String, String> {
+    let target = format!("{host}:{port}");
+    let output = app
+        .shell()
+        .sidecar("adb")
+        .map_err(|e| e.to_string())?
+        .args(["pair", &target, &code])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    if combined.to_lowercase().contains("successfully paired") {
+        Ok(stdout.trim().to_string())
+    } else {
+        let msg = combined.trim();
+        Err(if msg.is_empty() {
+            "adb pair failed (no output)".to_string()
+        } else {
+            msg.to_string()
+        })
+    }
+}
+
+/// Connect to a wireless device (`adb connect host:port`).
+#[tauri::command]
+pub async fn connect_device(app: AppHandle, host: String, port: u16) -> Result<String, String> {
+    let target = format!("{host}:{port}");
+    let output = app
+        .shell()
+        .sidecar("adb")
+        .map_err(|e| e.to_string())?
+        .args(["connect", &target])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    let low = combined.to_lowercase();
+    if low.contains("connected to") && !low.contains("failed") && !low.contains("cannot") {
+        Ok(stdout.trim().to_string())
+    } else {
+        let msg = combined.trim();
+        Err(if msg.is_empty() {
+            "adb connect failed (no output)".to_string()
+        } else {
+            msg.to_string()
+        })
+    }
+}
+
+/// Disconnect a wireless device (idempotent).
+#[tauri::command]
+pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Result<(), String> {
+    let target = format!("{host}:{port}");
+    let output = app
+        .shell()
+        .sidecar("adb")
+        .map_err(|e| e.to_string())?
+        .args(["disconnect", &target])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout).to_lowercase(),
+        String::from_utf8_lossy(&output.stderr).to_lowercase()
+    );
+    if output.status.success()
+        || combined.contains("disconnected")
+        || combined.contains("no such device")
+    {
+        Ok(())
+    } else {
+        Err(combined.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_canonical_mdns_output() {
+        let text = "List of discovered mdns services\n\
+adb-ABC123\t_adb._tcp\t192.168.1.10:5555\n\
+adb-ABC123-QXjCrW\t_adb-tls-pairing._tcp\t192.168.1.10:33861\n\
+adb-ABC123-TnSdi9\t_adb-tls-connect._tcp\t192.168.1.10:42135\n";
+        let svcs = parse_mdns_services(text);
+        assert_eq!(svcs.len(), 3);
+        let pairing = svcs.iter().find(|s| s.service_type == SVC_PAIRING).unwrap();
+        assert_eq!(pairing.host, "192.168.1.10");
+        assert_eq!(pairing.port, 33861);
+    }
+
+    #[test]
+    fn handles_empty_and_header_only() {
+        assert!(parse_mdns_services("").is_empty());
+        assert!(parse_mdns_services("List of discovered mdns services\n").is_empty());
+    }
+
+    #[test]
+    fn skips_bad_port_and_unknown_service() {
+        let text = "name _adb-tls-connect._tcp 10.0.0.5:notaport\n\
+other _weird._tcp 10.0.0.6:1234\n";
+        assert!(parse_mdns_services(text).is_empty());
+    }
+
+    #[test]
+    fn tolerates_spaces_in_name() {
+        let text = "my phone _adb-tls-connect._tcp 10.0.0.7:5555\n";
+        let svcs = parse_mdns_services(text);
+        assert_eq!(svcs.len(), 1);
+        assert_eq!(svcs[0].name, "my phone");
+        assert_eq!(svcs[0].port, 5555);
+    }
 }
