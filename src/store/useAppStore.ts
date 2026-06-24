@@ -9,6 +9,8 @@ import type {
 import { DEFAULT_SETTINGS } from "@/lib/types";
 import type { ControlConfig } from "@/lib/controlConfig";
 import { DEFAULT_CONTROL_CONFIG } from "@/lib/controlConfig";
+import type { AppPrefs } from "@/lib/persist";
+import { DEFAULT_APP_PREFS } from "@/lib/persist";
 
 interface AppStore {
   devices: DeviceInfo[];
@@ -17,6 +19,7 @@ interface AppStore {
   settings: CoreSettings;
   preset: QualityPreset;
   controlConfig: ControlConfig;
+  appPrefs: AppPrefs;
   error: string | null;
 
   setDevices: (d: DeviceInfo[]) => void;
@@ -27,6 +30,7 @@ interface AppStore {
   setSettings: (s: CoreSettings) => void;
   setPreset: (p: QualityPreset) => void;
   setControlConfig: (c: ControlConfig) => void;
+  setAppPrefs: (p: AppPrefs) => void;
   setError: (e: string | null) => void;
 }
 
@@ -37,6 +41,7 @@ export const useAppStore = create<AppStore>((set) => ({
   settings: DEFAULT_SETTINGS,
   preset: "medium",
   controlConfig: DEFAULT_CONTROL_CONFIG,
+  appPrefs: DEFAULT_APP_PREFS,
   error: null,
 
   setDevices: (devices) => set({ devices }),
@@ -53,5 +58,6 @@ export const useAppStore = create<AppStore>((set) => ({
   setSettings: (settings) => set({ settings }),
   setPreset: (preset) => set({ preset }),
   setControlConfig: (controlConfig) => set({ controlConfig }),
+  setAppPrefs: (appPrefs) => set({ appPrefs }),
   setError: (error) => set({ error }),
 }));

@@ -30,6 +30,7 @@ export interface SessionExited {
   code: number | null;
   signal: number | null;
   last_error: string;
+  stderr: string;
 }
 
 export type Codec = "h264" | "h265" | "av1";

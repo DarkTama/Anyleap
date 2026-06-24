@@ -18,6 +18,7 @@ import {
   saveControlConfig,
   type ControlConfig,
 } from "@/lib/controlConfig";
+import { saveAppPrefs, saveQuality, type AppPrefs } from "@/lib/persist";
 
 const CODECS: Codec[] = ["h264", "h265", "av1"];
 const SIZE_LABELS: Record<ControlConfig["size"], string> = {
@@ -34,13 +35,17 @@ export function SettingsPanel() {
   const setPreset = useAppStore((s) => s.setPreset);
 
   function applyPreset(p: QualityPreset) {
+    const next = p !== "custom" ? { ...settings, ...PRESET_BUNDLES[p] } : settings;
     setPreset(p);
-    if (p !== "custom") setSettings({ ...settings, ...PRESET_BUNDLES[p] });
+    setSettings(next);
+    void saveQuality(next, p);
   }
 
   function update<K extends keyof CoreSettings>(key: K, value: CoreSettings[K]) {
-    setSettings({ ...settings, [key]: value });
+    const next = { ...settings, [key]: value };
+    setSettings(next);
     setPreset("custom");
+    void saveQuality(next, "custom");
   }
 
   const controlConfig = useAppStore((s) => s.controlConfig);
@@ -50,6 +55,13 @@ export function SettingsPanel() {
     setControlConfig(next);
     void saveControlConfig(next);
     void emit("control-config", next); // live-update the floating control window
+  }
+
+  const appPrefs = useAppStore((s) => s.appPrefs);
+  const setAppPrefs = useAppStore((s) => s.setAppPrefs);
+  function updateAppPrefs(next: AppPrefs) {
+    setAppPrefs(next);
+    void saveAppPrefs(next);
   }
 
   return (
@@ -140,6 +152,20 @@ export function SettingsPanel() {
             label="View only"
             checked={settings.noControl}
             onChange={(v) => update("noControl", v)}
+          />
+        </div>
+
+        <div className="space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/60">
+          <label className="text-xs font-medium text-zinc-500">App</label>
+          <Toggle
+            label="Minimize to tray on close"
+            checked={appPrefs.minimizeToTrayOnClose}
+            onChange={(v) => updateAppPrefs({ ...appPrefs, minimizeToTrayOnClose: v })}
+          />
+          <Toggle
+            label="Check for updates on launch"
+            checked={appPrefs.checkUpdates}
+            onChange={(v) => updateAppPrefs({ ...appPrefs, checkUpdates: v })}
           />
         </div>
       </CardContent>

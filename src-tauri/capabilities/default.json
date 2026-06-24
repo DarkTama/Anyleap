@@ -25,6 +25,15 @@
         { "name": "binaries/adb", "sidecar": true, "args": true },
         { "name": "binaries/scrcpy", "sidecar": true, "args": true }
       ]
-    }
+    },
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://api.github.com/*" }]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/*" }]
+    },
+    "dialog:default"
   ]
 }

@@ -16,7 +16,10 @@ import {
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
+import { loadAppPrefs, loadQuality } from "@/lib/persist";
+import { checkForUpdates } from "@/lib/updateCheck";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type Tab = "devices" | "settings";
 
@@ -29,9 +32,14 @@ function App() {
   const removeSession = useAppStore((s) => s.removeSession);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setControlConfig = useAppStore((s) => s.setControlConfig);
+  const setSettings = useAppStore((s) => s.setSettings);
+  const setPreset = useAppStore((s) => s.setPreset);
+  const setAppPrefs = useAppStore((s) => s.setAppPrefs);
   const setError = useAppStore((s) => s.setError);
   const [pairOpen, setPairOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("devices");
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   // Event listeners + initial hydrate.
   useEffect(() => {
@@ -40,6 +48,8 @@ function App() {
       onSessionExited((e) => {
         removeSession(e.payload.id);
         if (e.payload.last_error) setError(e.payload.last_error);
+        setErrorDetails(e.payload.stderr || null);
+        setShowDetails(false);
       }),
     ];
     listDevices()
@@ -86,6 +96,37 @@ function App() {
   useEffect(() => {
     loadControlConfig().then(setControlConfig).catch(() => {});
   }, [setControlConfig]);
+
+  // Load persisted quality settings + app prefs on launch; run the update check.
+  useEffect(() => {
+    loadQuality()
+      .then((q) => {
+        if (q) {
+          setSettings(q.settings);
+          setPreset(q.preset);
+        }
+      })
+      .catch(() => {});
+    loadAppPrefs()
+      .then((p) => {
+        setAppPrefs(p);
+        if (p.checkUpdates) void checkForUpdates();
+      })
+      .catch(() => {});
+  }, [setSettings, setPreset, setAppPrefs]);
+
+  // Minimize to tray on close when enabled (read live pref to avoid a stale closure).
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onCloseRequested((e) => {
+      if (useAppStore.getState().appPrefs.minimizeToTrayOnClose) {
+        e.preventDefault();
+        void getCurrentWindow().hide();
+      }
+    });
+    return () => {
+      unlisten.then((un) => un());
+    };
+  }, []);
 
   // Floating, always-on-top control window: open while mirroring, close when idle.
   useEffect(() => {
@@ -158,7 +199,34 @@ function App() {
 
       {error && (
         <div className="mx-6 mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-          {error}
+          <div className="flex items-start justify-between gap-2">
+            <span>{error}</span>
+            <button
+              className="shrink-0 text-xs underline opacity-80 hover:opacity-100"
+              onClick={() => {
+                setError(null);
+                setErrorDetails(null);
+                setShowDetails(false);
+              }}
+            >
+              dismiss
+            </button>
+          </div>
+          {errorDetails && (
+            <div className="mt-1">
+              <button
+                className="text-xs underline opacity-80 hover:opacity-100"
+                onClick={() => setShowDetails((v) => !v)}
+              >
+                {showDetails ? "Hide details" : "Show details"}
+              </button>
+              {showDetails && (
+                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-red-100/60 p-2 text-[11px] dark:bg-red-950/60">
+                  {errorDetails}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       )}
 

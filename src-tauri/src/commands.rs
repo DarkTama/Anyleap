@@ -37,6 +37,7 @@ struct SessionExited {
     code: Option<i32>,
     signal: Option<i32>,
     last_error: String,
+    stderr: String,
 }
 
 /// Core (Tier-1) settings, mirrored from the TypeScript `CoreSettings` type.
@@ -274,8 +275,74 @@ pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
     Ok(parse_adb_devices(&text))
 }
 
+/// scrcpy stderr patterns that suggest a (possibly transient) encoder/connection
+/// failure worth retrying once on conservative flags. Seen on some OEM Android 10
+/// devices where the default codec/fps combination is rejected.
+fn stderr_suggests_encoder_failure(s: &str) -> bool {
+    let low = s.to_lowercase();
+    low.contains("could not create")
+        || low.contains("encoding error")
+        || low.contains("server connection failed")
+        || low.contains("demuxer 'video'")
+        || low.contains("connection error")
+        || low.contains("failed to start")
+}
+
+/// Conservative arg set for a one-shot retry: drop --max-fps, force h264, no audio.
+fn degrade_args(args: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = args
+        .iter()
+        .filter(|a| {
+            !a.starts_with("--max-fps")
+                && !a.starts_with("--video-codec")
+                && a.as_str() != "--no-audio"
+        })
+        .cloned()
+        .collect();
+    out.push("--video-codec=h264".to_string());
+    out.push("--no-audio".to_string());
+    out
+}
+
+/// Pick a human-useful one-liner from scrcpy stderr. scrcpy prints the real cause
+/// as an `ERROR:` line, then a terse final "killed"/"aborted" — so we surface the
+/// ERROR (or a device WARN), not the last line.
+fn summarize_scrcpy_error(stderr: &str, command_error: Option<&str>) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if let Some(err) = lines.iter().find(|l| l.contains("ERROR:")) {
+        return err.to_string();
+    }
+    if let Some(w) = lines
+        .iter()
+        .find(|l| l.contains("WARN:") && l.to_lowercase().contains("device"))
+    {
+        return w.to_string();
+    }
+    if let Some(last) = lines.iter().rev().find(|l| {
+        let low = l.to_lowercase();
+        low != "killed" && low != "aborted" && low != "terminated"
+    }) {
+        return last.to_string();
+    }
+    command_error
+        .map(str::to_string)
+        .or_else(|| lines.last().map(|s| s.to_string()))
+        .unwrap_or_else(|| "scrcpy exited without output".to_string())
+}
+
 /// Spawn scrcpy with a prepared arg vector and register a tracked session.
-fn spawn_session(app: &AppHandle, serial: String, args: Vec<String>) -> Result<SessionInfo, String> {
+/// On an early encoder/connection failure, retries once with conservative flags
+/// (`retried` guards against an infinite retry loop).
+fn spawn_session(
+    app: &AppHandle,
+    serial: String,
+    args: Vec<String>,
+    retried: bool,
+) -> Result<SessionInfo, String> {
     let server = resolve_server_path(app)
         .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
 
@@ -305,42 +372,66 @@ fn spawn_session(app: &AppHandle, serial: String, args: Vec<String>) -> Result<S
         id.clone(),
         Session {
             id: id.clone(),
-            serial,
+            serial: serial.clone(),
             pid,
             started_at,
             child,
-            args,
+            args: args.clone(),
         },
     );
 
     let _ = app.emit("session-started", info.clone());
 
-    // Drain the child's event stream; clean up + notify the UI when it exits.
+    // Drain the child's event stream; accumulate stderr, clean up + notify on exit.
     let app2 = app.clone();
     let id2 = id.clone();
+    let serial2 = serial.clone();
+    let args2 = args.clone();
     tauri::async_runtime::spawn(async move {
-        let mut last_error = String::new();
+        let mut stderr_buf = String::new();
+        let mut command_error: Option<String> = None;
         while let Some(ev) = rx.recv().await {
             match ev {
                 CommandEvent::Stderr(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes);
-                    let line = line.trim();
-                    if !line.is_empty() {
-                        last_error = line.to_string();
+                    stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
+                    // Keep the tail; scrcpy's useful ERROR line is near the end.
+                    if stderr_buf.len() > 16_384 {
+                        let cut = stderr_buf.len() - 16_384;
+                        stderr_buf.drain(..cut);
                     }
                 }
-                CommandEvent::Error(e) => last_error = e,
+                CommandEvent::Error(e) => command_error = Some(e),
                 CommandEvent::Terminated(payload) => {
                     if let Some(st) = app2.try_state::<AppState>() {
                         st.sessions.lock().unwrap().remove(&id2);
                     }
+                    let failed = payload.code.map(|c| c != 0).unwrap_or(true);
+                    let early = now_ms() - started_at < 3000;
+                    if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf)
+                    {
+                        // Clear the old session in the UI (no error), then retry on safe flags.
+                        let _ = app2.emit(
+                            "session-exited",
+                            SessionExited {
+                                id: id2.clone(),
+                                code: payload.code,
+                                signal: payload.signal,
+                                last_error: String::new(),
+                                stderr: stderr_buf.clone(),
+                            },
+                        );
+                        let _ = spawn_session(&app2, serial2.clone(), degrade_args(&args2), true);
+                        break;
+                    }
+                    let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
                     let _ = app2.emit(
                         "session-exited",
                         SessionExited {
                             id: id2.clone(),
                             code: payload.code,
                             signal: payload.signal,
-                            last_error: last_error.clone(),
+                            last_error: summary,
+                            stderr: stderr_buf.clone(),
                         },
                     );
                     break;
@@ -361,7 +452,7 @@ pub fn start_mirror(
     settings: CoreSettings,
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_args(&serial, &settings);
-    spawn_session(&app, serial, args)
+    spawn_session(&app, serial, args, false)
 }
 
 /// Restart a device's mirror with scrcpy's screen-off toggled (true scrcpy
@@ -388,7 +479,7 @@ pub fn restart_with_screen_off(
     if off {
         args.push("--turn-screen-off".to_string());
     }
-    spawn_session(&app, serial, args)
+    spawn_session(&app, serial, args, false)
 }
 
 /// Stop a running session by killing its scrcpy child.
