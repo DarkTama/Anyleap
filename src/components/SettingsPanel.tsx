@@ -161,6 +161,47 @@ export function SettingsPanel() {
         </div>
 
         <div className="space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/60">
+          <label className="text-xs font-medium text-zinc-500">Display</label>
+          <div className="space-y-1">
+            <Toggle
+              label="Flex display (virtual)"
+              checked={settings.newDisplay}
+              onChange={(v) => update("newDisplay", v)}
+            />
+            <p className="text-[11px] text-zinc-400">Android 10+; virtual display matches window size</p>
+          </div>
+          {settings.newDisplay && (
+            <div className="space-y-1">
+              <input
+                type="text"
+                className={selectClass}
+              value={settings.newDisplaySize}
+              placeholder="Auto (matches window)"
+                onChange={(e) => update("newDisplaySize", e.target.value)}
+              />
+              <p className="text-[11px] text-zinc-400">Or enter size like 1080x1920</p>
+            </div>
+          )}
+          <Toggle
+            label="Unlock aspect ratio"
+            checked={settings.noWindowAspectRatioLock}
+            onChange={(v) => update("noWindowAspectRatioLock", v)}
+          />
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-zinc-500">Render fit</label>
+            <select
+              className={selectClass}
+              value={settings.renderFit}
+              onChange={(e) => update("renderFit", e.target.value as CoreSettings["renderFit"])}
+            >
+              <option value="letterbox" className={optionClass}>Letterbox</option>
+              <option value="unscaled" className={optionClass}>Unscaled</option>
+              <option value="stretched" className={optionClass}>Stretched</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/60">
           <label className="text-xs font-medium text-zinc-500">App</label>
           <Toggle
             label="Minimize to tray on close"

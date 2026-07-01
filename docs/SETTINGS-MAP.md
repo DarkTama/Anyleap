@@ -63,7 +63,7 @@ The everyday knobs, shown on the main mirror screen.
 | Show touches | `--show-touches` (`-t`) | toggle | |
 | No audio | `--no-audio` | toggle | Audio on by default (Android 11+). |
 | Read-only (view, no control) | `--no-control` (`-n`) | toggle | |
-| Disable virtual keyboard | `--no-keyboard-ime` | toggle | Use physical keyboard only; implemented. |
+| Disable virtual keyboard | `--keyboard=uhid` | toggle | Simulates a physical HID keyboard; Android hides on-screen keyboard. |
 
 ## Tier 2 — Video
 
@@ -75,6 +75,9 @@ The everyday knobs, shown on the main mirror screen.
 | Rotation / angle | `--orientation` / `--angle` | select / number |
 | Disable video (audio-only) | `--no-video` | toggle |
 | Virtual display | `--new-display` | text/size |
+| Flex display | `--new-display` | toggle + text (size) | Android 10+; virtual display matches window size. Implemented. |
+| Unlock aspect ratio | `--no-window-aspect-ratio-lock` | toggle | Allow any window shape. Implemented. |
+| Render fit | `--render-fit` | select: letterbox / unscaled / stretched | Implemented. |
 
 ## Tier 2 — Audio
 
@@ -93,6 +96,7 @@ The everyday knobs, shown on the main mirror screen.
 | Position / size | `--window-x/y/width/height` | number ×4 |
 | Borderless | `--window-borderless` | toggle |
 | Disable screensaver | `--disable-screensaver` | toggle |
+| Fit window to content | — (control bar button) | Resizes window to remove letterboxing/padding. Implemented. |
 
 ## Tier 2 — Control & input
 

@@ -37,6 +37,8 @@ pub fn run() {
             commands::open_notifications,
             commands::restart_with_screen_off,
             commands::mirror_rect,
+            commands::toggle_device_orientation,
+            commands::fit_mirror_window,
         ])
         .setup(|app| {
             // System-tray icon: left-click restores the window; the menu offers

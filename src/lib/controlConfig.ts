@@ -13,7 +13,8 @@ export type ButtonId =
   | "notifications"
   | "sleep"
   | "screenOff"
-  | "orientToggle";
+  | "orientToggle"
+  | "fitWindow";
 
 export interface ControlConfig {
   dock: DockSide;
@@ -33,6 +34,7 @@ export const BUTTON_IDS: ButtonId[] = [
   "sleep",
   "screenOff",
   "orientToggle",
+  "fitWindow",
 ];
 
 export const BUTTON_LABELS: Record<ButtonId, string> = {
@@ -47,6 +49,7 @@ export const BUTTON_LABELS: Record<ButtonId, string> = {
   sleep: "Sleep / Wake",
   screenOff: "Screen off (scrcpy)",
   orientToggle: "Orientation",
+  fitWindow: "Fit window",
 };
 
 export const DOCK_SIDES: DockSide[] = ["left", "right", "top", "bottom", "undocked"];
@@ -67,6 +70,7 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
     sleep: true,
     screenOff: true,
     orientToggle: true,
+    fitWindow: true,
   },
 };
 

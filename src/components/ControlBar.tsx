@@ -4,6 +4,7 @@ import {
   Bell,
   Camera,
   Circle,
+  Maximize,
   Monitor,
   MonitorOff,
   Moon,
@@ -34,11 +35,13 @@ export function ControlBar({
   config,
   orientation,
   onToggleOrientation,
+  onFitWindow,
 }: {
   serial: string;
   config: ControlConfig;
   orientation: "horizontal" | "vertical";
   onToggleOrientation?: () => void;
+  onFitWindow?: () => void;
 }) {
   const setError = useAppStore((s) => s.setError);
   const [asleep, setAsleep] = useState(false);
@@ -142,6 +145,12 @@ export function ControlBar({
               <PanelBottom className={sz.icon} />
             )}
             {orientation === "horizontal" ? "Landscape" : "Portrait"}
+          </Button>
+        )}
+        {b.fitWindow && onFitWindow && (
+          <Button variant="outline" className={sz.btn} onClick={onFitWindow}>
+            <Maximize className={sz.icon} />
+            Fit
           </Button>
         )}
       </div>

@@ -4,7 +4,7 @@ import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { GripHorizontal, X } from "lucide-react";
 import { ControlBar } from "@/components/ControlBar";
-import { mirrorRect } from "@/lib/tauri";
+import { fitMirrorWindow, mirrorRect, toggleDeviceOrientation } from "@/lib/tauri";
 import {
   DEFAULT_CONTROL_CONFIG,
   loadControlConfig,
@@ -135,13 +135,17 @@ export function ControlWindow({ serial }: { serial: string }) {
           serial={serial}
           config={config}
           orientation={orientation}
-          onToggleOrientation={() =>
+          onToggleOrientation={() => {
+            toggleDeviceOrientation(serial).catch(() => {});
             setOverrideOrientation((prev) =>
               (prev ?? (dockVertical ? "vertical" : "horizontal")) === "horizontal"
                 ? "vertical"
                 : "horizontal",
-            )
-          }
+            );
+          }}
+          onFitWindow={() => {
+            fitMirrorWindow(`AnyLeap — ${serial}`).catch(() => {});
+          }}
         />
       </div>
     </div>

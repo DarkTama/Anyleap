@@ -55,3 +55,9 @@ export const restartWithScreenOff = (serial: string, off: boolean) =>
 
 export const mirrorRect = (title: string) =>
   invoke<MirrorRect | null>("mirror_rect", { title });
+
+export const toggleDeviceOrientation = (serial: string) =>
+  invoke<string>("toggle_device_orientation", { serial });
+
+export const fitMirrorWindow = (title: string) =>
+  invoke<void>("fit_mirror_window", { title });
