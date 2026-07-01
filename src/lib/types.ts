@@ -46,6 +46,7 @@ export interface CoreSettings {
   showTouches: boolean;
   noAudio: boolean;
   noControl: boolean;
+  noKeyboardIme: boolean;
 }
 
 export type QualityPreset = "low" | "medium" | "high" | "highest" | "custom";
@@ -87,6 +88,7 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   showTouches: false,
   noAudio: false,
   noControl: false,
+  noKeyboardIme: false,
 };
 
 // --- Wireless (M2) ---

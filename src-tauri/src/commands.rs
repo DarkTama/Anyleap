@@ -55,6 +55,7 @@ pub struct CoreSettings {
     pub show_touches: bool,
     pub no_audio: bool,
     pub no_control: bool,
+    pub no_keyboard_ime: bool,
 }
 
 /// An adb mDNS service entry, as listed by `adb mdns services`.
@@ -254,6 +255,9 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
     }
     if s.no_control {
         a.push("--no-control".into());
+    }
+    if s.no_keyboard_ime {
+        a.push("--no-keyboard-ime".into());
     }
     a.push(format!("--window-title=AnyLeap — {}", serial));
     a

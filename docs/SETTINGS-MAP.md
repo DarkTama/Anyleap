@@ -63,6 +63,7 @@ The everyday knobs, shown on the main mirror screen.
 | Show touches | `--show-touches` (`-t`) | toggle | |
 | No audio | `--no-audio` | toggle | Audio on by default (Android 11+). |
 | Read-only (view, no control) | `--no-control` (`-n`) | toggle | |
+| Disable virtual keyboard | `--no-keyboard-ime` | toggle | Use physical keyboard only; implemented. |
 
 ## Tier 2 — Video
 

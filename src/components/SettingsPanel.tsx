@@ -153,6 +153,11 @@ export function SettingsPanel() {
             checked={settings.noControl}
             onChange={(v) => update("noControl", v)}
           />
+          <Toggle
+            label="Disable virtual keyboard"
+            checked={settings.noKeyboardIme}
+            onChange={(v) => update("noKeyboardIme", v)}
+          />
         </div>
 
         <div className="space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/60">

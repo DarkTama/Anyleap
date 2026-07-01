@@ -7,6 +7,8 @@ import {
   Monitor,
   MonitorOff,
   Moon,
+  PanelBottom,
+  PanelLeft,
   Power,
   Square,
   Sun,
@@ -31,10 +33,12 @@ export function ControlBar({
   serial,
   config,
   orientation,
+  onToggleOrientation,
 }: {
   serial: string;
   config: ControlConfig;
   orientation: "horizontal" | "vertical";
+  onToggleOrientation?: () => void;
 }) {
   const setError = useAppStore((s) => s.setError);
   const [asleep, setAsleep] = useState(false);
@@ -128,6 +132,16 @@ export function ControlBar({
           <Button variant="outline" className={sz.btn} onClick={toggleScreenOff}>
             {screenOff ? <Monitor className={sz.icon} /> : <MonitorOff className={sz.icon} />}
             {screenOff ? "Scr on" : "Scr off"}
+          </Button>
+        )}
+        {b.orientToggle && onToggleOrientation && (
+          <Button variant="outline" className={sz.btn} onClick={onToggleOrientation}>
+            {orientation === "horizontal" ? (
+              <PanelLeft className={sz.icon} />
+            ) : (
+              <PanelBottom className={sz.icon} />
+            )}
+            {orientation === "horizontal" ? "Landscape" : "Portrait"}
           </Button>
         )}
       </div>

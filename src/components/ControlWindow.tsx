@@ -20,6 +20,9 @@ const countButtons = (c: ControlConfig) => Object.values(c.buttons).filter(Boole
  *  (dock side / size / buttons) and docks itself to the scrcpy mirror window. */
 export function ControlWindow({ serial }: { serial: string }) {
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
+  const [overrideOrientation, setOverrideOrientation] = useState<
+    "horizontal" | "vertical" | null
+  >(null);
 
   // Load config + live updates from the main window.
   useEffect(() => {
@@ -30,9 +33,10 @@ export function ControlWindow({ serial }: { serial: string }) {
     };
   }, []);
 
-  const vertical =
+  const dockVertical =
     config.dock === "left" || config.dock === "right" || config.dock === "undocked";
-  const orientation = vertical ? "vertical" : "horizontal";
+  const orientation = overrideOrientation ?? (dockVertical ? "vertical" : "horizontal");
+  const vertical = orientation === "vertical";
 
   // Size the window from the config (logical px so it matches the CSS layout).
   useEffect(() => {
@@ -127,7 +131,18 @@ export function ControlWindow({ serial }: { serial: string }) {
         </button>
       </div>
       <div className="flex-1 overflow-auto">
-        <ControlBar serial={serial} config={config} orientation={orientation} />
+        <ControlBar
+          serial={serial}
+          config={config}
+          orientation={orientation}
+          onToggleOrientation={() =>
+            setOverrideOrientation((prev) =>
+              (prev ?? (dockVertical ? "vertical" : "horizontal")) === "horizontal"
+                ? "vertical"
+                : "horizontal",
+            )
+          }
+        />
       </div>
     </div>
   );

@@ -142,7 +142,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
         </span>
       </div>
       {open && status !== "offline" && (
-        <ControlBar serial={device.serial} config={controlConfig} orientation="horizontal" />
+        <ControlBar serial={device.serial} config={controlConfig} orientation="horizontal" onToggleOrientation={undefined} />
       )}
     </div>
   );
@@ -288,7 +288,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
         </span>
       </div>
       {open && serial && status !== "offline" && (
-        <ControlBar serial={serial} config={controlConfig} orientation="horizontal" />
+        <ControlBar serial={serial} config={controlConfig} orientation="horizontal" onToggleOrientation={undefined} />
       )}
     </div>
   );
