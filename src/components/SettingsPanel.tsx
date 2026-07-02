@@ -164,22 +164,24 @@ export function SettingsPanel() {
           <label className="text-xs font-medium text-zinc-500">Display</label>
           <div className="space-y-1">
             <Toggle
-              label="Flex display (virtual)"
-              checked={settings.newDisplay}
-              onChange={(v) => update("newDisplay", v)}
+              label="Flex display (desktop mode)"
+              checked={settings.flexDisplay}
+              onChange={(v) => update("flexDisplay", v)}
             />
-            <p className="text-[11px] text-zinc-400">Android 10+; virtual display matches window size</p>
+            <p className="text-[11px] text-zinc-400">
+              Virtual display that continuously resizes with the window (Android 10+)
+            </p>
           </div>
-          {settings.newDisplay && (
+          {settings.flexDisplay && (
             <div className="space-y-1">
               <input
                 type="text"
                 className={selectClass}
-              value={settings.newDisplaySize}
-              placeholder="Auto (matches window)"
-                onChange={(e) => update("newDisplaySize", e.target.value)}
+                value={settings.flexDisplaySize}
+                placeholder="Auto — or e.g. 1920x1080/240"
+                onChange={(e) => update("flexDisplaySize", e.target.value)}
               />
-              <p className="text-[11px] text-zinc-400">Or enter size like 1080x1920</p>
+              <p className="text-[11px] text-zinc-400">Initial size as WxH, optionally /dpi</p>
             </div>
           )}
           <Toggle

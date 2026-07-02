@@ -4,13 +4,11 @@ import {
   Bell,
   Camera,
   Circle,
-  Maximize,
   Monitor,
   MonitorOff,
   Moon,
-  PanelBottom,
-  PanelLeft,
   Power,
+  RotateCw,
   Square,
   Sun,
   Volume2,
@@ -18,7 +16,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
-import { openNotifications, restartWithScreenOff, sendKeyevent } from "@/lib/tauri";
+import {
+  openNotifications,
+  restartWithScreenOff,
+  sendKeyevent,
+  toggleDeviceOrientation,
+} from "@/lib/tauri";
 import { KEYCODE } from "@/lib/keycodes";
 import type { ControlConfig, ControlSize } from "@/lib/controlConfig";
 
@@ -34,14 +37,13 @@ export function ControlBar({
   serial,
   config,
   orientation,
-  onToggleOrientation,
-  onFitWindow,
+  showOrientToggle = false,
 }: {
   serial: string;
   config: ControlConfig;
   orientation: "horizontal" | "vertical";
-  onToggleOrientation?: () => void;
-  onFitWindow?: () => void;
+  /** Rotate acts on the physical display only — hidden in flex display mode. */
+  showOrientToggle?: boolean;
 }) {
   const setError = useAppStore((s) => s.setError);
   const [asleep, setAsleep] = useState(false);
@@ -64,6 +66,7 @@ export function ControlBar({
       .then(() => setScreenOff(next))
       .catch((e) => setError(String(e)));
   };
+  const rotate = () => toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
 
   const container =
     orientation === "vertical"
@@ -137,20 +140,10 @@ export function ControlBar({
             {screenOff ? "Scr on" : "Scr off"}
           </Button>
         )}
-        {b.orientToggle && onToggleOrientation && (
-          <Button variant="outline" className={sz.btn} onClick={onToggleOrientation}>
-            {orientation === "horizontal" ? (
-              <PanelLeft className={sz.icon} />
-            ) : (
-              <PanelBottom className={sz.icon} />
-            )}
-            {orientation === "horizontal" ? "Landscape" : "Portrait"}
-          </Button>
-        )}
-        {b.fitWindow && onFitWindow && (
-          <Button variant="outline" className={sz.btn} onClick={onFitWindow}>
-            <Maximize className={sz.icon} />
-            Fit
+        {b.orientToggle && showOrientToggle && (
+          <Button variant="outline" className={sz.btn} onClick={rotate}>
+            <RotateCw className={sz.icon} />
+            Rotate
           </Button>
         )}
       </div>

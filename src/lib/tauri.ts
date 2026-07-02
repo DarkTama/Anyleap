@@ -58,6 +58,3 @@ export const mirrorRect = (title: string) =>
 
 export const toggleDeviceOrientation = (serial: string) =>
   invoke<string>("toggle_device_orientation", { serial });
-
-export const fitMirrorWindow = (title: string) =>
-  invoke<void>("fit_mirror_window", { title });

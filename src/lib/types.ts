@@ -47,8 +47,8 @@ export interface CoreSettings {
   noAudio: boolean;
   noControl: boolean;
   noKeyboardIme: boolean;
-  newDisplay: boolean; // --new-display (Android 10+)
-  newDisplaySize: string; // empty = auto (match window), or "WxH/dpi"
+  flexDisplay: boolean; // --new-display + --flex-display (Android 10+)
+  flexDisplaySize: string; // empty = auto (main display size), or "WxH/dpi"
   noWindowAspectRatioLock: boolean; // --no-window-aspect-ratio-lock
   renderFit: "letterbox" | "unscaled" | "stretched"; // --render-fit
 }
@@ -93,8 +93,8 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   noAudio: false,
   noControl: false,
   noKeyboardIme: false,
-  newDisplay: false,
-  newDisplaySize: "",
+  flexDisplay: false,
+  flexDisplaySize: "",
   noWindowAspectRatioLock: false,
   renderFit: "letterbox",
 };

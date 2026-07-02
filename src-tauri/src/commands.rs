@@ -56,8 +56,8 @@ pub struct CoreSettings {
     pub no_audio: bool,
     pub no_control: bool,
     pub no_keyboard_ime: bool,
-    pub new_display: bool,
-    pub new_display_size: String,
+    pub flex_display: bool,
+    pub flex_display_size: String,
     pub no_window_aspect_ratio_lock: bool,
     pub render_fit: String,
 }
@@ -263,17 +263,20 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
     if s.no_keyboard_ime {
         a.push("--keyboard=uhid".into());
     }
-    if s.new_display {
-        if s.new_display_size.is_empty() {
+    if s.flex_display {
+        if s.flex_display_size.is_empty() {
             a.push("--new-display".into());
         } else {
-            a.push(format!("--new-display={}", s.new_display_size));
+            a.push(format!("--new-display={}", s.flex_display_size));
         }
+        a.push("--flex-display".into());
     }
     if s.no_window_aspect_ratio_lock {
         a.push("--no-window-aspect-ratio-lock".into());
     }
-    if !matches!(s.render_fit.as_str(), "" | "letterbox") {
+    // Always sent explicitly: with --flex-display scrcpy's default flips to
+    // "unscaled", so a "letterbox" selection must not be omitted.
+    if !s.render_fit.is_empty() {
         a.push(format!("--render-fit={}", s.render_fit));
     }
     a.push(format!("--window-title=AnyLeap — {}", serial));
@@ -657,18 +660,32 @@ pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), St
     }
 }
 
-/// Toggle device screen between portrait and landscape via ADB.
-/// Reads current `user_rotation`, then sets the opposite value (0↔1).
+/// Toggle the device's main display between portrait and landscape via ADB.
+/// `user_rotation` is only honored while auto-rotate is off, so auto-rotate is
+/// disabled first. Has no effect on a virtual display (flex display mode).
 #[tauri::command]
 pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result<String, String> {
+    let auto = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "settings", "put", "system", "accelerometer_rotation", "0"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !auto.status.success() {
+        return Err(String::from_utf8_lossy(&auto.stderr).trim().to_string());
+    }
+
     let get = adb_cmd(&app)?
         .args(["-s", &serial, "shell", "settings", "get", "system", "user_rotation"])
         .output()
         .await
         .map_err(|e| e.to_string())?;
+    if !get.status.success() {
+        return Err(String::from_utf8_lossy(&get.stderr).trim().to_string());
+    }
     let raw = String::from_utf8_lossy(&get.stdout).trim().to_string();
 
-    let next = if raw == "1" { "0" } else { "1" };
+    // 1/3 = landscape / reverse landscape; anything else (0/2/unset) = portrait.
+    let next = if raw == "1" || raw == "3" { "0" } else { "1" };
     let output = adb_cmd(&app)?
         .args(["-s", &serial, "shell", "settings", "put", "system", "user_rotation", next])
         .output()
@@ -756,98 +773,6 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
     }
 }
 
-/// Resize a scrcpy mirror window to remove letterboxing/padding, snapping the
-/// window to exactly fit the video content. Windows-only; no-op elsewhere.
-#[tauri::command]
-pub fn fit_mirror_window(title: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        use windows::Win32::Foundation::RECT;
-        use windows::Win32::Graphics::Gdi::{
-            CreateRectRgn, CombineRgn, GetWindowRgn, PtInRegion,
-            DeleteObject, RGN_AND,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, GetClientRect, GetWindowRect, SetWindowPos,
-            HWND_TOP, SWP_NOZORDER, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
-        };
-        use windows::core::PCWSTR;
-
-        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-        let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.map_err(|e| e.to_string())?;
-
-        let mut wr = RECT::default();
-        unsafe { GetWindowRect(hwnd, &mut wr) }.map_err(|e| e.to_string())?;
-
-        let mut cr = RECT::default();
-        unsafe { GetClientRect(hwnd, &mut cr) }.map_err(|e| e.to_string())?;
-
-        let border_x = (wr.right - wr.left) - cr.right;
-        let border_y = (wr.bottom - wr.top) - cr.bottom;
-
-        let win_rgn = unsafe { CreateRectRgn(0, 0, cr.right, cr.bottom) };
-        let wnd_rgn = unsafe { CreateRectRgn(0, 0, 1, 1) };
-        unsafe { GetWindowRgn(hwnd, wnd_rgn) };
-
-        let test_region = unsafe { CreateRectRgn(0, 0, 1, 1) };
-        unsafe { CombineRgn(Some(test_region), Some(win_rgn), Some(wnd_rgn), RGN_AND) };
-
-        let mut left = 0i32;
-        let mut top = 0i32;
-        let mut right = cr.right;
-        let mut bottom = cr.bottom;
-
-        while left < cr.right && !unsafe { PtInRegion(test_region, left, cr.bottom / 2) }.as_bool() {
-            left += 2;
-        }
-        while right > 0 && !unsafe { PtInRegion(test_region, right - 1, cr.bottom / 2) }.as_bool() {
-            right -= 2;
-        }
-        while top < cr.bottom && !unsafe { PtInRegion(test_region, cr.right / 2, top) }.as_bool() {
-            top += 2;
-        }
-        while bottom > 0 && !unsafe { PtInRegion(test_region, cr.right / 2, bottom - 1) }.as_bool() {
-            bottom -= 2;
-        }
-
-        let content_w = right - left;
-        let content_h = bottom - top;
-
-        unsafe {
-            let _ = DeleteObject(win_rgn.into());
-            let _ = DeleteObject(wnd_rgn.into());
-            let _ = DeleteObject(test_region.into());
-        }
-
-        if content_w <= 0 || content_h <= 0 {
-            return Err("Could not determine video content rect".to_string());
-        }
-
-        let new_w = content_w + border_x;
-        let new_h = content_h + border_y;
-
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                wr.left,
-                wr.top,
-                new_w,
-                new_h,
-                SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
-            )
-        }
-        .map_err(|e| e.to_string())?;
-
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = title;
-        Err("fit_mirror_window is only supported on Windows".to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,6 +801,52 @@ adb-ABC123-TnSdi9\t_adb-tls-connect._tcp\t192.168.1.10:42135\n";
         let text = "name _adb-tls-connect._tcp 10.0.0.5:notaport\n\
 other _weird._tcp 10.0.0.6:1234\n";
         assert!(parse_mdns_services(text).is_empty());
+    }
+
+    fn base_settings() -> CoreSettings {
+        CoreSettings {
+            max_size: 0,
+            video_bit_rate: 0,
+            max_fps: 0,
+            video_codec: String::new(),
+            stay_awake: false,
+            turn_screen_off: false,
+            fullscreen: false,
+            show_touches: false,
+            no_audio: false,
+            no_control: false,
+            no_keyboard_ime: false,
+            flex_display: false,
+            flex_display_size: String::new(),
+            no_window_aspect_ratio_lock: false,
+            render_fit: String::new(),
+        }
+    }
+
+    #[test]
+    fn flex_display_emits_new_display_and_flex_flags() {
+        let mut s = base_settings();
+        s.flex_display = true;
+        let args = build_scrcpy_args("SER", &s);
+        assert!(args.contains(&"--new-display".to_string()));
+        assert!(args.contains(&"--flex-display".to_string()));
+
+        s.flex_display_size = "1920x1080/240".into();
+        let args = build_scrcpy_args("SER", &s);
+        assert!(args.contains(&"--new-display=1920x1080/240".to_string()));
+        assert!(!args.contains(&"--new-display".to_string()));
+    }
+
+    #[test]
+    fn render_fit_is_explicit_even_for_letterbox() {
+        let mut s = base_settings();
+        s.render_fit = "letterbox".into();
+        let args = build_scrcpy_args("SER", &s);
+        assert!(args.contains(&"--render-fit=letterbox".to_string()));
+
+        s.render_fit = String::new();
+        let args = build_scrcpy_args("SER", &s);
+        assert!(!args.iter().any(|a| a.starts_with("--render-fit")));
     }
 
     #[test]

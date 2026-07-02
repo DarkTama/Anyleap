@@ -4,7 +4,8 @@ import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { GripHorizontal, X } from "lucide-react";
 import { ControlBar } from "@/components/ControlBar";
-import { fitMirrorWindow, mirrorRect, toggleDeviceOrientation } from "@/lib/tauri";
+import { mirrorRect } from "@/lib/tauri";
+import { loadQuality } from "@/lib/persist";
 import {
   DEFAULT_CONTROL_CONFIG,
   loadControlConfig,
@@ -20,23 +21,25 @@ const countButtons = (c: ControlConfig) => Object.values(c.buttons).filter(Boole
  *  (dock side / size / buttons) and docks itself to the scrcpy mirror window. */
 export function ControlWindow({ serial }: { serial: string }) {
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
-  const [overrideOrientation, setOverrideOrientation] = useState<
-    "horizontal" | "vertical" | null
-  >(null);
+  // Rotate only affects the physical display, so hide it while mirroring a
+  // flex (virtual) display.
+  const [flexDisplay, setFlexDisplay] = useState(false);
 
   // Load config + live updates from the main window.
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
+    loadQuality()
+      .then((q) => setFlexDisplay(q?.settings.flexDisplay ?? false))
+      .catch(() => {});
     const un = listen<ControlConfig>("control-config", (e) => setConfig(e.payload));
     return () => {
       un.then((f) => f());
     };
   }, []);
 
-  const dockVertical =
+  const vertical =
     config.dock === "left" || config.dock === "right" || config.dock === "undocked";
-  const orientation = overrideOrientation ?? (dockVertical ? "vertical" : "horizontal");
-  const vertical = orientation === "vertical";
+  const orientation = vertical ? "vertical" : "horizontal";
 
   // Size the window from the config (logical px so it matches the CSS layout).
   useEffect(() => {
@@ -135,17 +138,7 @@ export function ControlWindow({ serial }: { serial: string }) {
           serial={serial}
           config={config}
           orientation={orientation}
-          onToggleOrientation={() => {
-            toggleDeviceOrientation(serial).catch(() => {});
-            setOverrideOrientation((prev) =>
-              (prev ?? (dockVertical ? "vertical" : "horizontal")) === "horizontal"
-                ? "vertical"
-                : "horizontal",
-            );
-          }}
-          onFitWindow={() => {
-            fitMirrorWindow(`AnyLeap — ${serial}`).catch(() => {});
-          }}
+          showOrientToggle={!flexDisplay}
         />
       </div>
     </div>

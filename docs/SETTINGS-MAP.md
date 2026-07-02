@@ -75,9 +75,9 @@ The everyday knobs, shown on the main mirror screen.
 | Rotation / angle | `--orientation` / `--angle` | select / number |
 | Disable video (audio-only) | `--no-video` | toggle |
 | Virtual display | `--new-display` | text/size |
-| Flex display | `--new-display` | toggle + text (size) | Android 10+; virtual display matches window size. Implemented. |
+| Flex display (desktop mode) | `--new-display[=WxH/dpi] --flex-display` | toggle + text (size) | Android 10+; virtual display continuously resizes to match the window. Implemented. |
 | Unlock aspect ratio | `--no-window-aspect-ratio-lock` | toggle | Allow any window shape. Implemented. |
-| Render fit | `--render-fit` | select: letterbox / unscaled / stretched | Implemented. |
+| Render fit | `--render-fit` | select: letterbox / unscaled / stretched | Always passed explicitly (scrcpy defaults to unscaled under --flex-display). Implemented. |
 
 ## Tier 2 — Audio
 
@@ -96,7 +96,7 @@ The everyday knobs, shown on the main mirror screen.
 | Position / size | `--window-x/y/width/height` | number ×4 |
 | Borderless | `--window-borderless` | toggle |
 | Disable screensaver | `--disable-screensaver` | toggle |
-| Fit window to content | — (control bar button) | Resizes window to remove letterboxing/padding. Implemented. |
+| Rotate device | — (control bar button, adb) | Auto-rotate off + toggles `user_rotation`; physical display only. Implemented. |
 
 ## Tier 2 — Control & input
 
