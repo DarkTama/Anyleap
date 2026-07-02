@@ -1,5 +1,6 @@
 mod commands;
 mod state;
+mod wheel_swipe;
 
 use state::AppState;
 use tauri::menu::{Menu, MenuItem};
@@ -38,8 +39,12 @@ pub fn run() {
             commands::restart_with_screen_off,
             commands::mirror_rect,
             commands::toggle_device_orientation,
+            wheel_swipe::set_wheel_swipe,
         ])
         .setup(|app| {
+            // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
+            wheel_swipe::init(app.handle());
+
             // System-tray icon: left-click restores the window; the menu offers
             // Show / Quit. Pairs with the frontend's close-to-tray handler.
             let show_i = MenuItem::with_id(app, "show", "Show AnyLeap", true, None::<&str>)?;

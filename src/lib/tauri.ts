@@ -58,3 +58,6 @@ export const mirrorRect = (title: string) =>
 
 export const toggleDeviceOrientation = (serial: string) =>
   invoke<string>("toggle_device_orientation", { serial });
+
+export const setWheelSwipe = (serial: string, enabled: boolean) =>
+  invoke<void>("set_wheel_swipe", { serial, enabled });

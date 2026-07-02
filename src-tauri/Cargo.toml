@@ -1,6 +1,6 @@
 [package]
 name = "anyleap"
-version = "0.4.0"
+version = "0.5.0"
 description = "AnyLeap — effortless Android-to-PC mirroring (scrcpy GUI)"
 authors = ["DarkTama"]
 edition = "2021"
@@ -33,4 +33,5 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
 ] }

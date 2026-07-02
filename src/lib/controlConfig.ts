@@ -13,12 +13,15 @@ export type ButtonId =
   | "notifications"
   | "sleep"
   | "screenOff"
-  | "orientToggle";
+  | "orientToggle"
+  | "swipeScroll";
 
 export interface ControlConfig {
   dock: DockSide;
   size: ControlSize;
   buttons: Record<ButtonId, boolean>;
+  /** Strip collapsed into the small round floating button. */
+  collapsed: boolean;
 }
 
 export const BUTTON_IDS: ButtonId[] = [
@@ -33,6 +36,7 @@ export const BUTTON_IDS: ButtonId[] = [
   "sleep",
   "screenOff",
   "orientToggle",
+  "swipeScroll",
 ];
 
 export const BUTTON_LABELS: Record<ButtonId, string> = {
@@ -47,6 +51,7 @@ export const BUTTON_LABELS: Record<ButtonId, string> = {
   sleep: "Sleep / Wake",
   screenOff: "Screen off (scrcpy)",
   orientToggle: "Rotate device",
+  swipeScroll: "Swipe scroll (Reels)",
 };
 
 export const DOCK_SIDES: DockSide[] = ["left", "right", "top", "bottom", "undocked"];
@@ -55,6 +60,7 @@ export const CONTROL_SIZES: ControlSize[] = ["sm", "md", "lg"];
 export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
   dock: "right",
   size: "md",
+  collapsed: false,
   buttons: {
     back: true,
     home: true,
@@ -67,6 +73,7 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
     sleep: true,
     screenOff: true,
     orientToggle: true,
+    swipeScroll: true,
   },
 };
 
@@ -83,6 +90,7 @@ export async function loadControlConfig(): Promise<ControlConfig> {
     dock: saved.dock ?? DEFAULT_CONTROL_CONFIG.dock,
     size: saved.size ?? DEFAULT_CONTROL_CONFIG.size,
     buttons: { ...DEFAULT_CONTROL_CONFIG.buttons, ...(saved.buttons ?? {}) },
+    collapsed: saved.collapsed ?? DEFAULT_CONTROL_CONFIG.collapsed,
   };
 }
 

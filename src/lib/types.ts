@@ -126,5 +126,9 @@ export interface MirrorRect {
   workTop: number;
   workRight: number;
   workBottom: number;
+  clientX: number;
+  clientY: number;
+  clientWidth: number;
+  clientHeight: number;
   foreground: string;
 }

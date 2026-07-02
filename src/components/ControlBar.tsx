@@ -7,6 +7,7 @@ import {
   Monitor,
   MonitorOff,
   Moon,
+  Mouse,
   Power,
   RotateCw,
   Square,
@@ -20,6 +21,7 @@ import {
   openNotifications,
   restartWithScreenOff,
   sendKeyevent,
+  setWheelSwipe,
   toggleDeviceOrientation,
 } from "@/lib/tauri";
 import { KEYCODE } from "@/lib/keycodes";
@@ -38,16 +40,20 @@ export function ControlBar({
   config,
   orientation,
   showOrientToggle = false,
+  showSwipeScroll = false,
 }: {
   serial: string;
   config: ControlConfig;
   orientation: "horizontal" | "vertical";
   /** Rotate acts on the physical display only — hidden in flex display mode. */
   showOrientToggle?: boolean;
+  /** Wheel→swipe needs a mirror window; only the floating control strip shows it. */
+  showSwipeScroll?: boolean;
 }) {
   const setError = useAppStore((s) => s.setError);
   const [asleep, setAsleep] = useState(false);
   const [screenOff, setScreenOff] = useState(false);
+  const [swipeScroll, setSwipeScroll] = useState(false);
   const sz = SIZE[config.size];
   const b = config.buttons;
 
@@ -67,6 +73,12 @@ export function ControlBar({
       .catch((e) => setError(String(e)));
   };
   const rotate = () => toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
+  const toggleSwipeScroll = () => {
+    const next = !swipeScroll;
+    setWheelSwipe(serial, next)
+      .then(() => setSwipeScroll(next))
+      .catch((e) => setError(String(e)));
+  };
 
   const container =
     orientation === "vertical"
@@ -144,6 +156,17 @@ export function ControlBar({
           <Button variant="outline" className={sz.btn} onClick={rotate}>
             <RotateCw className={sz.icon} />
             Rotate
+          </Button>
+        )}
+        {b.swipeScroll && showSwipeScroll && (
+          <Button
+            variant={swipeScroll ? "default" : "outline"}
+            className={sz.btn}
+            onClick={toggleSwipeScroll}
+            title="Wheel scrolls as touch flings — for Reels/Shorts"
+          >
+            <Mouse className={sz.icon} />
+            {swipeScroll ? "Swipe on" : "Swipe off"}
           </Button>
         )}
       </div>

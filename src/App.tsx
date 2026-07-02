@@ -147,6 +147,9 @@ function App() {
               decorations: false,
               alwaysOnTop: true,
               skipTaskbar: true,
+              // Needed for the collapsed round-button state (no square backdrop).
+              transparent: true,
+              shadow: false,
             });
             w.once("tauri://error", (e) => console.error("controls window:", e));
           } catch (e) {

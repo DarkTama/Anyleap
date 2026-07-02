@@ -85,7 +85,7 @@ fn now_ms() -> i64 {
 
 /// Locate the bundled adb across dev (`adb.exe`, sidecar staged unsuffixed) and
 /// production (`adb-<triple>.exe` in the install root) layouts.
-fn adb_path() -> Option<std::path::PathBuf> {
+pub(crate) fn adb_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     let candidates = [
@@ -358,6 +358,56 @@ fn summarize_scrcpy_error(stderr: &str, command_error: Option<&str>) -> String {
         .unwrap_or_else(|| "scrcpy exited without output".to_string())
 }
 
+/// Parse scrcpy's virtual-display announcement, e.g.
+/// `[server] INFO: New display: 1080x2436/440 (id=123)` → (123, (1080, 2436)).
+pub(crate) fn parse_new_display_line(line: &str) -> Option<(u32, (u32, u32))> {
+    let rest = line.split("New display: ").nth(1)?;
+    let size_tok = rest.split_whitespace().next()?;
+    let wh = size_tok.split('/').next()?;
+    let (w, h) = wh.split_once('x')?;
+    let w: u32 = w.trim().parse().ok()?;
+    let h: u32 = h.trim().parse().ok()?;
+    let id_part = rest.split("(id=").nth(1)?;
+    let id: u32 = id_part.split(')').next()?.trim().parse().ok()?;
+    Some((id, (w, h)))
+}
+
+/// Find the scrcpy virtual display in `dumpsys display` output: id + current
+/// size (flex mode resizes the display, so the size here is live). Matches the
+/// `DisplayInfo{"scrcpy", displayId N, ... real W x H, ...}` block.
+pub(crate) fn parse_virtual_display(dumpsys: &str) -> Option<(u32, (u32, u32))> {
+    for line in dumpsys.lines() {
+        if !line.contains("DisplayInfo{\"scrcpy\"") {
+            continue;
+        }
+        let id: u32 = line
+            .split("displayId ")
+            .nth(1)?
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok()?;
+        let real = line.split(" real ").nth(1)?;
+        let (w, rest) = real.split_once(" x ")?;
+        let h: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let w: u32 = w.trim().parse().ok()?;
+        let h: u32 = h.parse().ok()?;
+        return Some((id, (w, h)));
+    }
+    None
+}
+
+/// Record a discovered virtual display id/size on a tracked session.
+fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, u32)) {
+    if let Some(st) = app.try_state::<AppState>() {
+        if let Some(s) = st.sessions.lock().unwrap().get_mut(session_id) {
+            s.display_id = Some(id);
+            s.virtual_size = Some(size);
+        }
+    }
+}
+
 /// Spawn scrcpy with a prepared arg vector and register a tracked session.
 /// On an early encoder/connection failure, retries once with conservative flags
 /// (`retried` guards against an infinite retry loop).
@@ -401,6 +451,8 @@ fn spawn_session(
             started_at,
             child,
             args: args.clone(),
+            display_id: None,
+            virtual_size: None,
         },
     );
 
@@ -416,8 +468,20 @@ fn spawn_session(
         let mut command_error: Option<String> = None;
         while let Some(ev) = rx.recv().await {
             match ev {
+                CommandEvent::Stdout(bytes) => {
+                    // Flex mode: scrcpy announces its virtual display here.
+                    let text = String::from_utf8_lossy(&bytes);
+                    if let Some((did, size)) = parse_new_display_line(&text) {
+                        note_virtual_display(&app2, &id2, did, size);
+                    }
+                }
                 CommandEvent::Stderr(bytes) => {
-                    stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
+                    let text = String::from_utf8_lossy(&bytes);
+                    // scrcpy logs may land on either stream depending on build.
+                    if let Some((did, size)) = parse_new_display_line(&text) {
+                        note_virtual_display(&app2, &id2, did, size);
+                    }
+                    stderr_buf.push_str(&text);
                     // Keep the tail; scrcpy's useful ERROR line is near the end.
                     if stderr_buf.len() > 16_384 {
                         let cut = stderr_buf.len() - 16_384;
@@ -629,12 +693,39 @@ pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Resul
     }
 }
 
+/// Keycodes that act on a specific display and must be `-d`-targeted when the
+/// session mirrors a virtual display: HOME(3), BACK(4), APP_SWITCH/Recents(187).
+/// Volume/power/sleep/screenshot are global and stay untargeted.
+const DISPLAY_TARGETED_KEYCODES: [u32; 3] = [3, 4, 187];
+
 /// Send an Android key event to a device (`adb shell input keyevent`).
+/// For flex (virtual display) sessions, navigation keys are injected into the
+/// mirrored display via `input -d <id>` so they act on what the user sees.
 #[tauri::command]
 pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Result<(), String> {
     let kc = keycode.to_string();
+    let display_id = if DISPLAY_TARGETED_KEYCODES.contains(&keycode) {
+        app.state::<AppState>()
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .find(|s| s.serial == serial)
+            .and_then(|s| s.display_id)
+    } else {
+        None
+    };
+
+    let mut args: Vec<String> = vec!["-s".into(), serial.clone(), "shell".into(), "input".into()];
+    if let Some(did) = display_id {
+        args.push("-d".into());
+        args.push(did.to_string());
+    }
+    args.push("keyevent".into());
+    args.push(kc);
+
     let output = adb_cmd(&app)?
-        .args(["-s", &serial, "shell", "input", "keyevent", &kc])
+        .args(args)
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -712,6 +803,12 @@ pub struct MirrorRect {
     pub work_top: i32,
     pub work_right: i32,
     pub work_bottom: i32,
+    /// Client area in screen coords — the video region without borders and
+    /// title bar, so the control strip can overlay *inside* the window edge.
+    pub client_x: i32,
+    pub client_y: i32,
+    pub client_width: i32,
+    pub client_height: i32,
     /// Title of the current foreground window (so the strip can follow focus).
     pub foreground: String,
 }
@@ -728,8 +825,11 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
         use windows::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
         };
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::ClientToScreen;
         use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, GetForegroundWindow, GetWindowRect, GetWindowTextW, IsIconic,
+            FindWindowW, GetClientRect, GetForegroundWindow, GetWindowRect, GetWindowTextW,
+            IsIconic,
         };
 
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
@@ -737,6 +837,11 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
         let minimized = unsafe { IsIconic(hwnd) }.as_bool();
         let mut rect = RECT::default();
         unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
+
+        let mut client = RECT::default();
+        unsafe { GetClientRect(hwnd, &mut client) }.ok()?;
+        let mut origin = POINT::default();
+        let _ = unsafe { ClientToScreen(hwnd, &mut origin) };
 
         let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
         let mut mi = MONITORINFO {
@@ -763,6 +868,10 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
             work_top: work.top,
             work_right: work.right,
             work_bottom: work.bottom,
+            client_x: origin.x,
+            client_y: origin.y,
+            client_width: client.right,
+            client_height: client.bottom,
             foreground,
         })
     }
@@ -821,6 +930,32 @@ other _weird._tcp 10.0.0.6:1234\n";
             no_window_aspect_ratio_lock: false,
             render_fit: String::new(),
         }
+    }
+
+    #[test]
+    fn parses_new_display_log_line() {
+        // Captured from scrcpy 4.0 against a real device (Android 16).
+        let line = "[server] INFO: New display: 1080x2436/440 (id=123)";
+        assert_eq!(parse_new_display_line(line), Some((123, (1080, 2436))));
+        // Without an explicit dpi suffix.
+        assert_eq!(
+            parse_new_display_line("[server] INFO: New display: 1920x1080 (id=5)"),
+            Some((5, (1920, 1080)))
+        );
+        assert!(parse_new_display_line("INFO: Texture: 956x2160").is_none());
+        assert!(parse_new_display_line("New display: garbage (id=)").is_none());
+    }
+
+    #[test]
+    fn parses_virtual_display_from_dumpsys() {
+        // Trimmed from a real Android 16 `dumpsys display` line.
+        let dump = "    mBaseDisplayInfo=DisplayInfo{\"scrcpy\", displayId 123, displayGroupId 1, \
+FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, density 440}";
+        assert_eq!(parse_virtual_display(dump), Some((123, (1080, 2436))));
+        // Non-scrcpy displays are ignored.
+        let other = "DisplayInfo{\"Built-in Screen\", displayId 0, real 1080 x 2436}";
+        assert!(parse_virtual_display(other).is_none());
+        assert!(parse_virtual_display("").is_none());
     }
 
     #[test]

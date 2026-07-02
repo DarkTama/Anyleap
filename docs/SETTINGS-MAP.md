@@ -97,6 +97,14 @@ The everyday knobs, shown on the main mirror screen.
 | Borderless | `--window-borderless` | toggle |
 | Disable screensaver | `--disable-screensaver` | toggle |
 | Rotate device | — (control bar button, adb) | Auto-rotate off + toggles `user_rotation`; physical display only. Implemented. |
+| Swipe scroll | — (control bar toggle, adb `input swipe` via Win32 wheel hook) | Converts mouse wheel over the mirror into touch flings, for Reels/Shorts-style pagers that ignore mouse scroll. Display-targeted (`input -d`) in flex mode. Implemented. |
+
+Flex (virtual display) sessions: the scrcpy display id is parsed from its
+"New display" log line (fallback: `dumpsys display`), and Back/Home/Recents
+key events are injected with `input -d <id>` so they act on the mirrored
+display. Volume/power/screenshot/notifications stay global. The control strip
+overlays *inside* the mirror's client edge (Snap-friendly) and collapses to a
+floating round button.
 
 ## Tier 2 — Control & input
 
