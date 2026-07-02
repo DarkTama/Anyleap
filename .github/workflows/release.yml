@@ -16,6 +16,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Tag pushes release under the pushed tag; manual dispatch derives the
+      # tag from tauri.conf.json (v<version>) and creates it at HEAD.
+      - name: Resolve release tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = '${{ github.ref_name }}'
+          } else {
+            $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            $tag = "v$ver"
+          }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       # Rust first: fetch-binaries.ps1 derives the target triple from rustc.
       - name: Setup Rust (stable-msvc)
         uses: dtolnay/rust-toolchain@stable
@@ -47,12 +61,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'AnyLeap ${{ github.ref_name }}'
+          tagName: ${{ steps.tag.outputs.tag }}
+          releaseName: 'AnyLeap ${{ steps.tag.outputs.tag }}'
           releaseDraft: false
           prerelease: false
           releaseBody: |
-            AnyLeap ${{ github.ref_name }} (Windows x64)
+            AnyLeap ${{ steps.tag.outputs.tag }} (Windows x64)
 
             Assets:
             - `AnyLeap_*_x64-setup.exe` — installer
@@ -91,4 +105,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} "$env:PORTABLE_ZIP" --clobber
+        run: gh release upload ${{ steps.tag.outputs.tag }} "$env:PORTABLE_ZIP" --clobber

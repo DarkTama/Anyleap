@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "fetch-binaries": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-binaries.ps1",
+    "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
     "postinstall": "npm run fetch-binaries"
   },
   "dependencies": {
