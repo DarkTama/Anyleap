@@ -28,9 +28,9 @@ import { KEYCODE } from "@/lib/keycodes";
 import type { ControlConfig, ControlSize } from "@/lib/controlConfig";
 
 const SIZE: Record<ControlSize, { btn: string; icon: string }> = {
-  sm: { btn: "h-12 w-14 flex-col gap-0.5 px-1 text-[9px]", icon: "h-3.5 w-3.5" },
-  md: { btn: "h-14 w-16 flex-col gap-1 px-1 text-[10px]", icon: "h-4 w-4" },
-  lg: { btn: "h-16 w-20 flex-col gap-1 px-1 text-xs", icon: "h-5 w-5" },
+  sm: { btn: "h-8 w-8 flex-col gap-0.5 p-0 text-[9px] hover:bg-zinc-800 hover:text-white text-zinc-300 border-zinc-800/60", icon: "h-3.5 w-3.5" },
+  md: { btn: "h-9 w-9 flex-col gap-0.5 p-0 text-[10px] hover:bg-zinc-800 hover:text-white text-zinc-300 border-zinc-800/60", icon: "h-4 w-4" },
+  lg: { btn: "h-11 w-11 flex-col gap-1 p-0 text-xs hover:bg-zinc-800 hover:text-white text-zinc-300 border-zinc-800/60", icon: "h-5 w-5" },
 };
 
 /** Android nav + media/power keys for a device (via adb input). Buttons shown,
@@ -82,13 +82,12 @@ export function ControlBar({
 
   const container =
     orientation === "vertical"
-      ? "p-2"
+      ? "p-1.5"
       : "border-t border-zinc-100 px-3 py-3 dark:border-zinc-800/60";
   const wrap =
     orientation === "vertical"
-      ? "flex flex-col items-center gap-2"
+      ? "flex flex-col items-center gap-1.5"
       : "flex flex-wrap gap-2";
-
   return (
     <div className={container}>
       <div className={wrap}>

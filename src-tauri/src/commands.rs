@@ -380,19 +380,14 @@ pub(crate) fn parse_virtual_display(dumpsys: &str) -> Option<(u32, (u32, u32))> 
         if !line.contains("DisplayInfo{\"scrcpy\"") {
             continue;
         }
-        let id: u32 = line
-            .split("displayId ")
-            .nth(1)?
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .ok()?;
-        let real = line.split(" real ").nth(1)?;
-        let (w, rest) = real.split_once(" x ")?;
-        let h: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let w: u32 = w.trim().parse().ok()?;
-        let h: u32 = h.parse().ok()?;
+        let Some(rest) = line.split("displayId ").nth(1) else { continue };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Ok(id) = digits.parse::<u32>() else { continue };
+        let Some(real) = line.split(" real ").nth(1) else { continue };
+        let Some((w_str, h_rest)) = real.split_once(" x ") else { continue };
+        let h_digits: String = h_rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Ok(w) = w_str.trim().parse::<u32>() else { continue };
+        let Ok(h) = h_digits.parse::<u32>() else { continue };
         return Some((id, (w, h)));
     }
     None
@@ -543,14 +538,61 @@ pub fn start_mirror(
     spawn_session(&app, serial, args, false)
 }
 
-/// Restart a device's mirror with scrcpy's screen-off toggled (true scrcpy
-/// "dark screen, still mirroring"). Reuses the original args, flipping the flag.
+/// Toggle scrcpy screen power mode dynamically via shortcut (MOD+o / MOD+Shift+o)
+/// without killing the mirror or dropping the connection.
 #[tauri::command]
 pub fn restart_with_screen_off(
     app: AppHandle,
     serial: String,
     off: bool,
 ) -> Result<SessionInfo, String> {
+    #[cfg(windows)]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
+
+        extern "system" {
+            fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+        }
+
+        let title = format!("AnyLeap — {}", serial);
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
+            if !hwnd.0.is_null() {
+                unsafe {
+                    let _ = SetForegroundWindow(hwnd);
+                    const VK_MENU: u8 = 0x12;
+                    const VK_SHIFT: u8 = 0x10;
+                    const VK_O: u8 = 0x4F;
+                    const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    if !off {
+                        keybd_event(VK_SHIFT, 0, 0, 0);
+                    }
+                    keybd_event(VK_O, 0, 0, 0);
+                    keybd_event(VK_O, 0, KEYEVENTF_KEYUP, 0);
+                    if !off {
+                        keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
+                    }
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+
+                let state = app.state::<AppState>();
+                let map = state.sessions.lock().unwrap();
+                if let Some(s) = map.values().find(|s| s.serial == serial) {
+                    return Ok(SessionInfo {
+                        id: s.id.clone(),
+                        serial: s.serial.clone(),
+                        pid: s.pid,
+                        started_at: s.started_at,
+                    });
+                }
+            }
+        }
+    }
+
+    // Fallback if window not found or non-windows: restart scrcpy
     let old = {
         let state = app.state::<AppState>();
         let mut map = state.sessions.lock().unwrap();

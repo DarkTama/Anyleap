@@ -122,6 +122,15 @@ mod imp {
                 .map(|s| (s.display_id, s.virtual_size))
         };
         let Some((display_id, virtual_size)) = session else {
+            if !enabled {
+                let mut reg = lock_registry();
+                reg.enabled.remove(serial);
+                reg.targets.retain(|_, t| t.serial.as_ref() != serial);
+                if reg.enabled.values().all(|&e| !e) {
+                    ANY_ENABLED.store(false, Ordering::Relaxed);
+                }
+                return Ok(());
+            }
             return Err(format!("No running mirror for {serial}"));
         };
 
@@ -232,6 +241,17 @@ mod imp {
                     .collect()
             };
 
+            let mut reg = lock_registry();
+            if reg.enabled.values().all(|&e| !e) {
+                // Nothing enabled: drop stale targets and stand down.
+                reg.targets.clear();
+                reg.enabled.retain(|serial, _| {
+                    sessions.iter().any(|(s, ..)| s == serial)
+                });
+                ANY_ENABLED.store(false, Ordering::Relaxed);
+                continue;
+            }
+
             // Flex sessions: refresh virtual display id/size occasionally
             // (flex resizes the display when the window resizes).
             if tick % VD_REFRESH_TICKS == 0 {
@@ -248,17 +268,6 @@ mod imp {
                         }
                     }
                 }
-            }
-
-            let mut reg = lock_registry();
-            if reg.enabled.values().all(|&e| !e) {
-                // Nothing enabled: drop stale targets and stand down.
-                reg.targets.clear();
-                reg.enabled.retain(|serial, _| {
-                    sessions.iter().any(|(s, ..)| s == serial)
-                });
-                ANY_ENABLED.store(false, Ordering::Relaxed);
-                continue;
             }
 
             let mut targets: HashMap<isize, SwipeTarget> = HashMap::new();
@@ -371,7 +380,6 @@ mod imp {
             if entry.0.elapsed() < SWIPE_COOLDOWN {
                 continue; // at most ~1 fling per cooldown, no backlog buildup
             }
-            entry.0 = Instant::now();
 
             let (target, size) = {
                 let reg = lock_registry();
@@ -381,6 +389,7 @@ mod imp {
                 }
             };
             run_swipe(adb, &ev.serial, target, size, wheel_down);
+            entry.0 = Instant::now();
         }
     }
 

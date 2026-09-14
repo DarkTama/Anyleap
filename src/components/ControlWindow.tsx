@@ -74,18 +74,17 @@ export function ControlWindow({ serial }: { serial: string }) {
     const win = getCurrentWindow();
     let active = true;
     let visible = true;
+    let inFlight = false;
     let lastX = Number.NaN;
     let lastY = Number.NaN;
 
     const tick = async () => {
-      if (!active) return;
+      if (!active || inFlight) return;
+      inFlight = true;
       try {
         const r = await mirrorRect(title);
-        // Follow the mirror's focus: only show while an AnyLeap window (the
-        // mirror or this strip) is foreground — hide when another app is active,
-        // or when the mirror is minimized/gone.
-        const active = !!r && !r.minimized && r.foreground.startsWith("AnyLeap");
-        if (!r || !active) {
+        const shouldShow = !!r && !r.minimized && r.foreground.startsWith("AnyLeap");
+        if (!r || !shouldShow) {
           if (visible) {
             visible = false;
             await win.hide();
@@ -96,11 +95,12 @@ export function ControlWindow({ serial }: { serial: string }) {
           visible = true;
           await win.show();
         }
-        const sz = await win.outerSize(); // physical px
+        const sz = await win.outerSize();
         const w = sz.width;
         const h = sz.height;
-        // Overlay INSIDE the mirror's client area so the combined footprint
-        // stays within the mirror window (plays nice with Windows Snap).
+
+        // Latch BESIDE the mirror's window border.
+        // If hitting screen edge, gracefully flip inside.
         const cRight = r.clientX + r.clientWidth;
         const cBottom = r.clientY + r.clientHeight;
         const centerX = r.clientX + Math.round((r.clientWidth - w) / 2);
@@ -108,17 +108,29 @@ export function ControlWindow({ serial }: { serial: string }) {
         let x: number;
         let y: number;
         if (dock === "right") {
-          x = cRight - w;
+          x = r.x + r.width;
+          if (x + w > r.workRight) {
+            x = cRight - w;
+          }
           y = collapsedRef.current ? centerY : r.clientY;
         } else if (dock === "left") {
-          x = r.clientX;
+          x = r.x - w;
+          if (x < r.workLeft) {
+            x = r.clientX;
+          }
           y = collapsedRef.current ? centerY : r.clientY;
         } else if (dock === "top") {
           x = collapsedRef.current ? centerX : r.clientX;
-          y = r.clientY;
+          y = r.y - h;
+          if (y < r.workTop) {
+            y = r.clientY;
+          }
         } else {
-          x = collapsedRef.current ? centerX : r.clientX; // bottom
-          y = cBottom - h;
+          x = collapsedRef.current ? centerX : r.clientX;
+          y = r.y + r.height;
+          if (y + h > r.workBottom) {
+            y = cBottom - h;
+          }
         }
         x = Math.max(r.workLeft, Math.min(x, r.workRight - w));
         y = Math.max(r.workTop, Math.min(y, r.workBottom - h));
@@ -129,6 +141,8 @@ export function ControlWindow({ serial }: { serial: string }) {
         }
       } catch {
         // mirror window not up yet / off a monitor — ignore
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -139,49 +153,49 @@ export function ControlWindow({ serial }: { serial: string }) {
       clearInterval(id);
     };
   }, [serial, config.dock]);
-
-  if (collapsed) {
-    // Assistive-touch style round button; click expands the strip.
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-transparent">
+  return (
+    <div
+      className={
+        collapsed
+          ? "flex h-screen w-screen items-center justify-center bg-transparent"
+          : "flex h-screen flex-col rounded-xl border border-zinc-700/60 bg-zinc-900/90 shadow-2xl backdrop-blur-md text-zinc-50"
+      }
+    >
+      {collapsed ? (
         <button
           onClick={() => setCollapsed(false)}
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 shadow-lg hover:bg-zinc-800"
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 shadow-lg transition-transform hover:scale-105 hover:bg-zinc-800"
           aria-label="Expand controls"
           title="Expand controls"
         >
           <Gamepad2 className="h-5 w-5" />
         </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-screen flex-col bg-zinc-900 text-zinc-50">
-      <div
-        data-tauri-drag-region
-        className="flex cursor-move items-center justify-between border-b border-zinc-800 px-2 py-1"
-      >
-        <GripHorizontal className="pointer-events-none h-4 w-4 text-zinc-500" />
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setCollapsed(true)}
-            className="rounded p-0.5 text-zinc-400 hover:bg-zinc-800"
-            aria-label="Collapse controls"
-            title="Collapse to button"
-          >
-            <Minimize2 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => getCurrentWindow().close()}
-            className="rounded p-0.5 text-zinc-400 hover:bg-zinc-800"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+      ) : (
+        <div
+          data-tauri-drag-region
+          className="flex cursor-move items-center justify-between border-b border-zinc-800/80 px-2.5 py-1.5"
+        >
+          <GripHorizontal className="pointer-events-none h-3.5 w-3.5 text-zinc-500" />
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCollapsed(true)}
+              className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              aria-label="Collapse controls"
+              title="Collapse to button"
+            >
+              <Minimize2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => getCurrentWindow().close()}
+              className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              aria-label="Close"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
-      </div>
-      <div className="flex-1 overflow-auto">
+      )}
+      <div className={collapsed ? "hidden" : "flex-1 overflow-auto p-1"}>
         <ControlBar
           serial={serial}
           config={config}

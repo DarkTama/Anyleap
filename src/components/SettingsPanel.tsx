@@ -181,6 +181,27 @@ export function SettingsPanel() {
                 placeholder="Auto — or e.g. 1920x1080/240"
                 onChange={(e) => update("flexDisplaySize", e.target.value)}
               />
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {[
+                  { label: "1080p Desktop", val: "1920x1080/240" },
+                  { label: "720p Compact", val: "1280x720/160" },
+                  { label: "1440p HiDPI", val: "2560x1440/320" },
+                  { label: "Phone Tall", val: "1080x2400/360" },
+                ].map((p) => (
+                  <button
+                    key={p.val}
+                    type="button"
+                    onClick={() => update("flexDisplaySize", p.val)}
+                    className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                      settings.flexDisplaySize === p.val
+                        ? "bg-zinc-700 text-white font-medium"
+                        : "bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
               <p className="text-[11px] text-zinc-400">Initial size as WxH, optionally /dpi</p>
             </div>
           )}
