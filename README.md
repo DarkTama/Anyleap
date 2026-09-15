@@ -4,15 +4,20 @@ A desktop GUI that makes connecting your Android phone to your PC — **wired or
 
 Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experience, on *any* Android 11+ phone, with all of scrcpy's power exposed as a GUI instead of command-line flags.
 
-> **Status:** working app. M1–M4 shipped (USB mirror → wireless core → QR pairing → tabbed UI + mirror control bar). M5 (control-bar customization, docs, and release builds) in progress.
+> **Status:** Active development. Latest release: **v0.9.0** (Studio Deck workstation, Android Camera Studio mode, embedded mirror container, wireless pairing, and adaptive control bars).
 
 ## Features
 
-- **Effortless wireless** — pair over Wi-Fi by **QR code** (scan it with the phone) or **6-digit code** (auto-discovered via mDNS, or entered manually), then mirror. Saved devices **auto-reconnect** on launch.
-- **USB too** — plug in, authorize, mirror.
-- **Quality presets** — Low / Medium / High / Highest (or Custom), plus the full core settings (resolution, bitrate, fps, codec, audio, etc.) as GUI controls — no command line.
-- **Unified device view** — saved devices and discovered devices in one tab, each with live status (Offline / Connected / Mirroring) and one-click Mirror / Stop / Disconnect / Reconnect.
-- **Mirror control bar** — Back / Home / Recents + Volume, Power, Screenshot, Notifications, Sleep/Wake, and scrcpy screen-off, as a floating always-on-top strip that **docks to the mirror window** (customizable: position, which buttons, size) plus inline controls in the app.
+- **Camera Studio (PC Webcam)** — Stream your phone's front or back camera sensors directly to your PC with custom resolutions (1080p, 720p, 4K), configurable frame rates, microphone audio capture, and in-session controls (torch toggle, zoom in/out, lens flip).
+- **Studio Deck Workstation** — Integrated control dashboard with the **Launch Matrix** supporting 4 distinct profiles:
+  - *Desktop Flex Mode* — Dynamic virtual display container with live DPI presets and visualizer.
+  - *Standard Mirror* — Low-latency native display replication.
+  - *Camera Studio* — Dedicated raw camera sensor streaming for calls and content creation.
+  - *High Fidelity* — 60 FPS, 20 Mbps AV1/HEVC pipeline for gaming and crisp media reproduction.
+- **Embedded Mirror Window** — Borderless, single-window embedded workstation container with integrated flush control toolbar.
+- **Effortless Wireless & USB** — One-tap pairing via **QR code** (scan with phone) or **6-digit mDNS auto-discovery**, persistent device storage, live battery telemetry, and automatic reconnects.
+- **Power & Productivity Controls** — Seamless screen power toggling (keep mirroring while phone display stays dark), wheel-to-swipe scrolling for Reels/Shorts, clipboard image sharing, drag-and-drop file transfer, and app launcher drawer.
+- **Adaptive Control Bar** — Context-aware floating or embedded controls for navigation, volume, sleep/wake, torch, and camera zoom.
 
 ## Download
 
@@ -29,8 +34,9 @@ Builds are currently **unsigned**, so Windows SmartScreen may warn on first run 
 2. **Wireless:** on the phone, *Settings → Developer options → Wireless debugging*. In AnyLeap click **Add wireless device**:
    - **QR code** (default) — scan the shown QR with the phone's *Pair device with QR code*; it pairs and connects automatically.
    - **Auto-discover / Manual** — use the *Pair device with pairing code* screen and enter the 6-digit code.
-3. **Mirror** opens the scrcpy window. The **control bar** drives the phone (nav keys, volume, screenshot, etc.); customize it under **Settings → Control bar**.
-
+3. **Launch Modes**:
+   - **Mirror**: Launch display mirroring directly from the device list or Studio Deck.
+   - **Camera Studio**: Click **Camera** on any connected device row or select **Camera Studio** in the Studio Deck Launch Matrix to configure resolution, lens, torch, and audio before streaming.
 ## Build from source
 
 Prerequisites (Windows):
