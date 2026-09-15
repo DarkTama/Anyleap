@@ -43,6 +43,7 @@ pub fn run() {
             commands::list_installed_apps,
             commands::launch_app,
             commands::take_screenshot,
+            commands::get_system_resolution,
             wheel_swipe::set_wheel_swipe,
             embed::embed_mirror,
             embed::resize_embedded_mirror,

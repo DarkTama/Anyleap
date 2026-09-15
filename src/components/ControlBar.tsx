@@ -18,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
 import {
   openNotifications,
-  restartWithScreenOff,
   sendKeyevent,
   setWheelSwipe,
   toggleDeviceOrientation,
@@ -70,9 +69,13 @@ export function ControlBar({
   };
   const toggleScreenOff = () => {
     const next = !screenOff;
-    restartWithScreenOff(serial, next)
+    sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
       .then(() => setDeviceToggle(serial, "screenOff", next))
-      .catch((e) => setError(String(e)));
+      .catch(() => {
+        sendKeyevent(serial, KEYCODE.POWER)
+          .then(() => setDeviceToggle(serial, "screenOff", next))
+          .catch((e) => setError(String(e)));
+      });
   };
   const rotate = () => toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
   const toggleSwipeScroll = () => {

@@ -52,6 +52,7 @@ export interface CoreSettings {
   noWindowAspectRatioLock: boolean; // --no-window-aspect-ratio-lock
   renderFit: "letterbox" | "unscaled" | "stretched"; // --render-fit
   embedded?: boolean; // Win32 embedded mirror container mode
+  hideVirtualTaskbar?: boolean; // --no-vd-system-decorations
 }
 
 export type QualityPreset = "low" | "medium" | "high" | "highest" | "custom";
@@ -99,6 +100,7 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   noWindowAspectRatioLock: false,
   renderFit: "letterbox",
   embedded: false,
+  hideVirtualTaskbar: false,
 };
 
 // --- Wireless (M2) ---

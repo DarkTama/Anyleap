@@ -1,4 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { LayoutGrid, Monitor } from "lucide-react";
+import { getSystemResolution } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
 import {
   PRESET_BUNDLES,
@@ -182,39 +184,102 @@ export function SettingsPanel() {
               Embeds mirror viewport and toolbar into a single native window (Escrcpy style)
             </p>
           </div>
-          {settings.flexDisplay && (
-            <div className="space-y-1">
-              <input
-                type="text"
-                className={selectClass}
-                value={settings.flexDisplaySize}
-                placeholder="Auto — or e.g. 1920x1080/240"
-                onChange={(e) => update("flexDisplaySize", e.target.value)}
-              />
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {[
-                  { label: "1080p Desktop", val: "1920x1080/240" },
-                  { label: "720p Compact", val: "1280x720/160" },
-                  { label: "1440p HiDPI", val: "2560x1440/320" },
-                  { label: "Phone Tall", val: "1080x2400/360" },
-                ].map((p) => (
+          {settings.flexDisplay && (() => {
+            const rawSize = settings.flexDisplaySize || "";
+            const dpiMatch = rawSize.match(/\/(\d+)/);
+            const parsedDpi = dpiMatch ? Number.parseInt(dpiMatch[1], 10) : 240;
+            const iconSize = Math.max(20, Math.min(48, Math.round(28 * (parsedDpi / 200))));
+            const autoDetectResolution = async () => {
+              try {
+                const [w, h] = await getSystemResolution();
+                update("flexDisplaySize", `${w}x${h}/200`);
+              } catch (e) {
+                console.error(e);
+              }
+            };
+            return (
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    className={selectClass}
+                    value={settings.flexDisplaySize}
+                    placeholder="Auto — or e.g. 1920x1080/200"
+                    onChange={(e) => update("flexDisplaySize", e.target.value)}
+                  />
                   <button
-                    key={p.val}
                     type="button"
-                    onClick={() => update("flexDisplaySize", p.val)}
-                    className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
-                      settings.flexDisplaySize === p.val
-                        ? "bg-zinc-700 text-white font-medium"
-                        : "bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                    }`}
+                    onClick={autoDetectResolution}
+                    className="flex items-center gap-1 rounded bg-zinc-800 px-2 text-[11px] text-zinc-300 hover:bg-zinc-700 hover:text-white shrink-0"
+                    title="Detect PC native monitor resolution"
                   >
-                    {p.label}
+                    <Monitor className="h-3 w-3" />
+                    Auto PC Res
                   </button>
-                ))}
+                </div>
+
+                {/* DPI Scale explanation & Live Icon Preview */}
+                <div className="flex items-center gap-3 rounded border border-zinc-800/80 bg-zinc-900/60 p-2.5">
+                  <div className="flex flex-col items-center gap-1 shrink-0">
+                    <div
+                      className="flex items-center justify-center rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow"
+                      style={{ width: `${iconSize}px`, height: `${iconSize}px` }}
+                    >
+                      <LayoutGrid className="w-1/2 h-1/2" />
+                    </div>
+                    <span className="text-[10px] text-zinc-400">App</span>
+                  </div>
+                  <div className="text-xs text-zinc-400">
+                    <span className="font-semibold text-zinc-200">{parsedDpi} DPI</span> icon size preview
+                    <p className="text-[10px] text-zinc-500 mt-0.5">
+                      {parsedDpi <= 160
+                        ? "Compact: small icons, maximum desktop workspace"
+                        : parsedDpi <= 200
+                        ? "Medium: balanced app and desktop scaling"
+                        : parsedDpi <= 240
+                        ? "Standard: tablet default sizing"
+                        : "Large: touch-friendly oversized icons"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Preset chips */}
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {[
+                    { label: "1080p Compact (160 DPI)", val: "1920x1080/160" },
+                    { label: "1080p Balanced (200 DPI)", val: "1920x1080/200" },
+                    { label: "1080p Standard (240 DPI)", val: "1920x1080/240" },
+                    { label: "1440p HiDPI (200 DPI)", val: "2560x1440/200" },
+                  ].map((p) => (
+                    <button
+                      key={p.val}
+                      type="button"
+                      onClick={() => update("flexDisplaySize", p.val)}
+                      className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                        settings.flexDisplaySize === p.val
+                          ? "bg-zinc-700 text-white font-medium"
+                          : "bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-zinc-400">
+                  Resolution as WxH, and /dpi. Lower DPI gives smaller icons and more screen space.
+                </p>
+
+                <Toggle
+                  label="Hide virtual taskbar"
+                  checked={settings.hideVirtualTaskbar ?? false}
+                  onChange={(v) => update("hideVirtualTaskbar", v)}
+                />
+                <p className="text-[11px] text-zinc-400">
+                  Hides Android navigation bar / taskbar on the virtual desktop display
+                </p>
               </div>
-              <p className="text-[11px] text-zinc-400">Initial size as WxH, optionally /dpi</p>
-            </div>
-          )}
+            );
+          })()}
           <Toggle
             label="Unlock aspect ratio"
             checked={settings.noWindowAspectRatioLock}

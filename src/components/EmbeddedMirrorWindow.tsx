@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Minus, Square, X, GripHorizontal } from "lucide-react";
 import { embedMirror, resizeEmbeddedMirror } from "@/lib/tauri";
 import { ControlBar } from "./ControlBar";
@@ -8,7 +8,7 @@ import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@
 export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
-  const win = getCurrentWindow();
+  const win = getCurrentWebviewWindow();
 
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});

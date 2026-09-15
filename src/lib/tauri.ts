@@ -97,3 +97,6 @@ export const launchApp = (serial: string, packageName: string) =>
 
 export const takeScreenshot = (serial: string) =>
   invoke<number[]>("take_screenshot", { serial });
+
+export const getSystemResolution = () =>
+  invoke<[number, number]>("get_system_resolution");

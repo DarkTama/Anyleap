@@ -62,6 +62,8 @@ pub struct CoreSettings {
     pub render_fit: String,
     #[serde(default)]
     pub embedded: bool,
+    #[serde(default)]
+    pub hide_virtual_taskbar: bool,
 }
 
 /// An adb mDNS service entry, as listed by `adb mdns services`.
@@ -275,6 +277,10 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
             a.push(format!("--new-display={}", s.flex_display_size));
         }
         a.push("--flex-display".into());
+        a.push("--no-vd-destroy-content".into());
+        if s.hide_virtual_taskbar {
+            a.push("--no-vd-system-decorations".into());
+        }
     }
     if s.embedded {
         a.push("--window-borderless".into());
@@ -814,7 +820,7 @@ pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Resul
 /// Keycodes that act on a specific display and must be `-d`-targeted when the
 /// session mirrors a virtual display: HOME(3), BACK(4), APP_SWITCH/Recents(187).
 /// Volume/power/sleep/screenshot are global and stay untargeted.
-const DISPLAY_TARGETED_KEYCODES: [u32; 3] = [3, 4, 187];
+const DISPLAY_TARGETED_KEYCODES: [u32; 5] = [3, 4, 187, 82, 111];
 
 /// Send an Android key event to a device (`adb shell input keyevent`).
 /// For flex (virtual display) sessions, navigation keys are injected into the
@@ -832,6 +838,15 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
             .and_then(|s| s.display_id)
     } else {
         None
+    };
+    let display_id = if display_id.is_none() && DISPLAY_TARGETED_KEYCODES.contains(&keycode) {
+        if let Some(adb) = adb_path() {
+            query_virtual_display(&adb, &serial).map(|(d, _)| d)
+        } else {
+            None
+        }
+    } else {
+        display_id
     };
 
     let mut args: Vec<String> = vec!["-s".into(), serial.clone(), "shell".into(), "input".into()];
@@ -1150,8 +1165,34 @@ pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, 
 
     Ok(output.stdout)
 }
+/// Get primary monitor resolution (width, height)
+#[tauri::command]
+pub fn get_system_resolution() -> (u32, u32) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        if w > 0 && h > 0 {
+            return (w as u32, h as u32);
+        }
+    }
+    (1920, 1080)
+}
+
+pub(crate) fn query_virtual_display(adb: &std::path::Path, serial: &str) -> Option<(u32, (u32, u32))> {
+    let out = std::process::Command::new(adb)
+        .args(["-s", serial, "shell", "dumpsys", "display"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_virtual_display(&String::from_utf8_lossy(&out.stdout))
+}
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
 
@@ -1199,6 +1240,7 @@ other _weird._tcp 10.0.0.6:1234\n";
             no_window_aspect_ratio_lock: false,
             render_fit: String::new(),
             embedded: false,
+            hide_virtual_taskbar: false,
         }
     }
 
