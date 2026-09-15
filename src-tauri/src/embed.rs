@@ -12,7 +12,7 @@ mod win_embed {
         EnumWindows, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId,
         IsWindowVisible, SetParent, SetWindowLongPtrW, SetWindowPos,
         GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-        WS_CAPTION, WS_CHILD, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+        WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
     };
     use crate::state::AppState;
 
@@ -20,6 +20,10 @@ mod win_embed {
 
     fn get_embedded_map() -> &'static Arc<Mutex<HashMap<String, isize>>> {
         EMBEDDED_HWNDS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+    }
+
+    pub fn get_embedded_hwnd_for_serial(serial: &str) -> Option<isize> {
+        get_embedded_map().lock().ok().and_then(|map| map.get(serial).copied())
     }
 
     struct EnumData {
@@ -82,7 +86,8 @@ mod win_embed {
         unsafe {
             // Reparent window
             let _ = SetParent(scrcpy_hwnd, Some(tauri_hwnd));
-
+            let parent_style = GetWindowLongPtrW(tauri_hwnd, GWL_STYLE);
+            SetWindowLongPtrW(tauri_hwnd, GWL_STYLE, parent_style | WS_CLIPCHILDREN.0 as isize);
             // Update window styles: remove popups/captions/thickframe, make it child + visible
             let mut style = GetWindowLongPtrW(scrcpy_hwnd, GWL_STYLE);
             style &= !(WS_POPUP.0 as isize | WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize);
@@ -205,5 +210,17 @@ pub fn resize_embedded_mirror(
     {
         let _ = (app, window_label, serial, width, height, x, y);
         Err("Embedded mirror is only supported on Windows".to_string())
+    }
+}
+
+pub fn get_embedded_scrcpy_hwnd(serial: &str) -> Option<isize> {
+    #[cfg(windows)]
+    {
+        win_embed::get_embedded_hwnd_for_serial(serial)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = serial;
+        None
     }
 }

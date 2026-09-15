@@ -623,7 +623,11 @@ pub fn restart_with_screen_off(
             };
             let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
 
-            if let Some(hwnd) = data.hwnd {
+            let hwnd = crate::embed::get_embedded_scrcpy_hwnd(&serial)
+                .map(|h| HWND(h as *mut _))
+                .or(data.hwnd);
+
+            if let Some(hwnd) = hwnd {
                 unsafe {
                     let target_thread = GetWindowThreadProcessId(hwnd, None);
                     let current_thread = GetCurrentThreadId();
@@ -650,6 +654,13 @@ pub fn restart_with_screen_off(
                     if attached != 0 {
                         let _ = AttachThreadInput(current_thread, target_thread, 0);
                     }
+
+                    // Also post direct key message as fallback guarantee for SDL window
+                    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSKEYDOWN, WM_SYSKEYUP};
+                    const VK_O_WPARAM: windows::Win32::Foundation::WPARAM = windows::Win32::Foundation::WPARAM(0x4F);
+                    const ALT_LPARAM: windows::Win32::Foundation::LPARAM = windows::Win32::Foundation::LPARAM(1 << 29);
+                    let _ = PostMessageW(Some(hwnd), WM_SYSKEYDOWN, VK_O_WPARAM, ALT_LPARAM);
+                    let _ = PostMessageW(Some(hwnd), WM_SYSKEYUP, VK_O_WPARAM, ALT_LPARAM);
                 }
 
                 let mut map = state.sessions.lock().map_err(poison_error)?;
@@ -1349,4 +1360,69 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert_eq!(pkgs, vec!["com.android.chrome", "com.example.app", "org.mozilla.firefox"]);
     }
 
+}
+
+/// Save and push an image from clipboard directly to device's /sdcard/Download folder
+#[tauri::command]
+pub async fn push_clipboard_image(
+    app: AppHandle,
+    serial: String,
+    image_bytes: Vec<u8>,
+    filename: Option<String>,
+) -> Result<String, String> {
+    if image_bytes.is_empty() {
+        return Err("No image data provided".into());
+    }
+    let fname = filename.unwrap_or_else(|| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("paste_{}.png", ts)
+    });
+
+    let temp_dir = std::env::temp_dir();
+    let temp_path = temp_dir.join(&fname);
+    std::fs::write(&temp_path, &image_bytes)
+        .map_err(|e| format!("Failed to write temp file: {e}"))?;
+
+    let device_dest = format!("/sdcard/Download/{}", fname);
+    let push_res = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "push",
+            temp_path.to_str().unwrap_or_default(),
+            &device_dest,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&temp_path);
+
+    if !push_res.status.success() {
+        return Err(format!(
+            "adb push image failed: {}",
+            String::from_utf8_lossy(&push_res.stderr)
+        ));
+    }
+
+    // Trigger media scanner so Android Gallery picks it up immediately
+    let _ = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "am",
+            "broadcast",
+            "-a",
+            "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+            "-d",
+            &format!("file://{}", device_dest),
+        ])
+        .output()
+        .await;
+
+    Ok(device_dest)
 }

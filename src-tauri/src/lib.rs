@@ -44,6 +44,7 @@ pub fn run() {
             commands::launch_app,
             commands::take_screenshot,
             commands::get_system_resolution,
+            commands::push_clipboard_image,
             wheel_swipe::set_wheel_swipe,
             embed::embed_mirror,
             embed::resize_embedded_mirror,

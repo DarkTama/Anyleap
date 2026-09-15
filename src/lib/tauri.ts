@@ -100,3 +100,6 @@ export const takeScreenshot = (serial: string) =>
 
 export const getSystemResolution = () =>
   invoke<[number, number]>("get_system_resolution");
+
+export const pushClipboardImage = (serial: string, imageBytes: number[], filename?: string) =>
+  invoke<string>("push_clipboard_image", { serial, imageBytes, filename });
