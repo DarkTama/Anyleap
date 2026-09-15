@@ -1,0 +1,82 @@
+name: "🐛 Bug Report"
+description: "File a bug report to help us improve AnyLeap"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue! Please ensure you are running the latest version of AnyLeap.
+  - type: input
+    id: version
+    attributes:
+      label: AnyLeap Version
+      description: What version of AnyLeap are you running? (e.g. v0.8.0)
+      placeholder: v0.8.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What operating system are you using?
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (Ubuntu / Debian)
+        - Linux (Arch / Fedora)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Android Device & OS
+      description: Phone / tablet model and Android version (e.g. Samsung Galaxy S23, Android 14)
+      placeholder: "Samsung S23, Android 14"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection_type
+    attributes:
+      label: Connection Mode
+      description: How is the device connected?
+      options:
+        - USB Cable
+        - Wireless (Wi-Fi QR Code / Pairing Code)
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Detailed steps explaining how to reproduce the issue.
+      placeholder: |
+        1. Connect device
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs Actual Behavior
+      description: What did you expect to happen versus what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Paste any scrcpy, adb, or console logs here.
+      render: shell

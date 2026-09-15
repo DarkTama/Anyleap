@@ -1,7 +1,7 @@
 mod commands;
+mod embed;
 mod state;
 mod wheel_swipe;
-
 use state::AppState;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -42,7 +42,16 @@ pub fn run() {
             commands::list_device_cameras,
             commands::start_camera_mirror,
             commands::send_camera_shortcut,
+            commands::handle_dropped_files,
+            commands::list_installed_apps,
+            commands::launch_app,
+            commands::take_screenshot,
+            commands::get_system_resolution,
+            commands::push_clipboard_image,
+            commands::get_battery_info,
             wheel_swipe::set_wheel_swipe,
+            embed::embed_mirror,
+            embed::resize_embedded_mirror,
         ])
         .setup(|app| {
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
@@ -81,14 +90,40 @@ pub fn run() {
             // so we never leave orphan processes behind. Closing the floating
             // controls window (or hiding main to tray) must not touch sessions.
             if let tauri::WindowEvent::Destroyed = event {
-                if window.label() != "main" {
+                let label = window.label();
+                if label.starts_with("mirror-") {
+                    let serial = label.trim_start_matches("mirror-");
+                    let app = window.app_handle();
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut sessions) = state.sessions.lock() {
+                            let to_remove: Vec<String> = sessions
+                                .iter()
+                                .filter(|(_, s)| s.serial == serial)
+                                .map(|(id, _)| id.clone())
+                                .collect();
+                            for id in to_remove {
+                                if let Some(s) = sessions.remove(&id) {
+                                    let _ = s.child.kill();
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+                if label != "main" {
                     return;
                 }
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
-                    let mut sessions = state.sessions.lock().unwrap();
-                    for (_, session) in sessions.drain() {
-                        let _ = session.child.kill();
+                    match state.sessions.lock() {
+                        Ok(mut sessions) => {
+                            for (_, session) in sessions.drain() {
+                                let _ = session.child.kill();
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Sessions mutex poisoned, could not kill child processes: {}", e);
+                        }
                     }
                 }
             }

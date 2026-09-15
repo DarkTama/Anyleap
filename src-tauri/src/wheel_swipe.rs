@@ -41,7 +41,7 @@ mod imp {
     };
 
     use crate::commands::{adb_path, parse_virtual_display};
-    use crate::state::AppState;
+    use crate::state::{poison_error, AppState};
 
     const WHEEL_DELTA: i32 = 120;
     const SWIPE_COOLDOWN: Duration = Duration::from_millis(300);
@@ -82,9 +82,8 @@ mod imp {
         REGISTRY.get_or_init(|| Mutex::new(Registry::default()))
     }
 
-    fn lock_registry() -> std::sync::MutexGuard<'static, Registry> {
-        // Writers can't leave the maps logically broken, so recover from poison.
-        registry().lock().unwrap_or_else(|p| p.into_inner())
+    fn lock_registry() -> Result<std::sync::MutexGuard<'static, Registry>, String> {
+        registry().lock().map_err(poison_error)
     }
 
     /// Spawn the hook, worker, and refresher threads. Call once from setup.
@@ -115,7 +114,7 @@ mod imp {
     pub fn set_enabled(app: &AppHandle, serial: &str, enabled: bool) -> Result<(), String> {
         let session = {
             let state = app.state::<AppState>();
-            let sessions = state.sessions.lock().unwrap();
+            let sessions = state.sessions.lock().map_err(poison_error)?;
             sessions
                 .values()
                 .find(|s| s.serial == serial)
@@ -123,7 +122,7 @@ mod imp {
         };
         let Some((display_id, virtual_size)) = session else {
             if !enabled {
-                let mut reg = lock_registry();
+                let mut reg = lock_registry()?;
                 reg.enabled.remove(serial);
                 reg.targets.retain(|_, t| t.serial.as_ref() != serial);
                 if reg.enabled.values().all(|&e| !e) {
@@ -147,7 +146,7 @@ mod imp {
             None
         };
 
-        let mut reg = lock_registry();
+        let mut reg = lock_registry()?;
         reg.enabled.insert(serial.to_string(), enabled);
         if let Some((hwnd, size)) = resolved {
             reg.targets.insert(
@@ -228,20 +227,27 @@ mod imp {
             // Snapshot sessions (tiny lock scope — see state.rs).
             let sessions: Vec<(String, Option<u32>, Option<(u32, u32)>, bool)> = {
                 let Some(state) = app.try_state::<AppState>() else { continue };
-                let map = state.sessions.lock().unwrap();
-                map.values()
-                    .map(|s| {
-                        (
-                            s.serial.clone(),
-                            s.display_id,
-                            s.virtual_size,
-                            s.args.iter().any(|a| a.starts_with("--new-display")),
-                        )
-                    })
-                    .collect()
+                let list = match state.sessions.lock() {
+                    Ok(map) => map
+                        .values()
+                        .map(|s| {
+                            (
+                                s.serial.clone(),
+                                s.display_id,
+                                s.virtual_size,
+                                s.args.iter().any(|a| a.starts_with("--new-display")),
+                            )
+                        })
+                        .collect(),
+                    Err(e) => {
+                        eprintln!("Sessions mutex poisoned in refresher: {e}");
+                        continue;
+                    }
+                };
+                list
             };
 
-            let mut reg = lock_registry();
+            let Ok(mut reg) = lock_registry() else { continue };
             if reg.enabled.values().all(|&e| !e) {
                 // Nothing enabled: drop stale targets and stand down.
                 reg.targets.clear();
@@ -259,10 +265,16 @@ mod imp {
                     for (serial, ..) in sessions.iter().filter(|s| s.3) {
                         if let Some((did, size)) = query_virtual_display(adb, serial) {
                             if let Some(state) = app.try_state::<AppState>() {
-                                let mut map = state.sessions.lock().unwrap();
-                                if let Some(s) = map.values_mut().find(|s| &s.serial == serial) {
-                                    s.display_id = Some(did);
-                                    s.virtual_size = Some(size);
+                                match state.sessions.lock() {
+                                    Ok(mut map) => {
+                                        if let Some(s) = map.values_mut().find(|s| &s.serial == serial) {
+                                            s.display_id = Some(did);
+                                            s.virtual_size = Some(size);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Sessions mutex poisoned in flex display refresher: {e}");
+                                    }
                                 }
                             }
                         }
@@ -382,7 +394,7 @@ mod imp {
             }
 
             let (target, size) = {
-                let reg = lock_registry();
+                let Ok(reg) = lock_registry() else { continue };
                 match reg.targets.values().find(|t| t.serial == ev.serial) {
                     Some(t) => (t.display_id, (t.w, t.h)),
                     None => continue,

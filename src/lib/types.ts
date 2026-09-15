@@ -52,6 +52,8 @@ export interface CoreSettings {
   flexDisplaySize: string; // empty = auto (main display size), or "WxH/dpi"
   noWindowAspectRatioLock: boolean; // --no-window-aspect-ratio-lock
   renderFit: "letterbox" | "unscaled" | "stretched"; // --render-fit
+  embedded?: boolean; // Win32 embedded mirror container mode
+  hideVirtualTaskbar?: boolean; // --no-vd-system-decorations
 }
 
 export type QualityPreset = "low" | "medium" | "high" | "highest" | "custom";
@@ -98,6 +100,8 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   flexDisplaySize: "",
   noWindowAspectRatioLock: false,
   renderFit: "letterbox",
+  embedded: false,
+  hideVirtualTaskbar: false,
 };
 
 // --- Wireless (M2) ---
@@ -132,6 +136,13 @@ export interface MirrorRect {
   clientWidth: number;
   clientHeight: number;
   foreground: string;
+}
+
+export type DeviceNicknames = Record<string, string>;
+
+export interface BatteryInfo {
+  level: number | null;
+  charging: boolean;
 }
 
 export interface CameraDeviceOption {

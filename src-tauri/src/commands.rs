@@ -6,14 +6,14 @@ use tauri::path::BaseDirectory;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::state::{AppState, Session};
+use crate::state::{poison_error, AppState, Session};
 
 /// Filename of the bundled adb sidecar (target-triple suffixed by Tauri).
 /// Kept Windows-only for M1; extend per-platform when we add macOS/Linux.
-#[cfg(windows)]
-const ADB_SIDECAR: &str = "adb-x86_64-pc-windows-msvc.exe";
-#[cfg(not(windows))]
-const ADB_SIDECAR: &str = "adb";
+#[cfg(target_os = "windows")]
+const ADB_SIDECAR: &str = concat!("adb-", env!("TARGET"), ".exe");
+#[cfg(not(target_os = "windows"))]
+const ADB_SIDECAR: &str = concat!("adb-", env!("TARGET"));
 
 #[derive(Serialize, Clone)]
 pub struct DeviceInfo {
@@ -83,6 +83,10 @@ pub struct CoreSettings {
     pub flex_display_size: String,
     pub no_window_aspect_ratio_lock: bool,
     pub render_fit: String,
+    #[serde(default)]
+    pub embedded: bool,
+    #[serde(default)]
+    pub hide_virtual_taskbar: bool,
 }
 
 /// An adb mDNS service entry, as listed by `adb mdns services`.
@@ -111,11 +115,14 @@ fn now_ms() -> i64 {
 pub(crate) fn adb_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
+    let exe_name = if cfg!(windows) { "adb.exe" } else { "adb" };
     let candidates = [
-        dir.join("adb.exe"),
+        dir.join(exe_name),
         dir.join(ADB_SIDECAR),
-        // dev fallback: src-tauri/target/debug -> src-tauri/binaries
+        dir.join("..").join("Resources").join(ADB_SIDECAR),
+        dir.join("..").join("Resources").join(exe_name),
         dir.join("..").join("..").join("binaries").join(ADB_SIDECAR),
+        dir.join("..").join("..").join("binaries").join(exe_name),
     ];
     candidates.into_iter().find(|c| c.exists())
 }
@@ -293,8 +300,15 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
             a.push(format!("--new-display={}", s.flex_display_size));
         }
         a.push("--flex-display".into());
+        a.push("--no-vd-destroy-content".into());
+        if s.hide_virtual_taskbar {
+            a.push("--no-vd-system-decorations".into());
+        }
     }
-    if s.no_window_aspect_ratio_lock {
+    if s.embedded {
+        a.push("--window-borderless".into());
+    }
+    if s.no_window_aspect_ratio_lock || s.embedded {
         a.push("--no-window-aspect-ratio-lock".into());
     }
     // Always sent explicitly: with --flex-display scrcpy's default flips to
@@ -545,13 +559,14 @@ pub(crate) fn parse_virtual_display(dumpsys: &str) -> Option<(u32, (u32, u32))> 
 }
 
 /// Record a discovered virtual display id/size on a tracked session.
-fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, u32)) {
+fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, u32)) -> Result<(), String> {
     if let Some(st) = app.try_state::<AppState>() {
-        if let Some(s) = st.sessions.lock().unwrap().get_mut(session_id) {
+        if let Some(s) = st.sessions.lock().map_err(poison_error)?.get_mut(session_id) {
             s.display_id = Some(id);
             s.virtual_size = Some(size);
         }
     }
+    Ok(())
 }
 
 /// Spawn scrcpy with a prepared arg vector and register a tracked session.
@@ -595,7 +610,7 @@ fn spawn_session(
         mode: mode.to_string(),
     };
 
-    app.state::<AppState>().sessions.lock().unwrap().insert(
+    app.state::<AppState>().sessions.lock().map_err(poison_error)?.insert(
         id.clone(),
         Session {
             id: id.clone(),
@@ -627,14 +642,14 @@ fn spawn_session(
                     // Flex mode: scrcpy announces its virtual display here.
                     let text = String::from_utf8_lossy(&bytes);
                     if let Some((did, size)) = parse_new_display_line(&text) {
-                        note_virtual_display(&app2, &id2, did, size);
+                        let _ = note_virtual_display(&app2, &id2, did, size);
                     }
                 }
                 CommandEvent::Stderr(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     // scrcpy logs may land on either stream depending on build.
                     if let Some((did, size)) = parse_new_display_line(&text) {
-                        note_virtual_display(&app2, &id2, did, size);
+                        let _ = note_virtual_display(&app2, &id2, did, size);
                     }
                     stderr_buf.push_str(&text);
                     // Keep the tail; scrcpy's useful ERROR line is near the end.
@@ -646,7 +661,12 @@ fn spawn_session(
                 CommandEvent::Error(e) => command_error = Some(e),
                 CommandEvent::Terminated(payload) => {
                     if let Some(st) = app2.try_state::<AppState>() {
-                        st.sessions.lock().unwrap().remove(&id2);
+                        match st.sessions.lock() {
+                            Ok(mut s) => {
+                                s.remove(&id2);
+                            }
+                            Err(e) => eprintln!("Sessions mutex poisoned on session exit: {}", e),
+                        }
                     }
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
@@ -806,6 +826,19 @@ pub fn send_camera_shortcut(
     Ok(())
 }
 
+/// Mutate scrcpy argument list to add or remove `--turn-screen-off`.
+fn toggle_screen_off_args(args: &[String], off: bool) -> Vec<String> {
+    let mut out: Vec<String> = args
+        .iter()
+        .filter(|a| a.as_str() != "--turn-screen-off")
+        .cloned()
+        .collect();
+    if off {
+        out.push("--turn-screen-off".to_string());
+    }
+    out
+}
+
 /// Toggle scrcpy screen power mode dynamically via shortcut (MOD+o / MOD+Shift+o)
 /// without killing the mirror or dropping the connection.
 #[tauri::command]
@@ -816,19 +849,60 @@ pub fn restart_with_screen_off(
 ) -> Result<SessionInfo, String> {
     #[cfg(windows)]
     {
-        use windows::core::PCWSTR;
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
-
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+        };
         extern "system" {
+            fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+            fn GetCurrentThreadId() -> u32;
         }
 
-        let title = format!("AnyLeap — {}", serial);
-        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
-            if !hwnd.0.is_null() {
+        struct EnumData {
+            target_pid: u32,
+            hwnd: Option<HWND>,
+        }
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd).as_bool() {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let data = &mut *(lparam.0 as *mut EnumData);
+                if pid == data.target_pid {
+                    data.hwnd = Some(hwnd);
+                    return BOOL(0);
+                }
+            }
+            BOOL(1)
+        }
+
+        let state = app.state::<AppState>();
+        let target_pid = {
+            let map = state.sessions.lock().map_err(poison_error)?;
+            map.values().find(|s| s.serial == serial).map(|s| s.pid)
+        };
+
+        if let Some(pid) = target_pid {
+            let mut data = EnumData {
+                target_pid: pid,
+                hwnd: None,
+            };
+            let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
+
+            let hwnd = crate::embed::get_embedded_scrcpy_hwnd(&serial)
+                .map(|h| HWND(h as *mut _))
+                .or(data.hwnd);
+
+            if let Some(hwnd) = hwnd {
                 unsafe {
+                    let target_thread = GetWindowThreadProcessId(hwnd, None);
+                    let current_thread = GetCurrentThreadId();
+                    let attached = AttachThreadInput(current_thread, target_thread, 1);
                     let _ = SetForegroundWindow(hwnd);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+
                     const VK_MENU: u8 = 0x12;
                     const VK_SHIFT: u8 = 0x10;
                     const VK_O: u8 = 0x4F;
@@ -844,11 +918,22 @@ pub fn restart_with_screen_off(
                         keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
                     }
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+
+                    if attached != 0 {
+                        let _ = AttachThreadInput(current_thread, target_thread, 0);
+                    }
+
+                    // Also post direct key message as fallback guarantee for SDL window
+                    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSKEYDOWN, WM_SYSKEYUP};
+                    const VK_O_WPARAM: windows::Win32::Foundation::WPARAM = windows::Win32::Foundation::WPARAM(0x4F);
+                    const ALT_LPARAM: windows::Win32::Foundation::LPARAM = windows::Win32::Foundation::LPARAM(1 << 29);
+                    let _ = PostMessageW(Some(hwnd), WM_SYSKEYDOWN, VK_O_WPARAM, ALT_LPARAM);
+                    let _ = PostMessageW(Some(hwnd), WM_SYSKEYUP, VK_O_WPARAM, ALT_LPARAM);
                 }
 
-                let state = app.state::<AppState>();
-                let map = state.sessions.lock().unwrap();
-                if let Some(s) = map.values().find(|s| s.serial == serial) {
+                let mut map = state.sessions.lock().map_err(poison_error)?;
+                if let Some(s) = map.values_mut().find(|s| s.serial == serial) {
+                    s.args = toggle_screen_off_args(&s.args, off);
                     return Ok(SessionInfo {
                         id: s.id.clone(),
                         serial: s.serial.clone(),
@@ -864,7 +949,7 @@ pub fn restart_with_screen_off(
     // Fallback if window not found or non-windows: restart scrcpy
     let old = {
         let state = app.state::<AppState>();
-        let mut map = state.sessions.lock().unwrap();
+        let mut map = state.sessions.lock().map_err(poison_error)?;
         let key = map
             .iter()
             .find(|(_, s)| s.serial == serial)
@@ -872,33 +957,41 @@ pub fn restart_with_screen_off(
         key.and_then(|k| map.remove(&k))
     };
     let old = old.ok_or_else(|| "no active mirror for this device".to_string())?;
-    let mut args = old.args.clone();
+    let args = toggle_screen_off_args(&old.args, off);
     let _ = old.child.kill();
-    args.retain(|a| a != "--turn-screen-off");
-    if off {
-        args.push("--turn-screen-off".to_string());
-    }
     spawn_session(&app, serial, args, false, &old.mode)
 }
 
 /// Stop a running session by killing its scrcpy child.
 #[tauri::command]
-pub fn stop_mirror(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn stop_mirror(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
     // Take ownership out of the map, then kill outside the lock.
-    let session = state.sessions.lock().unwrap().remove(&session_id);
-    match session {
-        Some(s) => s.child.kill().map_err(|e| e.to_string()),
-        None => Err("no such session".into()),
+    let session = state.sessions.lock().map_err(poison_error)?.remove(&session_id);
+    if let Some(s) = session {
+        // For flex mode, send a BACK keypress before killing. This helps the
+        // device restore its original density and launcher layout, which can
+        // get stuck otherwise.
+        if s.display_id.is_some() {
+            let _ = send_keyevent(app, s.serial.clone(), 4).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        s.child.kill().map_err(|e| e.to_string())
+    } else {
+        Err("no such session".into())
     }
 }
 
 /// List currently running sessions.
 #[tauri::command]
-pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
-    state
+pub fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo>, String> {
+    Ok(state
         .sessions
         .lock()
-        .unwrap()
+        .map_err(poison_error)?
         .values()
         .map(|s| SessionInfo {
             id: s.id.clone(),
@@ -907,7 +1000,7 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
             started_at: s.started_at,
             mode: s.mode.clone(),
         })
-        .collect()
+        .collect())
 }
 
 /// Discover wireless adb services on the LAN via `adb mdns services`.
@@ -1008,7 +1101,7 @@ pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Resul
 /// Keycodes that act on a specific display and must be `-d`-targeted when the
 /// session mirrors a virtual display: HOME(3), BACK(4), APP_SWITCH/Recents(187).
 /// Volume/power/sleep/screenshot are global and stay untargeted.
-const DISPLAY_TARGETED_KEYCODES: [u32; 3] = [3, 4, 187];
+const DISPLAY_TARGETED_KEYCODES: [u32; 5] = [3, 4, 187, 82, 111];
 
 /// Send an Android key event to a device (`adb shell input keyevent`).
 /// For flex (virtual display) sessions, navigation keys are injected into the
@@ -1020,12 +1113,21 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
         app.state::<AppState>()
             .sessions
             .lock()
-            .unwrap()
+            .map_err(poison_error)?
             .values()
             .find(|s| s.serial == serial)
             .and_then(|s| s.display_id)
     } else {
         None
+    };
+    let display_id = if display_id.is_none() && DISPLAY_TARGETED_KEYCODES.contains(&keycode) {
+        if let Some(adb) = adb_path() {
+            query_virtual_display(&adb, &serial).map(|(d, _)| d)
+        } else {
+            None
+        }
+    } else {
+        display_id
     };
 
     let mut args: Vec<String> = vec!["-s".into(), serial.clone(), "shell".into(), "input".into()];
@@ -1193,8 +1295,185 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
         None
     }
 }
+/// Drag-and-drop file/APK push. APKs are installed with `adb install -r`;
+/// other files are pushed to `/sdcard/Download/`.
+#[tauri::command]
+pub async fn handle_dropped_files(
+    app: AppHandle,
+    serial: String,
+    paths: Vec<String>,
+) -> Result<String, String> {
+    if paths.is_empty() {
+        return Ok("No files provided".to_string());
+    }
+    let mut installed = 0;
+    let mut pushed = 0;
+    for path in &paths {
+        if path.to_lowercase().ends_with(".apk") {
+            let out = adb_cmd(&app)?
+                .args(["-s", &serial, "install", "-r", path])
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let combined = format!("{stdout}\n{stderr}");
+            if !out.status.success() || combined.contains("Failure") {
+                return Err(format!("APK install failed for {path}: {}", combined.trim()));
+            }
+            installed += 1;
+        } else {
+            let out = adb_cmd(&app)?
+                .args(["-s", &serial, "push", path, "/sdcard/Download/"])
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let combined = format!("{stdout}\n{stderr}");
+                return Err(format!("File push failed for {path}: {}", combined.trim()));
+            }
+            pushed += 1;
+        }
+    }
+    Ok(format!("Installed {installed} APK(s), pushed {pushed} file(s)"))
+}
+
+/// Parse package lines from `pm list packages -3` output.
+fn parse_installed_packages(text: &str) -> Vec<String> {
+    let mut packages: Vec<String> = text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            if let Some(pkg) = line.strip_prefix("package:") {
+                let p = pkg.trim();
+                if !p.is_empty() {
+                    Some(p.to_string())
+                } else {
+                    None
+                }
+            } else {
+                Some(line.to_string())
+            }
+        })
+        .collect();
+    packages.sort();
+    packages.dedup();
+    packages
+}
+
+/// List third-party installed packages on the device.
+#[tauri::command]
+pub async fn list_installed_apps(
+    app: AppHandle,
+    serial: String,
+) -> Result<Vec<String>, String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "pm", "list", "packages", "-3"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to list packages: {}", err.trim()));
+    }
+
+    Ok(parse_installed_packages(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Launch an app by package name via Android's monkey launcher intent.
+#[tauri::command]
+pub async fn launch_app(
+    app: AppHandle,
+    serial: String,
+    package_name: String,
+) -> Result<(), String> {
+    let output = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "monkey",
+            "-p",
+            &package_name,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    if !output.status.success()
+        || combined.contains("** No activities found")
+        || combined.contains("monkey aborted")
+    {
+        let msg = combined.trim();
+        return Err(if msg.is_empty() {
+            format!("Failed to launch {package_name}")
+        } else {
+            format!("Failed to launch {package_name}: {msg}")
+        });
+    }
+
+    Ok(())
+}
+
+/// Direct capture of device screen into PNG bytes.
+#[tauri::command]
+pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "exec-out", "screencap", "-p"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to take screenshot: {}", err.trim()));
+    }
+
+    if output.stdout.is_empty() {
+        return Err("Screenshot captured 0 bytes".to_string());
+    }
+
+    Ok(output.stdout)
+}
+/// Get primary monitor resolution (width, height)
+#[tauri::command]
+pub fn get_system_resolution() -> (u32, u32) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        if w > 0 && h > 0 {
+            return (w as u32, h as u32);
+        }
+    }
+    (1920, 1080)
+}
+
+pub(crate) fn query_virtual_display(adb: &std::path::Path, serial: &str) -> Option<(u32, (u32, u32))> {
+    let out = std::process::Command::new(adb)
+        .args(["-s", serial, "shell", "dumpsys", "display"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_virtual_display(&String::from_utf8_lossy(&out.stdout))
+}
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
 
@@ -1241,6 +1520,8 @@ other _weird._tcp 10.0.0.6:1234\n";
             flex_display_size: String::new(),
             no_window_aspect_ratio_lock: false,
             render_fit: String::new(),
+            embedded: false,
+            hide_virtual_taskbar: false,
         }
     }
 
@@ -1344,4 +1625,167 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert!(!args.contains(&"--no-audio".to_string()));
         assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
     }
+
+    #[test]
+    fn toggle_screen_off_adds_and_removes_flag() {
+        let base = vec![
+            "--serial".to_string(),
+            "DEVICE123".to_string(),
+            "--max-size=1280".to_string(),
+            "--window-title=AnyLeap — DEVICE123".to_string(),
+        ];
+
+        let with_off = toggle_screen_off_args(&base, true);
+        assert!(with_off.contains(&"--turn-screen-off".to_string()));
+        assert_eq!(
+            with_off.iter().filter(|a| *a == "--turn-screen-off").count(),
+            1
+        );
+
+        let with_off_again = toggle_screen_off_args(&with_off, true);
+        assert_eq!(
+            with_off_again
+                .iter()
+                .filter(|a| *a == "--turn-screen-off")
+                .count(),
+            1
+        );
+
+        let without_off = toggle_screen_off_args(&with_off, false);
+        assert!(!without_off.contains(&"--turn-screen-off".to_string()));
+        assert_eq!(without_off, base);
+    }
+    #[test]
+    fn embedded_mode_emits_borderless_and_no_aspect_ratio_lock() {
+        let mut s = base_settings();
+        s.embedded = true;
+        let args = build_scrcpy_args("SER", &s);
+        assert!(args.contains(&"--window-borderless".to_string()));
+        assert!(args.contains(&"--no-window-aspect-ratio-lock".to_string()));
+    }
+    #[test]
+    fn parses_installed_packages_output() {
+        let text = "package:com.android.chrome\r\npackage:org.mozilla.firefox\npackage:com.example.app\n";
+        let pkgs = parse_installed_packages(text);
+        assert_eq!(pkgs, vec!["com.android.chrome", "com.example.app", "org.mozilla.firefox"]);
+    }
+    #[test]
+    fn parses_battery_info() {
+        let text = "Current Battery Service state:\n\
+  AC powered: false\n\
+  USB powered: true\n\
+  level: 82\n\
+  scale: 100\n";
+        let info = parse_battery_info(text);
+        assert_eq!(info.level, Some(82));
+        assert!(info.charging);
+    }
+
+}
+
+/// Save and push an image from clipboard directly to device's /sdcard/Download folder
+#[tauri::command]
+pub async fn push_clipboard_image(
+    app: AppHandle,
+    serial: String,
+    image_bytes: Vec<u8>,
+    filename: Option<String>,
+) -> Result<String, String> {
+    if image_bytes.is_empty() {
+        return Err("No image data provided".into());
+    }
+    let fname = filename.unwrap_or_else(|| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("paste_{}.png", ts)
+    });
+
+    let temp_dir = std::env::temp_dir();
+    let temp_path = temp_dir.join(&fname);
+    std::fs::write(&temp_path, &image_bytes)
+        .map_err(|e| format!("Failed to write temp file: {e}"))?;
+
+    let device_dest = format!("/sdcard/Download/{}", fname);
+    let push_res = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "push",
+            temp_path.to_str().unwrap_or_default(),
+            &device_dest,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&temp_path);
+
+    if !push_res.status.success() {
+        return Err(format!(
+            "adb push image failed: {}",
+            String::from_utf8_lossy(&push_res.stderr)
+        ));
+    }
+
+    // Trigger media scanner so Android Gallery picks it up immediately
+    let _ = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "am",
+            "broadcast",
+            "-a",
+            "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+            "-d",
+            &format!("file://{}", device_dest),
+        ])
+        .output()
+        .await;
+
+    Ok(device_dest)
+}
+#[derive(serde::Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct BatteryInfo {
+    pub level: Option<u32>,
+    pub charging: bool,
+}
+
+pub(crate) fn parse_battery_info(output: &str) -> BatteryInfo {
+    let mut level = None;
+    let mut charging = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("level:") {
+            if let Ok(lvl) = rest.trim().parse::<u32>() {
+                level = Some(lvl);
+            }
+        } else if trimmed.starts_with("AC powered: true")
+            || trimmed.starts_with("USB powered: true")
+            || trimmed.starts_with("Wireless powered: true")
+        {
+            charging = true;
+        }
+    }
+    BatteryInfo { level, charging }
+}
+
+#[tauri::command]
+pub async fn get_battery_info(
+    app: AppHandle,
+    serial: String,
+) -> Result<BatteryInfo, String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "dumpsys", "battery"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(BatteryInfo::default());
+    }
+
+    Ok(parse_battery_info(&String::from_utf8_lossy(&output.stdout)))
 }

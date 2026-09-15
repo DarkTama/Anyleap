@@ -76,3 +76,48 @@ export type CameraAction = "torch_on" | "torch_off" | "zoom_in" | "zoom_out";
 
 export const sendCameraShortcut = (serial: string, action: CameraAction) =>
   invoke<void>("send_camera_shortcut", { serial, action });
+
+// --- Embedded Mirror (SPEC-06) ---
+
+export const embedMirror = (windowLabel: string, serial: string) =>
+  invoke<void>("embed_mirror", { windowLabel, serial });
+
+export const resizeEmbeddedMirror = (
+  windowLabel: string,
+  serial: string,
+  width: number,
+  height: number,
+  x?: number,
+  y?: number,
+) =>
+  invoke<void>("resize_embedded_mirror", {
+    windowLabel,
+    serial,
+    width,
+    height,
+    x,
+    y,
+  });
+
+// --- Escrcpy Features (SPEC-07) ---
+
+export const handleDroppedFiles = (serial: string, paths: string[]) =>
+  invoke<string>("handle_dropped_files", { serial, paths });
+
+export const listInstalledApps = (serial: string) =>
+  invoke<string[]>("list_installed_apps", { serial });
+
+export const launchApp = (serial: string, packageName: string) =>
+  invoke<void>("launch_app", { serial, packageName });
+
+export const takeScreenshot = (serial: string) =>
+  invoke<number[]>("take_screenshot", { serial });
+
+export const getSystemResolution = () =>
+  invoke<[number, number]>("get_system_resolution");
+
+export const pushClipboardImage = (serial: string, imageBytes: number[], filename?: string) =>
+  invoke<string>("push_clipboard_image", { serial, imageBytes, filename });
+
+export const getBatteryInfo = (serial: string) =>
+  invoke<{ level: number | null; charging: boolean }>("get_battery_info", { serial });

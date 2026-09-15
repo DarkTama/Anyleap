@@ -21,6 +21,10 @@ interface AppStore {
   controlConfig: ControlConfig;
   appPrefs: AppPrefs;
   error: string | null;
+  deviceToggles: Record<string, { screenOff?: boolean; asleep?: boolean; swipeScroll?: boolean }>;
+  nicknames: Record<string, string>;
+  setNicknames: (n: Record<string, string>) => void;
+  setNickname: (serial: string, name: string) => void;
 
   setDevices: (d: DeviceInfo[]) => void;
   setSessions: (s: SessionInfo[]) => void;
@@ -32,6 +36,7 @@ interface AppStore {
   setControlConfig: (c: ControlConfig) => void;
   setAppPrefs: (p: AppPrefs) => void;
   setError: (e: string | null) => void;
+  setDeviceToggle: (serial: string, key: "screenOff" | "asleep" | "swipeScroll", val: boolean) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -43,6 +48,20 @@ export const useAppStore = create<AppStore>((set) => ({
   controlConfig: DEFAULT_CONTROL_CONFIG,
   appPrefs: DEFAULT_APP_PREFS,
   error: null,
+  deviceToggles: {},
+  nicknames: {},
+  setNicknames: (nicknames) => set({ nicknames }),
+  setNickname: (serial, name) =>
+    set((st) => {
+      const next = { ...st.nicknames };
+      const trimmed = name.trim();
+      if (trimmed) {
+        next[serial] = trimmed;
+      } else {
+        delete next[serial];
+      }
+      return { nicknames: next };
+    }),
 
   setDevices: (devices) => set({ devices }),
   setSessions: (sessions) => set({ sessions }),
@@ -60,4 +79,14 @@ export const useAppStore = create<AppStore>((set) => ({
   setControlConfig: (controlConfig) => set({ controlConfig }),
   setAppPrefs: (appPrefs) => set({ appPrefs }),
   setError: (error) => set({ error }),
+  setDeviceToggle: (serial, key, val) =>
+    set((st) => ({
+      deviceToggles: {
+        ...st.deviceToggles,
+        [serial]: {
+          ...st.deviceToggles[serial],
+          [key]: val,
+        },
+      },
+    })),
 }));

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   ArrowLeft,
   Bell,
@@ -19,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
 import {
   openNotifications,
-  restartWithScreenOff,
   sendKeyevent,
   setWheelSwipe,
   toggleDeviceOrientation,
@@ -51,9 +49,12 @@ export function ControlBar({
   showSwipeScroll?: boolean;
 }) {
   const setError = useAppStore((s) => s.setError);
-  const [asleep, setAsleep] = useState(false);
-  const [screenOff, setScreenOff] = useState(false);
-  const [swipeScroll, setSwipeScroll] = useState(false);
+  const deviceToggles = useAppStore((s) => s.deviceToggles);
+  const setDeviceToggle = useAppStore((s) => s.setDeviceToggle);
+  const toggles = deviceToggles[serial];
+  const asleep = !!toggles?.asleep;
+  const screenOff = !!toggles?.screenOff;
+  const swipeScroll = !!toggles?.swipeScroll;
   const sz = SIZE[config.size];
   const b = config.buttons;
 
@@ -63,20 +64,24 @@ export function ControlBar({
   const toggleSleep = () => {
     const next = !asleep;
     sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
-      .then(() => setAsleep(next))
+      .then(() => setDeviceToggle(serial, "asleep", next))
       .catch((e) => setError(String(e)));
   };
   const toggleScreenOff = () => {
     const next = !screenOff;
-    restartWithScreenOff(serial, next)
-      .then(() => setScreenOff(next))
-      .catch((e) => setError(String(e)));
+    sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
+      .then(() => setDeviceToggle(serial, "screenOff", next))
+      .catch(() => {
+        sendKeyevent(serial, KEYCODE.POWER)
+          .then(() => setDeviceToggle(serial, "screenOff", next))
+          .catch((e) => setError(String(e)));
+      });
   };
   const rotate = () => toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
   const toggleSwipeScroll = () => {
     const next = !swipeScroll;
     setWheelSwipe(serial, next)
-      .then(() => setSwipeScroll(next))
+      .then(() => setDeviceToggle(serial, "swipeScroll", next))
       .catch((e) => setError(String(e)));
   };
 

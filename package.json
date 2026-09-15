@@ -1,14 +1,14 @@
 {
   "name": "anyleap",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "fetch-binaries": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-binaries.ps1",
+    "fetch-binaries": "node scripts/fetch-binaries.js",
     "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
     "postinstall": "npm run fetch-binaries"
   },

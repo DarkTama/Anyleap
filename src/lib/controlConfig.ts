@@ -1,4 +1,3 @@
-import { load, type Store } from "@tauri-apps/plugin-store";
 
 export type DockSide = "left" | "right" | "top" | "bottom" | "undocked";
 export type ControlSize = "sm" | "md" | "lg";
@@ -77,25 +76,4 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
   },
 };
 
-const FILE = "config.json";
-const KEY = "controlBar";
-let storePromise: Promise<Store> | null = null;
-const getStore = () => (storePromise ??= load(FILE, { autoSave: true, defaults: {} }));
-
-export async function loadControlConfig(): Promise<ControlConfig> {
-  const store = await getStore();
-  const saved = await store.get<Partial<ControlConfig>>(KEY);
-  if (!saved) return DEFAULT_CONTROL_CONFIG;
-  return {
-    dock: saved.dock ?? DEFAULT_CONTROL_CONFIG.dock,
-    size: saved.size ?? DEFAULT_CONTROL_CONFIG.size,
-    buttons: { ...DEFAULT_CONTROL_CONFIG.buttons, ...(saved.buttons ?? {}) },
-    collapsed: saved.collapsed ?? DEFAULT_CONTROL_CONFIG.collapsed,
-  };
-}
-
-export async function saveControlConfig(config: ControlConfig): Promise<void> {
-  const store = await getStore();
-  await store.set(KEY, config);
-  await store.save();
-}
+export { loadControlConfig, saveControlConfig } from "./settingsStore";

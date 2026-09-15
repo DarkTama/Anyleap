@@ -1,10 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
-import { DevicesTab } from "@/components/DevicesTab";
-import { SettingsPanel } from "@/components/SettingsPanel";
-import { PairDialog } from "@/components/PairDialog";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { StudioDeck } from "@/components/deck/StudioDeck";
 import { useAppStore } from "@/store/useAppStore";
 import {
   connectDevice,
@@ -16,12 +11,10 @@ import {
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
-import { loadAppPrefs, loadQuality } from "@/lib/persist";
+import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
 import { checkForUpdates } from "@/lib/updateCheck";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-type Tab = "devices" | "settings";
 
 function App() {
   const error = useAppStore((s) => s.error);
@@ -36,8 +29,7 @@ function App() {
   const setPreset = useAppStore((s) => s.setPreset);
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
   const setError = useAppStore((s) => s.setError);
-  const [pairOpen, setPairOpen] = useState(false);
-  const [tab, setTab] = useState<Tab>("devices");
+  const setNicknames = useAppStore((s) => s.setNicknames);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
@@ -113,7 +105,8 @@ function App() {
         if (p.checkUpdates) void checkForUpdates();
       })
       .catch(() => {});
-  }, [setSettings, setPreset, setAppPrefs]);
+    getNicknames().then(setNicknames).catch(() => {});
+  }, [setSettings, setPreset, setAppPrefs, setNicknames]);
 
   // Minimize to tray on close when enabled (read live pref to avoid a stale closure).
   useEffect(() => {
@@ -131,81 +124,71 @@ function App() {
   // Floating, always-on-top control window: open while mirroring, close when idle.
   useEffect(() => {
     (async () => {
-      const existing = await WebviewWindow.getByLabel("controls");
+      const existingControls = await WebviewWindow.getByLabel("controls");
       if (sessions.length > 0) {
-        if (!existing) {
-          const serial = sessions[sessions.length - 1].serial;
-          try {
-            const w = new WebviewWindow("controls", {
-              url: `index.html?control=1&serial=${encodeURIComponent(serial)}`,
-              title: "AnyLeap Controls",
-              width: 88,
-              height: 560,
-              x: 24,
-              y: 80,
-              resizable: false,
-              decorations: false,
-              alwaysOnTop: true,
-              skipTaskbar: true,
-              // Needed for the collapsed round-button state (no square backdrop).
-              transparent: true,
-              shadow: false,
-            });
-            w.once("tauri://error", (e) => console.error("controls window:", e));
-          } catch (e) {
-            console.error("controls window create failed:", e);
+        const lastSession = sessions[sessions.length - 1];
+        const serial = lastSession.serial;
+        const mirrorLabel = `mirror-${serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+        const existingMirror = await WebviewWindow.getByLabel(mirrorLabel);
+        const isEmbedded = useAppStore.getState().settings.embedded;
+
+        if (isEmbedded) {
+          if (existingControls) {
+            await existingControls.close();
+          }
+          if (!existingMirror) {
+            try {
+              const w = new WebviewWindow(mirrorLabel, {
+                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}`,
+                title: `AnyLeap — ${serial}`,
+                width: 480,
+                height: 860,
+                resizable: true,
+                decorations: false,
+                transparent: false,
+              });
+              w.once("tauri://error", (e) => console.error("mirror window:", e));
+            } catch (e) {
+              console.error("mirror window create failed:", e);
+            }
+          }
+        } else {
+          if (!existingControls) {
+            try {
+              const w = new WebviewWindow("controls", {
+                url: `index.html?control=1&serial=${encodeURIComponent(serial)}`,
+                title: "AnyLeap Controls",
+                width: 88,
+                height: 560,
+                x: 24,
+                y: 80,
+                resizable: false,
+                decorations: false,
+                alwaysOnTop: true,
+                skipTaskbar: true,
+                transparent: true,
+                shadow: false,
+              });
+              w.once("tauri://error", (e) => console.error("controls window:", e));
+            } catch (e) {
+              console.error("controls window create failed:", e);
+            }
           }
         }
-      } else if (existing) {
-        await existing.close();
+      } else {
+        if (existingControls) await existingControls.close();
       }
     })();
   }, [sessions]);
 
   return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
-      <header className="flex items-center justify-between border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
-        <div>
-          <h1 className="text-lg font-semibold">AnyLeap</h1>
-          <p className="text-xs text-zinc-500">
-            Effortless Android mirroring — USB &amp; wireless
-          </p>
-        </div>
-        <Button
-          size="sm"
-          onClick={() => {
-            setTab("devices");
-            setPairOpen((v) => !v);
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          Add wireless device
-        </Button>
-      </header>
-
-      <nav className="flex gap-1 border-b border-zinc-200 px-6 dark:border-zinc-800">
-        {(["devices", "settings"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn(
-              "-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-              tab === t
-                ? "border-zinc-900 text-zinc-900 dark:border-zinc-50 dark:text-zinc-50"
-                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",
-            )}
-          >
-            {t === "devices" ? "Devices" : "Settings"}
-          </button>
-        ))}
-      </nav>
-
+    <div className="relative h-screen w-screen overflow-hidden bg-[#0a0c10] text-zinc-100">
       {error && (
-        <div className="mx-6 mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl rounded-lg border border-rose-500/40 bg-rose-950/90 px-3.5 py-2.5 text-xs text-rose-200 shadow-2xl backdrop-blur-md">
           <div className="flex items-start justify-between gap-2">
-            <span>{error}</span>
+            <span className="font-mono">{error}</span>
             <button
-              className="shrink-0 text-xs underline opacity-80 hover:opacity-100"
+              className="shrink-0 text-[10px] uppercase font-bold underline opacity-80 hover:opacity-100 cursor-pointer"
               onClick={() => {
                 setError(null);
                 setErrorDetails(null);
@@ -218,13 +201,13 @@ function App() {
           {errorDetails && (
             <div className="mt-1">
               <button
-                className="text-xs underline opacity-80 hover:opacity-100"
+                className="text-[10px] underline opacity-80 hover:opacity-100 cursor-pointer"
                 onClick={() => setShowDetails((v) => !v)}
               >
-                {showDetails ? "Hide details" : "Show details"}
+                {showDetails ? "Hide technical log" : "Show technical log"}
               </button>
               {showDetails && (
-                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-red-100/60 p-2 text-[11px] dark:bg-red-950/60">
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/50 p-2 font-mono text-[10px] text-rose-300">
                   {errorDetails}
                 </pre>
               )}
@@ -233,16 +216,7 @@ function App() {
         </div>
       )}
 
-      <main className="space-y-4 p-6">
-        {tab === "devices" ? (
-          <>
-            {pairOpen && <PairDialog onClose={() => setPairOpen(false)} />}
-            <DevicesTab />
-          </>
-        ) : (
-          <SettingsPanel />
-        )}
-      </main>
+      <StudioDeck />
     </div>
   );
 }
