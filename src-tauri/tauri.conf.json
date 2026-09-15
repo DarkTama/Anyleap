@@ -26,6 +26,11 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    },
     "externalBin": [
       "binaries/adb",
       "binaries/scrcpy"
