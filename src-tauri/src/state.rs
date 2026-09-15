@@ -29,3 +29,25 @@ pub struct Session {
 pub struct AppState {
     pub sessions: Mutex<HashMap<String, Session>>,
 }
+
+/// Format a PoisonError into a human-readable String for Tauri command results.
+pub fn poison_error<T>(e: std::sync::PoisonError<T>) -> String {
+    format!("Mutex lock poisoned: {e}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_poison_error_format() {
+        let m = Mutex::new(10);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = m.lock().unwrap();
+            panic!("poison trigger");
+        });
+        let err = m.lock().unwrap_err();
+        let formatted = poison_error(err);
+        assert!(formatted.starts_with("Mutex lock poisoned:"));
+    }
+}

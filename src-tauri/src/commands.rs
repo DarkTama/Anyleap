@@ -6,7 +6,7 @@ use tauri::path::BaseDirectory;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::state::{AppState, Session};
+use crate::state::{poison_error, AppState, Session};
 
 /// Filename of the bundled adb sidecar (target-triple suffixed by Tauri).
 /// Kept Windows-only for M1; extend per-platform when we add macOS/Linux.
@@ -394,13 +394,14 @@ pub(crate) fn parse_virtual_display(dumpsys: &str) -> Option<(u32, (u32, u32))> 
 }
 
 /// Record a discovered virtual display id/size on a tracked session.
-fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, u32)) {
+fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, u32)) -> Result<(), String> {
     if let Some(st) = app.try_state::<AppState>() {
-        if let Some(s) = st.sessions.lock().unwrap().get_mut(session_id) {
+        if let Some(s) = st.sessions.lock().map_err(poison_error)?.get_mut(session_id) {
             s.display_id = Some(id);
             s.virtual_size = Some(size);
         }
     }
+    Ok(())
 }
 
 /// Spawn scrcpy with a prepared arg vector and register a tracked session.
@@ -437,7 +438,7 @@ fn spawn_session(
         started_at,
     };
 
-    app.state::<AppState>().sessions.lock().unwrap().insert(
+    app.state::<AppState>().sessions.lock().map_err(poison_error)?.insert(
         id.clone(),
         Session {
             id: id.clone(),
@@ -467,14 +468,14 @@ fn spawn_session(
                     // Flex mode: scrcpy announces its virtual display here.
                     let text = String::from_utf8_lossy(&bytes);
                     if let Some((did, size)) = parse_new_display_line(&text) {
-                        note_virtual_display(&app2, &id2, did, size);
+                        let _ = note_virtual_display(&app2, &id2, did, size);
                     }
                 }
                 CommandEvent::Stderr(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     // scrcpy logs may land on either stream depending on build.
                     if let Some((did, size)) = parse_new_display_line(&text) {
-                        note_virtual_display(&app2, &id2, did, size);
+                        let _ = note_virtual_display(&app2, &id2, did, size);
                     }
                     stderr_buf.push_str(&text);
                     // Keep the tail; scrcpy's useful ERROR line is near the end.
@@ -486,7 +487,12 @@ fn spawn_session(
                 CommandEvent::Error(e) => command_error = Some(e),
                 CommandEvent::Terminated(payload) => {
                     if let Some(st) = app2.try_state::<AppState>() {
-                        st.sessions.lock().unwrap().remove(&id2);
+                        match st.sessions.lock() {
+                            Ok(mut s) => {
+                                s.remove(&id2);
+                            }
+                            Err(e) => eprintln!("Sessions mutex poisoned on session exit: {}", e),
+                        }
                     }
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
@@ -579,7 +585,7 @@ pub fn restart_with_screen_off(
 
         let state = app.state::<AppState>();
         let target_pid = {
-            let map = state.sessions.lock().unwrap();
+            let map = state.sessions.lock().map_err(poison_error)?;
             map.values().find(|s| s.serial == serial).map(|s| s.pid)
         };
 
@@ -619,7 +625,7 @@ pub fn restart_with_screen_off(
                     }
                 }
 
-                let mut map = state.sessions.lock().unwrap();
+                let mut map = state.sessions.lock().map_err(poison_error)?;
                 if let Some(s) = map.values_mut().find(|s| s.serial == serial) {
                     s.args.retain(|a| a != "--turn-screen-off");
                     if off {
@@ -639,7 +645,7 @@ pub fn restart_with_screen_off(
     // Fallback if window not found or non-windows: restart scrcpy
     let old = {
         let state = app.state::<AppState>();
-        let mut map = state.sessions.lock().unwrap();
+        let mut map = state.sessions.lock().map_err(poison_error)?;
         let key = map
             .iter()
             .find(|(_, s)| s.serial == serial)
@@ -658,9 +664,14 @@ pub fn restart_with_screen_off(
 
 /// Stop a running session by killing its scrcpy child.
 #[tauri::command]
-pub fn stop_mirror(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn stop_mirror(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let _ = &app;
     // Take ownership out of the map, then kill outside the lock.
-    let session = state.sessions.lock().unwrap().remove(&session_id);
+    let session = state.sessions.lock().map_err(poison_error)?.remove(&session_id);
     match session {
         Some(s) => s.child.kill().map_err(|e| e.to_string()),
         None => Err("no such session".into()),
@@ -669,11 +680,11 @@ pub fn stop_mirror(state: State<'_, AppState>, session_id: String) -> Result<(),
 
 /// List currently running sessions.
 #[tauri::command]
-pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
-    state
+pub fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo>, String> {
+    Ok(state
         .sessions
         .lock()
-        .unwrap()
+        .map_err(poison_error)?
         .values()
         .map(|s| SessionInfo {
             id: s.id.clone(),
@@ -681,7 +692,7 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
             pid: s.pid,
             started_at: s.started_at,
         })
-        .collect()
+        .collect())
 }
 
 /// Discover wireless adb services on the LAN via `adb mdns services`.
@@ -794,7 +805,7 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
         app.state::<AppState>()
             .sessions
             .lock()
-            .unwrap()
+            .map_err(poison_error)?
             .values()
             .find(|s| s.serial == serial)
             .and_then(|s| s.display_id)

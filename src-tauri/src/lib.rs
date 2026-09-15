@@ -83,9 +83,15 @@ pub fn run() {
                 }
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
-                    let mut sessions = state.sessions.lock().unwrap();
-                    for (_, session) in sessions.drain() {
-                        let _ = session.child.kill();
+                    match state.sessions.lock() {
+                        Ok(mut sessions) => {
+                            for (_, session) in sessions.drain() {
+                                let _ = session.child.kill();
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Sessions mutex poisoned, could not kill child processes: {}", e);
+                        }
                     }
                 }
             }
