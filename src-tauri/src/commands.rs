@@ -544,6 +544,19 @@ pub fn start_mirror(
     spawn_session(&app, serial, args, false)
 }
 
+/// Mutate scrcpy argument list to add or remove `--turn-screen-off`.
+fn toggle_screen_off_args(args: &[String], off: bool) -> Vec<String> {
+    let mut out: Vec<String> = args
+        .iter()
+        .filter(|a| a.as_str() != "--turn-screen-off")
+        .cloned()
+        .collect();
+    if off {
+        out.push("--turn-screen-off".to_string());
+    }
+    out
+}
+
 /// Toggle scrcpy screen power mode dynamically via shortcut (MOD+o / MOD+Shift+o)
 /// without killing the mirror or dropping the connection.
 #[tauri::command]
@@ -627,10 +640,7 @@ pub fn restart_with_screen_off(
 
                 let mut map = state.sessions.lock().map_err(poison_error)?;
                 if let Some(s) = map.values_mut().find(|s| s.serial == serial) {
-                    s.args.retain(|a| a != "--turn-screen-off");
-                    if off {
-                        s.args.push("--turn-screen-off".to_string());
-                    }
+                    s.args = toggle_screen_off_args(&s.args, off);
                     return Ok(SessionInfo {
                         id: s.id.clone(),
                         serial: s.serial.clone(),
@@ -653,12 +663,8 @@ pub fn restart_with_screen_off(
         key.and_then(|k| map.remove(&k))
     };
     let old = old.ok_or_else(|| "no active mirror for this device".to_string())?;
-    let mut args = old.args.clone();
+    let args = toggle_screen_off_args(&old.args, off);
     let _ = old.child.kill();
-    args.retain(|a| a != "--turn-screen-off");
-    if off {
-        args.push("--turn-screen-off".to_string());
-    }
     spawn_session(&app, serial, args, false)
 }
 
@@ -669,12 +675,19 @@ pub async fn stop_mirror(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
-    let _ = &app;
     // Take ownership out of the map, then kill outside the lock.
     let session = state.sessions.lock().map_err(poison_error)?.remove(&session_id);
-    match session {
-        Some(s) => s.child.kill().map_err(|e| e.to_string()),
-        None => Err("no such session".into()),
+    if let Some(s) = session {
+        // For flex mode, send a BACK keypress before killing. This helps the
+        // device restore its original density and launcher layout, which can
+        // get stuck otherwise.
+        if s.display_id.is_some() {
+            let _ = send_keyevent(app, s.serial.clone(), 4).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        s.child.kill().map_err(|e| e.to_string())
+    } else {
+        Err("no such session".into())
     }
 }
 
@@ -1088,5 +1101,35 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert_eq!(svcs.len(), 1);
         assert_eq!(svcs[0].name, "my phone");
         assert_eq!(svcs[0].port, 5555);
+    }
+
+    #[test]
+    fn toggle_screen_off_adds_and_removes_flag() {
+        let base = vec![
+            "--serial".to_string(),
+            "DEVICE123".to_string(),
+            "--max-size=1280".to_string(),
+            "--window-title=AnyLeap — DEVICE123".to_string(),
+        ];
+
+        let with_off = toggle_screen_off_args(&base, true);
+        assert!(with_off.contains(&"--turn-screen-off".to_string()));
+        assert_eq!(
+            with_off.iter().filter(|a| *a == "--turn-screen-off").count(),
+            1
+        );
+
+        let with_off_again = toggle_screen_off_args(&with_off, true);
+        assert_eq!(
+            with_off_again
+                .iter()
+                .filter(|a| *a == "--turn-screen-off")
+                .count(),
+            1
+        );
+
+        let without_off = toggle_screen_off_args(&with_off, false);
+        assert!(!without_off.contains(&"--turn-screen-off".to_string()));
+        assert_eq!(without_off, base);
     }
 }
