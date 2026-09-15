@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Gamepad2, Smartphone, Square, Unplug, Usb, Wifi, X } from "lucide-react";
+import { Camera, Gamepad2, Smartphone, Square, Unplug, Usb, Wifi, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeviceStateBadge } from "./DeviceStateBadge";
 import { ControlBar } from "./ControlBar";
 import { useAppStore } from "@/store/useAppStore";
+import { CameraLaunchDialog } from "./CameraLaunchDialog";
 import {
   connectDevice,
   disconnectDevice,
@@ -46,6 +47,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   const controlConfig = useAppStore((s) => s.controlConfig);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const wireless = device.serial.includes(":");
   const status = deviceStatusOf(device, sessions);
@@ -123,6 +125,18 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
               Mirror
             </Button>
           )}
+          {status !== "mirroring" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCameraOpen(true)}
+              disabled={busy || device.state !== "device"}
+              title="Stream Camera as Video / Webcam"
+            >
+              <Camera className="h-3.5 w-3.5" />
+              Camera
+            </Button>
+          )}
           {wireless && (
             <Button size="sm" variant="outline" onClick={disconnect} disabled={busy}>
               <Unplug className="h-4 w-4" />
@@ -144,6 +158,12 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
       {open && status !== "offline" && (
         <ControlBar serial={device.serial} config={controlConfig} orientation="horizontal" />
       )}
+      <CameraLaunchDialog
+        isOpen={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        serial={device.serial}
+        deviceName={device.model}
+      />
     </div>
   );
 }
@@ -159,6 +179,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const controlConfig = useAppStore((s) => s.controlConfig);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const serial = device?.serial;
   const session = serial ? sessions.find((s) => s.serial === serial) : undefined;
@@ -260,6 +281,18 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
               Mirror
             </Button>
           )}
+          {status === "connected" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCameraOpen(true)}
+              disabled={busy}
+              title="Stream Camera as Video / Webcam"
+            >
+              <Camera className="h-3.5 w-3.5" />
+              Camera
+            </Button>
+          )}
           {serial && status !== "offline" && (
             <Button size="sm" variant="outline" onClick={disconnect} disabled={busy}>
               <Unplug className="h-4 w-4" />
@@ -289,6 +322,14 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
       </div>
       {open && serial && status !== "offline" && (
         <ControlBar serial={serial} config={controlConfig} orientation="horizontal" />
+      )}
+      {serial && (
+        <CameraLaunchDialog
+          isOpen={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          serial={serial}
+          deviceName={saved.label || device?.model || serial}
+        />
       )}
     </div>
   );
