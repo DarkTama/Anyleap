@@ -29,6 +29,29 @@ pub struct SessionInfo {
     pub serial: String,
     pub pid: u32,
     pub started_at: i64,
+    pub mode: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraSettings {
+    pub facing: String,
+    pub camera_id: Option<String>,
+    pub size: Option<String>,
+    pub fps: Option<u32>,
+    pub high_speed: bool,
+    pub torch: bool,
+    pub no_audio: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraDeviceOption {
+    pub id: String,
+    pub facing: String,
+    pub resolution: String,
+    pub fps: Vec<u32>,
+    pub zoom_range: Option<(f32, f32)>,
 }
 
 #[derive(Serialize, Clone)]
@@ -283,6 +306,134 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
     a
 }
 
+pub fn build_scrcpy_camera_args(serial: &str, s: &CameraSettings) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "--serial".into(),
+        serial.into(),
+        "--video-source=camera".into(),
+    ];
+    if let Some(ref id) = s.camera_id {
+        if !id.is_empty() {
+            a.push(format!("--camera-id={}", id));
+        }
+    } else if !s.facing.is_empty() {
+        a.push(format!("--camera-facing={}", s.facing));
+    }
+    if let Some(ref size) = s.size {
+        if !size.is_empty() {
+            a.push(format!("--camera-size={}", size));
+        }
+    }
+    if let Some(fps) = s.fps {
+        if fps > 0 {
+            a.push(format!("--camera-fps={}", fps));
+        }
+    }
+    if s.high_speed {
+        a.push("--camera-high-speed".into());
+    }
+    if s.torch {
+        a.push("--camera-torch".into());
+    }
+    if s.no_audio {
+        a.push("--no-audio".into());
+    }
+    a.push(format!("--window-title=AnyLeap Camera — {}", serial));
+    a
+}
+
+pub fn parse_list_cameras_output(stdout: &str) -> Vec<CameraDeviceOption> {
+    let mut results = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.contains("--camera-id=") {
+            continue;
+        }
+        // e.g. "--camera-id=0    (back, 4096x3072, fps={10, 15, 20, 24, 30}, zoom-range=[1, 15])"
+        let id_part = match line.split_whitespace().next() {
+            Some(part) => part,
+            None => continue,
+        };
+        let id = match id_part.strip_prefix("--camera-id=") {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+
+        let open_paren = match line.find('(') {
+            Some(pos) => pos,
+            None => continue,
+        };
+        let close_paren = match line.rfind(')') {
+            Some(pos) => pos,
+            None => continue,
+        };
+        if close_paren <= open_paren {
+            continue;
+        }
+        let details = &line[open_paren + 1..close_paren];
+
+        // Parse fields: facing, resolution, fps={...}, zoom-range=[...]
+        let mut facing = String::new();
+        let mut resolution = String::new();
+        let mut fps = Vec::new();
+        let mut zoom_range = None;
+
+        // Extract fps={...}
+        let mut details_rem = details.to_string();
+        if let Some(fps_start) = details_rem.find("fps={") {
+            if let Some(fps_end) = details_rem[fps_start..].find('}') {
+                let fps_inner = &details_rem[fps_start + 5..fps_start + fps_end];
+                fps = fps_inner
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<u32>().ok())
+                    .collect();
+                let before = &details_rem[..fps_start];
+                let after = &details_rem[fps_start + fps_end + 1..];
+                details_rem = format!("{},{}", before, after);
+            }
+        }
+
+        // Extract zoom-range=[min, max]
+        if let Some(zoom_start) = details_rem.find("zoom-range=[") {
+            if let Some(zoom_end) = details_rem[zoom_start..].find(']') {
+                let zoom_inner = &details_rem[zoom_start + 12..zoom_start + zoom_end];
+                let parts: Vec<f32> = zoom_inner
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<f32>().ok())
+                    .collect();
+                if parts.len() == 2 {
+                    zoom_range = Some((parts[0], parts[1]));
+                }
+                let before = &details_rem[..zoom_start];
+                let after = &details_rem[zoom_start + zoom_end + 1..];
+                details_rem = format!("{},{}", before, after);
+            }
+        }
+
+        // The remaining comma-separated items include facing and resolution
+        for item in details_rem.split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                continue;
+            }
+            if item == "back" || item == "front" || item == "external" || item == "unknown" {
+                facing = item.to_string();
+            } else if item.contains('x') && item.chars().all(|c| c.is_ascii_digit() || c == 'x') {
+                resolution = item.to_string();
+            }
+        }
+
+        results.push(CameraDeviceOption {
+            id,
+            facing,
+            resolution,
+            fps,
+            zoom_range,
+        });
+    }
+    results
+}
+
 /// List USB/TCP devices known to adb.
 #[tauri::command]
 pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
@@ -411,6 +562,7 @@ fn spawn_session(
     serial: String,
     args: Vec<String>,
     retried: bool,
+    mode: &str,
 ) -> Result<SessionInfo, String> {
     let server = resolve_server_path(app)
         .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
@@ -435,6 +587,7 @@ fn spawn_session(
         serial: serial.clone(),
         pid,
         started_at,
+        mode: mode.to_string(),
     };
 
     app.state::<AppState>().sessions.lock().unwrap().insert(
@@ -448,6 +601,7 @@ fn spawn_session(
             args: args.clone(),
             display_id: None,
             virtual_size: None,
+            mode: mode.to_string(),
         },
     );
 
@@ -458,6 +612,7 @@ fn spawn_session(
     let id2 = id.clone();
     let serial2 = serial.clone();
     let args2 = args.clone();
+    let mode2 = mode.to_string();
     tauri::async_runtime::spawn(async move {
         let mut stderr_buf = String::new();
         let mut command_error: Option<String> = None;
@@ -503,7 +658,7 @@ fn spawn_session(
                                 stderr: stderr_buf.clone(),
                             },
                         );
-                        let _ = spawn_session(&app2, serial2.clone(), degrade_args(&args2), true);
+                        let _ = spawn_session(&app2, serial2.clone(), degrade_args(&args2), true, &mode2);
                         break;
                     }
                     let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
@@ -535,7 +690,7 @@ pub fn start_mirror(
     settings: CoreSettings,
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_args(&serial, &settings);
-    spawn_session(&app, serial, args, false)
+    spawn_session(&app, serial, args, false, "display")
 }
 
 /// Toggle scrcpy screen power mode dynamically via shortcut (MOD+o / MOD+Shift+o)
@@ -586,6 +741,7 @@ pub fn restart_with_screen_off(
                         serial: s.serial.clone(),
                         pid: s.pid,
                         started_at: s.started_at,
+                        mode: s.mode.clone(),
                     });
                 }
             }
@@ -609,7 +765,7 @@ pub fn restart_with_screen_off(
     if off {
         args.push("--turn-screen-off".to_string());
     }
-    spawn_session(&app, serial, args, false)
+    spawn_session(&app, serial, args, false, &old.mode)
 }
 
 /// Stop a running session by killing its scrcpy child.
@@ -636,6 +792,7 @@ pub fn list_sessions(state: State<'_, AppState>) -> Vec<SessionInfo> {
             serial: s.serial.clone(),
             pid: s.pid,
             started_at: s.started_at,
+            mode: s.mode.clone(),
         })
         .collect()
 }
@@ -1033,5 +1190,45 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert_eq!(svcs.len(), 1);
         assert_eq!(svcs[0].name, "my phone");
         assert_eq!(svcs[0].port, 5555);
+    }
+
+    #[test]
+    fn test_parse_list_cameras_output() {
+        let output = r#"
+[server] INFO: List of cameras:
+    --camera-id=0    (back, 4096x3072, fps={10, 15, 20, 24, 30}, zoom-range=[1, 15])
+    --camera-id=1    (front, 4080x3072, fps={10, 15, 20, 24, 30}, zoom-range=[1, 4])
+"#;
+        let cameras = parse_list_cameras_output(output);
+        assert_eq!(cameras.len(), 2);
+        assert_eq!(cameras[0].id, "0");
+        assert_eq!(cameras[0].facing, "back");
+        assert_eq!(cameras[0].resolution, "4096x3072");
+        assert_eq!(cameras[0].fps, vec![10, 15, 20, 24, 30]);
+        assert_eq!(cameras[0].zoom_range, Some((1.0, 15.0)));
+
+        assert_eq!(cameras[1].id, "1");
+        assert_eq!(cameras[1].facing, "front");
+    }
+
+    #[test]
+    fn test_build_scrcpy_camera_args() {
+        let s = CameraSettings {
+            facing: "back".into(),
+            camera_id: None,
+            size: Some("1920x1080".into()),
+            fps: Some(30),
+            high_speed: false,
+            torch: true,
+            no_audio: false,
+        };
+        let args = build_scrcpy_camera_args("SER123", &s);
+        assert!(args.contains(&"--video-source=camera".to_string()));
+        assert!(args.contains(&"--camera-facing=back".to_string()));
+        assert!(args.contains(&"--camera-size=1920x1080".to_string()));
+        assert!(args.contains(&"--camera-fps=30".to_string()));
+        assert!(args.contains(&"--camera-torch".to_string()));
+        assert!(!args.contains(&"--no-audio".to_string()));
+        assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
     }
 }

@@ -20,6 +20,7 @@ pub struct Session {
     /// Current size of the virtual display (flex mode resizes it with the
     /// window; refreshed from `dumpsys display`).
     pub virtual_size: Option<(u32, u32)>,
+    pub mode: String, // "display" or "camera"
 }
 
 /// App-wide state held in Tauri's managed state.

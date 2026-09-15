@@ -23,6 +23,7 @@ export interface SessionInfo {
   serial: string;
   pid: number;
   started_at: number;
+  mode: SessionMode;
 }
 
 export interface SessionExited {
@@ -132,3 +133,23 @@ export interface MirrorRect {
   clientHeight: number;
   foreground: string;
 }
+
+export interface CameraDeviceOption {
+  id: string;
+  facing: "back" | "front" | "external" | "unknown";
+  resolution: string;
+  fps: number[];
+  zoomRange?: [number, number];
+}
+
+export interface CameraSettings {
+  facing: "back" | "front" | "external";
+  cameraId?: string;
+  size?: string;
+  fps?: number;
+  highSpeed?: boolean;
+  torch?: boolean;
+  noAudio?: boolean;
+}
+
+export type SessionMode = "display" | "camera";
