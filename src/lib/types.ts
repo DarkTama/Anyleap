@@ -138,3 +138,8 @@ export interface MirrorRect {
 }
 
 export type DeviceNicknames = Record<string, string>;
+
+export interface BatteryInfo {
+  level: number | null;
+  charging: boolean;
+}

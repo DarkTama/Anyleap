@@ -1359,6 +1359,17 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         let pkgs = parse_installed_packages(text);
         assert_eq!(pkgs, vec!["com.android.chrome", "com.example.app", "org.mozilla.firefox"]);
     }
+    #[test]
+    fn parses_battery_info() {
+        let text = "Current Battery Service state:\n\
+  AC powered: false\n\
+  USB powered: true\n\
+  level: 82\n\
+  scale: 100\n";
+        let info = parse_battery_info(text);
+        assert_eq!(info.level, Some(82));
+        assert!(info.charging);
+    }
 
 }
 
@@ -1425,4 +1436,46 @@ pub async fn push_clipboard_image(
         .await;
 
     Ok(device_dest)
+}
+#[derive(serde::Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct BatteryInfo {
+    pub level: Option<u32>,
+    pub charging: bool,
+}
+
+pub(crate) fn parse_battery_info(output: &str) -> BatteryInfo {
+    let mut level = None;
+    let mut charging = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("level:") {
+            if let Ok(lvl) = rest.trim().parse::<u32>() {
+                level = Some(lvl);
+            }
+        } else if trimmed.starts_with("AC powered: true")
+            || trimmed.starts_with("USB powered: true")
+            || trimmed.starts_with("Wireless powered: true")
+        {
+            charging = true;
+        }
+    }
+    BatteryInfo { level, charging }
+}
+
+#[tauri::command]
+pub async fn get_battery_info(
+    app: AppHandle,
+    serial: String,
+) -> Result<BatteryInfo, String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "dumpsys", "battery"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(BatteryInfo::default());
+    }
+
+    Ok(parse_battery_info(&String::from_utf8_lossy(&output.stdout)))
 }

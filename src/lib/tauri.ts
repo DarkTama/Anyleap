@@ -103,3 +103,6 @@ export const getSystemResolution = () =>
 
 export const pushClipboardImage = (serial: string, imageBytes: number[], filename?: string) =>
   invoke<string>("push_clipboard_image", { serial, imageBytes, filename });
+
+export const getBatteryInfo = (serial: string) =>
+  invoke<{ level: number | null; charging: boolean }>("get_battery_info", { serial });

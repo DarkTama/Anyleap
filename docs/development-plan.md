@@ -11,14 +11,14 @@ This document indexes all architecture specifications, implementation plans, and
 | Spec | Title | Status | Scope |
 |---|---|---|---|
 | **[SPEC-01](specs/SPEC-01-mutex-hardening.md)** | Mutex Hardening & Poison Handling | Complete | Backend crash-proofing, `poison_error` mapping |
-| **[SPEC-02](specs/SPEC-02-cross-platform-build.md)** | Cross-Platform Build & Sidecars | Ready to implement | `fetch-binaries.js`, macOS/Linux support |
-| **[SPEC-03](specs/SPEC-03-session-lifecycle-and-flex-teardown.md)** | Session Lifecycle & Flex Teardown | Ready to implement | Clean session cleanup, `KEYCODE_BACK` teardown |
-| **[SPEC-04](specs/SPEC-04-shared-settings-persistence.md)** | Shared Settings Persistence | Ready to implement | Unified `settings.json` via `tauri-plugin-store` |
+| **[SPEC-02](specs/SPEC-02-cross-platform-build.md)** | Cross-Platform Build & Sidecars | Complete | `fetch-binaries.js`, macOS/Linux support |
+| **[SPEC-03](specs/SPEC-03-session-lifecycle-and-flex-teardown.md)** | Session Lifecycle & Flex Teardown | Complete | Clean session cleanup, `KEYCODE_BACK` teardown |
+| **[SPEC-04](specs/SPEC-04-shared-settings-persistence.md)** | Shared Settings Persistence | Complete | Unified `settings.json` via `tauri-plugin-store` |
 | **[SPEC-05](specs/SPEC-05-screen-power-and-encoding-fix.md)** | Screen Power Toggle & Encoding Fix | Complete | PID window resolution, synced toggle state |
 | **[SPEC-06](specs/SPEC-06-embedded-mirror-window.md)** | Integrated Embedded Mirror Window | Complete | Single-window reparented mirror + right sidebar |
 | **[SPEC-07](specs/SPEC-07-escrcpy-feature-additions.md)** | Escrcpy Feature Additions | Complete | App Drawer, File/APK Drag & Drop, Nicknames, Screenshot |
-| **[SPEC-10](specs/SPEC-10-embedded-flex-fixes-and-clipboard.md)** | Embedded Mirror Fixes, Flex & Clipboard | **Active Spec** | Working window drag & buttons, child HWND screen-off, flex taskbar & shortcuts, clipboard image paste |
-| **[SPEC-11](specs/SPEC-11-studio-deck-ui-remake.md)** | Studio Deck UI Remake | **Active Spec** | Grounded in `frontend-design`: Device Rack, Mode Matrix, Live DPI Scale & Icon preview |
+| **[SPEC-10](specs/SPEC-10-embedded-flex-fixes-and-clipboard.md)** | Embedded Mirror Fixes, Flex & Clipboard | Complete | Working window drag & buttons, child HWND screen-off, flex taskbar & shortcuts, clipboard image paste |
+| **[SPEC-11](specs/SPEC-11-studio-deck-ui-remake.md)** | Studio Deck UI Remake | Complete | Grounded in `frontend-design`: Device Rack, Mode Matrix, Live DPI Scale & Icon preview |
 
 ---
 
