@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ArrowLeft,
   Bell,
@@ -13,6 +14,9 @@ import {
   Sun,
   Volume2,
   VolumeX,
+  Zap,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
@@ -21,7 +25,9 @@ import {
   sendKeyevent,
   setWheelSwipe,
   toggleDeviceOrientation,
+  sendCameraShortcut,
 } from "@/lib/tauri";
+import type { SessionMode } from "@/lib/types";
 import { KEYCODE } from "@/lib/keycodes";
 import type { ControlConfig, ControlSize } from "@/lib/controlConfig";
 
@@ -39,6 +45,7 @@ export function ControlBar({
   orientation,
   showOrientToggle = false,
   showSwipeScroll = false,
+  sessionMode = "display",
 }: {
   serial: string;
   config: ControlConfig;
@@ -47,6 +54,7 @@ export function ControlBar({
   showOrientToggle?: boolean;
   /** Wheel→swipe needs a mirror window; only the floating control strip shows it. */
   showSwipeScroll?: boolean;
+  sessionMode?: SessionMode;
 }) {
   const setError = useAppStore((s) => s.setError);
   const deviceToggles = useAppStore((s) => s.deviceToggles);
@@ -56,6 +64,17 @@ export function ControlBar({
   const screenOff = !!toggles?.screenOff;
   const swipeScroll = !!toggles?.swipeScroll;
   const sz = SIZE[config.size];
+  const [torchOn, setTorchOn] = useState(false);
+
+  const toggleTorch = () => {
+    const next = !torchOn;
+    sendCameraShortcut(serial, next ? "torch_on" : "torch_off")
+      .then(() => setTorchOn(next))
+      .catch((e) => setError(String(e)));
+  };
+  const zoomIn = () => sendCameraShortcut(serial, "zoom_in").catch((e) => setError(String(e)));
+  const zoomOut = () => sendCameraShortcut(serial, "zoom_out").catch((e) => setError(String(e)));
+
   const b = config.buttons;
 
   const key = (code: number) => () =>
@@ -96,6 +115,50 @@ export function ControlBar({
   return (
     <div className={container}>
       <div className={wrap}>
+        {sessionMode === "camera" ? (
+          <>
+            <Button
+              variant={torchOn ? "default" : "outline"}
+              className={`${sz.btn} ${torchOn ? "bg-amber-600 hover:bg-amber-500 text-white" : ""}`}
+              onClick={toggleTorch}
+              title="Toggle Camera Flash / Torch"
+            >
+              <Zap className={sz.icon} />
+              Torch
+            </Button>
+            <Button
+              variant="outline"
+              className={sz.btn}
+              onClick={zoomIn}
+              title="Zoom In (Alt+Up)"
+            >
+              <ZoomIn className={sz.icon} />
+              Zoom+
+            </Button>
+            <Button
+              variant="outline"
+              className={sz.btn}
+              onClick={zoomOut}
+              title="Zoom Out (Alt+Down)"
+            >
+              <ZoomOut className={sz.icon} />
+              Zoom−
+            </Button>
+            {b.screenOff && (
+              <Button variant="outline" className={sz.btn} onClick={toggleScreenOff}>
+                {screenOff ? <Monitor className={sz.icon} /> : <MonitorOff className={sz.icon} />}
+                {screenOff ? "Scr on" : "Scr off"}
+              </Button>
+            )}
+            {b.orientToggle && showOrientToggle && (
+              <Button variant="outline" className={sz.btn} onClick={rotate}>
+                <RotateCw className={sz.icon} />
+                Rotate
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
         {b.back && (
           <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.BACK)}>
             <ArrowLeft className={sz.icon} />
@@ -172,6 +235,8 @@ export function ControlBar({
             <Mouse className={sz.icon} />
             {swipeScroll ? "Swipe on" : "Swipe off"}
           </Button>
+        )}
+          </>
         )}
       </div>
     </div>

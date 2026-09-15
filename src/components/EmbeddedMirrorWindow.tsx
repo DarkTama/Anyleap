@@ -4,12 +4,15 @@ import { Minus, Square, X, GripHorizontal } from "lucide-react";
 import { embedMirror, resizeEmbeddedMirror, pushClipboardImage } from "@/lib/tauri";
 import { ControlBar } from "./ControlBar";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
+import { useAppStore } from "@/store/useAppStore";
 
 export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
   const [toast, setToast] = useState<string | null>(null);
   const win = getCurrentWebviewWindow();
+  const sessions = useAppStore((s) => s.sessions);
+  const session = sessions.find((s) => s.serial === serial);
 
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
@@ -146,6 +149,7 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
             orientation="vertical"
             showOrientToggle={true}
             showSwipeScroll={true}
+            sessionMode={session?.mode}
           />
         </div>
       </div>

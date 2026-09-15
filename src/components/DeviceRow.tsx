@@ -30,7 +30,14 @@ const STATUS_LABEL: Record<DeviceStatus, string> = {
   mirroring: "Mirroring",
 };
 
-function StatusBadge({ status }: { status: DeviceStatus }) {
+function StatusBadge({ status, mode }: { status: DeviceStatus; mode?: string }) {
+  if (status === "mirroring" && mode === "camera") {
+    return (
+      <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+        Camera Stream
+      </Badge>
+    );
+  }
   return <Badge className={STATUS_STYLE[status]}>{STATUS_LABEL[status]}</Badge>;
 }
 
@@ -163,7 +170,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
           {status === "offline" ? (
             <DeviceStateBadge state={device.state} />
           ) : (
-            <StatusBadge status={status} />
+            <StatusBadge status={status} mode={session?.mode} />
           )}
         </span>
         <span className="flex gap-2">
@@ -213,7 +220,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
         </span>
       </div>
       {open && status !== "offline" && (
-        <ControlBar serial={device.serial} config={controlConfig} orientation="horizontal" />
+        <ControlBar serial={device.serial} config={controlConfig} orientation="horizontal" sessionMode={session?.mode} />
       )}
       <CameraLaunchDialog
         isOpen={cameraOpen}
@@ -373,7 +380,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
           <span className="font-mono text-xs text-zinc-500">
             {serial ?? `${saved.host}:${saved.port}`}
           </span>
-          <StatusBadge status={status} />
+          <StatusBadge status={status} mode={session?.mode} />
         </span>
         <span className="flex gap-2">
           {status === "offline" && (
@@ -433,7 +440,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
         </span>
       </div>
       {open && serial && status !== "offline" && (
-        <ControlBar serial={serial} config={controlConfig} orientation="horizontal" />
+        <ControlBar serial={serial} config={controlConfig} orientation="horizontal" sessionMode={session?.mode} />
       )}
       {serial && (
         <CameraLaunchDialog

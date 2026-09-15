@@ -26,6 +26,7 @@ import { DeviceRack } from "./DeviceRack";
 import { LaunchMatrix, type StudioMode } from "./LaunchMatrix";
 import { DpiVisualizer } from "./DpiVisualizer";
 import { PairDialog } from "@/components/PairDialog";
+import { CameraLaunchDialog } from "@/components/CameraLaunchDialog";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import type { DeviceInfo, SavedDevice } from "@/lib/types";
 
@@ -45,6 +46,7 @@ export function StudioDeck() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   // Active target device resolution
   const activeDevice: DeviceInfo | SavedDevice | null = useMemo(() => {
@@ -117,6 +119,9 @@ export function StudioDeck() {
     try {
       if (activeSession) {
         await stopMirror(activeSession.id);
+      } else if (currentMode === "camera") {
+        setCameraOpen(true);
+        return;
       } else {
         // If device is saved wireless and offline, try connecting first
         const isDeviceOffline = !devices.some((d) => d.serial === selectedSerial);
@@ -533,7 +538,11 @@ export function StudioDeck() {
                     className="w-full flex items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 py-3.5 text-sm font-bold text-zinc-950 shadow-[0_0_30px_rgba(56,189,248,0.35)] hover:from-cyan-400 hover:to-sky-400 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Play className="h-4 w-4 fill-zinc-950" />
-                    <span>LAUNCH EMBEDDED WORKSTATION</span>
+                    <span>
+                      {currentMode === "camera"
+                        ? "CONFIGURE & LAUNCH CAMERA STUDIO"
+                        : "LAUNCH EMBEDDED WORKSTATION"}
+                    </span>
                   </button>
                 )}
               </div>
@@ -544,6 +553,15 @@ export function StudioDeck() {
 
       {/* Wireless Pair Modal Dialog */}
       {pairOpen && <PairDialog onClose={() => setPairOpen(false)} />}
+      {/* Camera Launch Dialog */}
+      {selectedSerial && (
+        <CameraLaunchDialog
+          isOpen={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          serial={selectedSerial}
+          deviceName={targetDisplayName}
+        />
+      )}
     </div>
   );
 }
