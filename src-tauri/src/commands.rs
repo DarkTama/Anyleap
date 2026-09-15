@@ -557,6 +557,21 @@ fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, 
 /// Spawn scrcpy with a prepared arg vector and register a tracked session.
 /// On an early encoder/connection failure, retries once with conservative flags
 /// (`retried` guards against an infinite retry loop).
+/// Build a base scrcpy sidecar command with pinned environment.
+fn scrcpy_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+    let server = resolve_server_path(app)
+        .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
+    let mut cmd = app
+        .shell()
+        .sidecar("scrcpy")
+        .map_err(|e| e.to_string())?
+        .env("SCRCPY_SERVER_PATH", server.to_string_lossy().to_string());
+    if let Some(adb) = adb_path() {
+        cmd = cmd.env("ADB", adb.to_string_lossy().to_string());
+    }
+    Ok(cmd)
+}
+
 fn spawn_session(
     app: &AppHandle,
     serial: String,
@@ -564,20 +579,10 @@ fn spawn_session(
     retried: bool,
     mode: &str,
 ) -> Result<SessionInfo, String> {
-    let server = resolve_server_path(app)
-        .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
-
-    let mut cmd = app
-        .shell()
-        .sidecar("scrcpy")
-        .map_err(|e| e.to_string())?
-        .env("SCRCPY_SERVER_PATH", server.to_string_lossy().to_string());
-    if let Some(adb) = adb_path() {
-        // Force scrcpy to use our pinned adb (avoids version conflicts).
-        cmd = cmd.env("ADB", adb.to_string_lossy().to_string());
-    }
-
-    let (mut rx, child) = cmd.args(args.clone()).spawn().map_err(|e| e.to_string())?;
+    let (mut rx, child) = scrcpy_cmd(app)?
+        .args(args.clone())
+        .spawn()
+        .map_err(|e| e.to_string())?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let pid = child.pid();
@@ -691,6 +696,114 @@ pub fn start_mirror(
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_args(&serial, &settings);
     spawn_session(&app, serial, args, false, "display")
+}
+
+/// Query cameras available on a device via scrcpy --list-cameras.
+#[tauri::command]
+pub async fn list_device_cameras(
+    app: AppHandle,
+    serial: String,
+) -> Result<Vec<CameraDeviceOption>, String> {
+    let output = scrcpy_cmd(&app)?
+        .args(["--serial", &serial, "--list-cameras"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let cameras = parse_list_cameras_output(&stdout);
+    if cameras.is_empty() && !output.status.success() {
+        let err = summarize_scrcpy_error(&stderr, None);
+        return Err(err);
+    }
+    Ok(cameras)
+}
+
+/// Launch scrcpy camera mode for a device and track the session.
+#[tauri::command]
+pub fn start_camera_mirror(
+    app: AppHandle,
+    serial: String,
+    settings: CameraSettings,
+) -> Result<SessionInfo, String> {
+    let args = build_scrcpy_camera_args(&serial, &settings);
+    spawn_session(&app, serial, args, false, "camera")
+}
+
+/// Send camera shortcut to the running scrcpy camera window.
+#[tauri::command]
+pub fn send_camera_shortcut(
+    _app: AppHandle,
+    serial: String,
+    action: String,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
+
+        extern "system" {
+            fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+        }
+
+        let titles = [
+            format!("AnyLeap Camera — {}", serial),
+            format!("AnyLeap — {}", serial),
+        ];
+
+        let mut found_hwnd = None;
+        for t in &titles {
+            let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
+            if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
+                if !hwnd.0.is_null() {
+                    found_hwnd = Some(hwnd);
+                    break;
+                }
+            }
+        }
+
+        let hwnd = found_hwnd.ok_or_else(|| format!("scrcpy camera window for {} not found", serial))?;
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+            const VK_MENU: u8 = 0x12;
+            const VK_SHIFT: u8 = 0x10;
+            const VK_T: u8 = 0x54;
+            const VK_UP: u8 = 0x26;
+            const VK_DOWN: u8 = 0x28;
+            const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+            match action.as_str() {
+                "torch_on" => {
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    keybd_event(VK_T, 0, 0, 0);
+                    keybd_event(VK_T, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+                "torch_off" => {
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    keybd_event(VK_SHIFT, 0, 0, 0);
+                    keybd_event(VK_T, 0, 0, 0);
+                    keybd_event(VK_T, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+                "zoom_in" => {
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    keybd_event(VK_UP, 0, 0, 0);
+                    keybd_event(VK_UP, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+                "zoom_out" => {
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    keybd_event(VK_DOWN, 0, 0, 0);
+                    keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+                _ => return Err(format!("unknown camera shortcut action: {}", action)),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Toggle scrcpy screen power mode dynamically via shortcut (MOD+o / MOD+Shift+o)

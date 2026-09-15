@@ -39,6 +39,9 @@ pub fn run() {
             commands::restart_with_screen_off,
             commands::mirror_rect,
             commands::toggle_device_orientation,
+            commands::list_device_cameras,
+            commands::start_camera_mirror,
+            commands::send_camera_shortcut,
             wheel_swipe::set_wheel_swipe,
         ])
         .setup(|app| {

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  CameraDeviceOption,
+  CameraSettings,
   CoreSettings,
   DeviceInfo,
   MdnsService,
@@ -61,3 +63,16 @@ export const toggleDeviceOrientation = (serial: string) =>
 
 export const setWheelSwipe = (serial: string, enabled: boolean) =>
   invoke<void>("set_wheel_swipe", { serial, enabled });
+
+// --- Camera ---
+
+export const listDeviceCameras = (serial: string) =>
+  invoke<CameraDeviceOption[]>("list_device_cameras", { serial });
+
+export const startCameraMirror = (serial: string, settings: CameraSettings) =>
+  invoke<SessionInfo>("start_camera_mirror", { serial, settings });
+
+export type CameraAction = "torch_on" | "torch_off" | "zoom_in" | "zoom_out";
+
+export const sendCameraShortcut = (serial: string, action: CameraAction) =>
+  invoke<void>("send_camera_shortcut", { serial, action });
