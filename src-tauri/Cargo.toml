@@ -1,7 +1,7 @@
 [package]
 name = "anyleap"
 version = "0.5.1"
-description = "AnyLeap  Eeffortless Android-to-PC mirroring (scrcpy GUI)"
+description = "AnyLeap — effortless Android-to-PC mirroring (scrcpy GUI)"
 authors = ["DarkTama"]
 edition = "2021"
 

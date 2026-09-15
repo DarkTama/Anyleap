@@ -548,19 +548,56 @@ pub fn restart_with_screen_off(
 ) -> Result<SessionInfo, String> {
     #[cfg(windows)]
     {
-        use windows::core::PCWSTR;
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
-
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+        };
         extern "system" {
+            fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+            fn GetCurrentThreadId() -> u32;
         }
 
-        let title = format!("AnyLeap — {}", serial);
-        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
-            if !hwnd.0.is_null() {
+        struct EnumData {
+            target_pid: u32,
+            hwnd: Option<HWND>,
+        }
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd).as_bool() {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let data = &mut *(lparam.0 as *mut EnumData);
+                if pid == data.target_pid {
+                    data.hwnd = Some(hwnd);
+                    return BOOL(0);
+                }
+            }
+            BOOL(1)
+        }
+
+        let state = app.state::<AppState>();
+        let target_pid = {
+            let map = state.sessions.lock().unwrap();
+            map.values().find(|s| s.serial == serial).map(|s| s.pid)
+        };
+
+        if let Some(pid) = target_pid {
+            let mut data = EnumData {
+                target_pid: pid,
+                hwnd: None,
+            };
+            let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
+
+            if let Some(hwnd) = data.hwnd {
                 unsafe {
+                    let target_thread = GetWindowThreadProcessId(hwnd, None);
+                    let current_thread = GetCurrentThreadId();
+                    let attached = AttachThreadInput(current_thread, target_thread, 1);
                     let _ = SetForegroundWindow(hwnd);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+
                     const VK_MENU: u8 = 0x12;
                     const VK_SHIFT: u8 = 0x10;
                     const VK_O: u8 = 0x4F;
@@ -576,11 +613,18 @@ pub fn restart_with_screen_off(
                         keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
                     }
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+
+                    if attached != 0 {
+                        let _ = AttachThreadInput(current_thread, target_thread, 0);
+                    }
                 }
 
-                let state = app.state::<AppState>();
-                let map = state.sessions.lock().unwrap();
-                if let Some(s) = map.values().find(|s| s.serial == serial) {
+                let mut map = state.sessions.lock().unwrap();
+                if let Some(s) = map.values_mut().find(|s| s.serial == serial) {
+                    s.args.retain(|a| a != "--turn-screen-off");
+                    if off {
+                        s.args.push("--turn-screen-off".to_string());
+                    }
                     return Ok(SessionInfo {
                         id: s.id.clone(),
                         serial: s.serial.clone(),
