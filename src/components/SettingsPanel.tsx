@@ -172,6 +172,16 @@ export function SettingsPanel() {
               Virtual display that continuously resizes with the window (Android 10+)
             </p>
           </div>
+          <div className="space-y-1">
+            <Toggle
+              label="Embedded mirror (integrated sidebar)"
+              checked={settings.embedded ?? false}
+              onChange={(v) => update("embedded", v)}
+            />
+            <p className="text-[11px] text-zinc-400">
+              Embeds mirror viewport and toolbar into a single native window (Escrcpy style)
+            </p>
+          </div>
           {settings.flexDisplay && (
             <div className="space-y-1">
               <input

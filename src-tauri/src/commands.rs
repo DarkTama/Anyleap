@@ -60,6 +60,8 @@ pub struct CoreSettings {
     pub flex_display_size: String,
     pub no_window_aspect_ratio_lock: bool,
     pub render_fit: String,
+    #[serde(default)]
+    pub embedded: bool,
 }
 
 /// An adb mDNS service entry, as listed by `adb mdns services`.
@@ -274,7 +276,10 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
         }
         a.push("--flex-display".into());
     }
-    if s.no_window_aspect_ratio_lock {
+    if s.embedded {
+        a.push("--window-borderless".into());
+    }
+    if s.no_window_aspect_ratio_lock || s.embedded {
         a.push("--no-window-aspect-ratio-lock".into());
     }
     // Always sent explicitly: with --flex-display scrcpy's default flips to
@@ -1042,6 +1047,7 @@ other _weird._tcp 10.0.0.6:1234\n";
             flex_display_size: String::new(),
             no_window_aspect_ratio_lock: false,
             render_fit: String::new(),
+            embedded: false,
         }
     }
 
@@ -1135,4 +1141,13 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert!(!without_off.contains(&"--turn-screen-off".to_string()));
         assert_eq!(without_off, base);
     }
+    #[test]
+    fn embedded_mode_emits_borderless_and_no_aspect_ratio_lock() {
+        let mut s = base_settings();
+        s.embedded = true;
+        let args = build_scrcpy_args("SER", &s);
+        assert!(args.contains(&"--window-borderless".to_string()));
+        assert!(args.contains(&"--no-window-aspect-ratio-lock".to_string()));
+    }
+
 }

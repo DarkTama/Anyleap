@@ -51,6 +51,7 @@ export interface CoreSettings {
   flexDisplaySize: string; // empty = auto (main display size), or "WxH/dpi"
   noWindowAspectRatioLock: boolean; // --no-window-aspect-ratio-lock
   renderFit: "letterbox" | "unscaled" | "stretched"; // --render-fit
+  embedded?: boolean; // Win32 embedded mirror container mode
 }
 
 export type QualityPreset = "low" | "medium" | "high" | "highest" | "custom";
@@ -97,6 +98,7 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   flexDisplaySize: "",
   noWindowAspectRatioLock: false,
   renderFit: "letterbox",
+  embedded: false,
 };
 
 // --- Wireless (M2) ---

@@ -61,3 +61,25 @@ export const toggleDeviceOrientation = (serial: string) =>
 
 export const setWheelSwipe = (serial: string, enabled: boolean) =>
   invoke<void>("set_wheel_swipe", { serial, enabled });
+
+// --- Embedded Mirror (SPEC-06) ---
+
+export const embedMirror = (windowLabel: string, serial: string) =>
+  invoke<void>("embed_mirror", { windowLabel, serial });
+
+export const resizeEmbeddedMirror = (
+  windowLabel: string,
+  serial: string,
+  width: number,
+  height: number,
+  x?: number,
+  y?: number,
+) =>
+  invoke<void>("resize_embedded_mirror", {
+    windowLabel,
+    serial,
+    width,
+    height,
+    x,
+    y,
+  });

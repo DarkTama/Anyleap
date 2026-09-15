@@ -131,33 +131,59 @@ function App() {
   // Floating, always-on-top control window: open while mirroring, close when idle.
   useEffect(() => {
     (async () => {
-      const existing = await WebviewWindow.getByLabel("controls");
+      const existingControls = await WebviewWindow.getByLabel("controls");
       if (sessions.length > 0) {
-        if (!existing) {
-          const serial = sessions[sessions.length - 1].serial;
-          try {
-            const w = new WebviewWindow("controls", {
-              url: `index.html?control=1&serial=${encodeURIComponent(serial)}`,
-              title: "AnyLeap Controls",
-              width: 88,
-              height: 560,
-              x: 24,
-              y: 80,
-              resizable: false,
-              decorations: false,
-              alwaysOnTop: true,
-              skipTaskbar: true,
-              // Needed for the collapsed round-button state (no square backdrop).
-              transparent: true,
-              shadow: false,
-            });
-            w.once("tauri://error", (e) => console.error("controls window:", e));
-          } catch (e) {
-            console.error("controls window create failed:", e);
+        const lastSession = sessions[sessions.length - 1];
+        const serial = lastSession.serial;
+        const mirrorLabel = `mirror-${serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+        const existingMirror = await WebviewWindow.getByLabel(mirrorLabel);
+        const isEmbedded = useAppStore.getState().settings.embedded;
+
+        if (isEmbedded) {
+          if (existingControls) {
+            await existingControls.close();
+          }
+          if (!existingMirror) {
+            try {
+              const w = new WebviewWindow(mirrorLabel, {
+                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}`,
+                title: `AnyLeap — ${serial}`,
+                width: 480,
+                height: 860,
+                resizable: true,
+                decorations: false,
+                transparent: false,
+              });
+              w.once("tauri://error", (e) => console.error("mirror window:", e));
+            } catch (e) {
+              console.error("mirror window create failed:", e);
+            }
+          }
+        } else {
+          if (!existingControls) {
+            try {
+              const w = new WebviewWindow("controls", {
+                url: `index.html?control=1&serial=${encodeURIComponent(serial)}`,
+                title: "AnyLeap Controls",
+                width: 88,
+                height: 560,
+                x: 24,
+                y: 80,
+                resizable: false,
+                decorations: false,
+                alwaysOnTop: true,
+                skipTaskbar: true,
+                transparent: true,
+                shadow: false,
+              });
+              w.once("tauri://error", (e) => console.error("controls window:", e));
+            } catch (e) {
+              console.error("controls window create failed:", e);
+            }
           }
         }
-      } else if (existing) {
-        await existing.close();
+      } else {
+        if (existingControls) await existingControls.close();
       }
     })();
   }, [sessions]);
