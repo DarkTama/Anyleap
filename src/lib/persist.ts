@@ -8,4 +8,6 @@ export {
   saveAppPrefs,
   loadSettings,
   saveSettings,
+  getNicknames,
+  saveNickname,
 } from "./settingsStore";

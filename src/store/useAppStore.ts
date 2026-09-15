@@ -22,6 +22,9 @@ interface AppStore {
   appPrefs: AppPrefs;
   error: string | null;
   deviceToggles: Record<string, { screenOff?: boolean; asleep?: boolean; swipeScroll?: boolean }>;
+  nicknames: Record<string, string>;
+  setNicknames: (n: Record<string, string>) => void;
+  setNickname: (serial: string, name: string) => void;
 
   setDevices: (d: DeviceInfo[]) => void;
   setSessions: (s: SessionInfo[]) => void;
@@ -46,6 +49,19 @@ export const useAppStore = create<AppStore>((set) => ({
   appPrefs: DEFAULT_APP_PREFS,
   error: null,
   deviceToggles: {},
+  nicknames: {},
+  setNicknames: (nicknames) => set({ nicknames }),
+  setNickname: (serial, name) =>
+    set((st) => {
+      const next = { ...st.nicknames };
+      const trimmed = name.trim();
+      if (trimmed) {
+        next[serial] = trimmed;
+      } else {
+        delete next[serial];
+      }
+      return { nicknames: next };
+    }),
 
   setDevices: (devices) => set({ devices }),
   setSessions: (sessions) => set({ sessions }),

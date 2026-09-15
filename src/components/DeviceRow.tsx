@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Gamepad2, Smartphone, Square, Unplug, Usb, Wifi, X } from "lucide-react";
+import { Check, Gamepad2, Pencil, Smartphone, Square, Unplug, Usb, Wifi, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeviceStateBadge } from "./DeviceStateBadge";
@@ -16,6 +16,7 @@ import {
 import { forgetSaved } from "@/lib/savedDevices";
 import { deviceStatusOf, type DeviceStatus, type SavedRow } from "@/lib/deviceStatus";
 import type { DeviceInfo } from "@/lib/types";
+import { saveNickname } from "@/lib/settingsStore";
 
 const STATUS_STYLE: Record<DeviceStatus, string> = {
   offline: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
@@ -44,8 +45,24 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   const setDevices = useAppStore((s) => s.setDevices);
   const setError = useAppStore((s) => s.setError);
   const controlConfig = useAppStore((s) => s.controlConfig);
+  const nicknames = useAppStore((s) => s.nicknames);
+  const setNickname = useAppStore((s) => s.setNickname);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+
+  const nickname = nicknames[device.serial];
+
+  const handleSaveNickname = async () => {
+    try {
+      await saveNickname(device.serial, editName);
+      setNickname(device.serial, editName);
+      setEditing(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const wireless = device.serial.includes(":");
   const status = deviceStatusOf(device, sessions);
@@ -99,7 +116,47 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
           ) : (
             <Usb className="h-4 w-4 text-zinc-400" />
           )}
-          <span>{device.model ?? "—"}</span>
+          {editing ? (
+            <span className="flex items-center gap-1">
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder={device.model ?? "Device name"}
+                className="h-6 w-28 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveNickname();
+                  if (e.key === "Escape") setEditing(false);
+                }}
+                autoFocus
+              />
+              <Button size="icon" variant="ghost" className="h-5 w-5" onClick={handleSaveNickname} title="Save">
+                <Check className="h-3 w-3 text-green-500" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => setEditing(false)} title="Cancel">
+                <X className="h-3 w-3 text-zinc-400" />
+              </Button>
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span>{nickname ? nickname : (device.model ?? "—")}</span>
+              {nickname && (
+                <span className="text-xs text-zinc-400 font-normal">({device.model ?? "—"})</span>
+              )}
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-5 w-5 p-0 text-zinc-400 hover:text-zinc-200"
+                onClick={() => {
+                  setEditName(nickname ?? "");
+                  setEditing(true);
+                }}
+                title="Rename device"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </span>
+          )}
           <span className="font-mono text-xs text-zinc-500">{device.serial}</span>
           {status === "offline" ? (
             <DeviceStateBadge state={device.state} />
@@ -157,10 +214,25 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
   const controlConfig = useAppStore((s) => s.controlConfig);
+  const nicknames = useAppStore((s) => s.nicknames);
+  const setNickname = useAppStore((s) => s.setNickname);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const serial = device?.serial;
+  const targetSerial = serial ?? `${saved.host}:${saved.port}`;
+  const nickname = nicknames[targetSerial] ?? (serial ? nicknames[serial] : undefined);
+  const handleSaveNickname = async () => {
+    try {
+      await saveNickname(targetSerial, editName);
+      setNickname(targetSerial, editName);
+      setEditing(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
 
-  const serial = device?.serial;
   const session = serial ? sessions.find((s) => s.serial === serial) : undefined;
 
   async function reconnect() {
@@ -236,7 +308,47 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
       <div className="flex items-center justify-between px-3 py-2 text-sm">
         <span className="flex items-center gap-2">
           <Wifi className="h-4 w-4 text-sky-500" />
-          <span>{saved.label}</span>
+          {editing ? (
+            <span className="flex items-center gap-1">
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder={saved.label}
+                className="h-6 w-28 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveNickname();
+                  if (e.key === "Escape") setEditing(false);
+                }}
+                autoFocus
+              />
+              <Button size="icon" variant="ghost" className="h-5 w-5" onClick={handleSaveNickname} title="Save">
+                <Check className="h-3 w-3 text-green-500" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => setEditing(false)} title="Cancel">
+                <X className="h-3 w-3 text-zinc-400" />
+              </Button>
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span>{nickname ? nickname : saved.label}</span>
+              {nickname && (
+                <span className="text-xs text-zinc-400 font-normal">({saved.label})</span>
+              )}
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-5 w-5 p-0 text-zinc-400 hover:text-zinc-200"
+                onClick={() => {
+                  setEditName(nickname ?? "");
+                  setEditing(true);
+                }}
+                title="Rename device"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </span>
+          )}
           <span className="font-mono text-xs text-zinc-500">
             {serial ?? `${saved.host}:${saved.port}`}
           </span>

@@ -16,7 +16,7 @@ import {
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
-import { loadAppPrefs, loadQuality } from "@/lib/persist";
+import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
 import { checkForUpdates } from "@/lib/updateCheck";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -36,6 +36,7 @@ function App() {
   const setPreset = useAppStore((s) => s.setPreset);
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
   const setError = useAppStore((s) => s.setError);
+  const setNicknames = useAppStore((s) => s.setNicknames);
   const [pairOpen, setPairOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("devices");
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
@@ -113,7 +114,8 @@ function App() {
         if (p.checkUpdates) void checkForUpdates();
       })
       .catch(() => {});
-  }, [setSettings, setPreset, setAppPrefs]);
+    getNicknames().then(setNicknames).catch(() => {});
+  }, [setSettings, setPreset, setAppPrefs, setNicknames]);
 
   // Minimize to tray on close when enabled (read live pref to avoid a stale closure).
   useEffect(() => {

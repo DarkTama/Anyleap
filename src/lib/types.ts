@@ -134,3 +134,5 @@ export interface MirrorRect {
   clientHeight: number;
   foreground: string;
 }
+
+export type DeviceNicknames = Record<string, string>;

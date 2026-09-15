@@ -999,6 +999,157 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
         None
     }
 }
+/// Drag-and-drop file/APK push. APKs are installed with `adb install -r`;
+/// other files are pushed to `/sdcard/Download/`.
+#[tauri::command]
+pub async fn handle_dropped_files(
+    app: AppHandle,
+    serial: String,
+    paths: Vec<String>,
+) -> Result<String, String> {
+    if paths.is_empty() {
+        return Ok("No files provided".to_string());
+    }
+    let mut installed = 0;
+    let mut pushed = 0;
+    for path in &paths {
+        if path.to_lowercase().ends_with(".apk") {
+            let out = adb_cmd(&app)?
+                .args(["-s", &serial, "install", "-r", path])
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let combined = format!("{stdout}\n{stderr}");
+            if !out.status.success() || combined.contains("Failure") {
+                return Err(format!("APK install failed for {path}: {}", combined.trim()));
+            }
+            installed += 1;
+        } else {
+            let out = adb_cmd(&app)?
+                .args(["-s", &serial, "push", path, "/sdcard/Download/"])
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let combined = format!("{stdout}\n{stderr}");
+                return Err(format!("File push failed for {path}: {}", combined.trim()));
+            }
+            pushed += 1;
+        }
+    }
+    Ok(format!("Installed {installed} APK(s), pushed {pushed} file(s)"))
+}
+
+/// Parse package lines from `pm list packages -3` output.
+fn parse_installed_packages(text: &str) -> Vec<String> {
+    let mut packages: Vec<String> = text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            if let Some(pkg) = line.strip_prefix("package:") {
+                let p = pkg.trim();
+                if !p.is_empty() {
+                    Some(p.to_string())
+                } else {
+                    None
+                }
+            } else {
+                Some(line.to_string())
+            }
+        })
+        .collect();
+    packages.sort();
+    packages.dedup();
+    packages
+}
+
+/// List third-party installed packages on the device.
+#[tauri::command]
+pub async fn list_installed_apps(
+    app: AppHandle,
+    serial: String,
+) -> Result<Vec<String>, String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "pm", "list", "packages", "-3"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to list packages: {}", err.trim()));
+    }
+
+    Ok(parse_installed_packages(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Launch an app by package name via Android's monkey launcher intent.
+#[tauri::command]
+pub async fn launch_app(
+    app: AppHandle,
+    serial: String,
+    package_name: String,
+) -> Result<(), String> {
+    let output = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "monkey",
+            "-p",
+            &package_name,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    if !output.status.success()
+        || combined.contains("** No activities found")
+        || combined.contains("monkey aborted")
+    {
+        let msg = combined.trim();
+        return Err(if msg.is_empty() {
+            format!("Failed to launch {package_name}")
+        } else {
+            format!("Failed to launch {package_name}: {msg}")
+        });
+    }
+
+    Ok(())
+}
+
+/// Direct capture of device screen into PNG bytes.
+#[tauri::command]
+pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, String> {
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "exec-out", "screencap", "-p"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to take screenshot: {}", err.trim()));
+    }
+
+    if output.stdout.is_empty() {
+        return Err("Screenshot captured 0 bytes".to_string());
+    }
+
+    Ok(output.stdout)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1148,6 +1299,12 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         let args = build_scrcpy_args("SER", &s);
         assert!(args.contains(&"--window-borderless".to_string()));
         assert!(args.contains(&"--no-window-aspect-ratio-lock".to_string()));
+    }
+    #[test]
+    fn parses_installed_packages_output() {
+        let text = "package:com.android.chrome\r\npackage:org.mozilla.firefox\npackage:com.example.app\n";
+        let pkgs = parse_installed_packages(text);
+        assert_eq!(pkgs, vec!["com.android.chrome", "com.example.app", "org.mozilla.firefox"]);
     }
 
 }

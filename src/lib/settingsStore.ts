@@ -176,3 +176,26 @@ export const forgetSaved = forgetDevice;
 export const getSettings = loadSettings;
 export const setSettings = saveSettings;
 export const getSavedDevices = listSavedDevices;
+
+export async function getNicknames(): Promise<Record<string, string>> {
+  const store = await getStore();
+  return (await store.get<Record<string, string>>("nicknames")) ?? {};
+}
+
+export async function saveNickname(
+  serial: string,
+  name: string,
+): Promise<Record<string, string>> {
+  const store = await getStore();
+  const current = (await store.get<Record<string, string>>("nicknames")) ?? {};
+  const trimmed = name.trim();
+  const next = { ...current };
+  if (trimmed) {
+    next[serial] = trimmed;
+  } else {
+    delete next[serial];
+  }
+  await store.set("nicknames", next);
+  await store.save();
+  return next;
+}

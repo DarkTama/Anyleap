@@ -83,3 +83,17 @@ export const resizeEmbeddedMirror = (
     x,
     y,
   });
+
+// --- Escrcpy Features (SPEC-07) ---
+
+export const handleDroppedFiles = (serial: string, paths: string[]) =>
+  invoke<string>("handle_dropped_files", { serial, paths });
+
+export const listInstalledApps = (serial: string) =>
+  invoke<string[]>("list_installed_apps", { serial });
+
+export const launchApp = (serial: string, packageName: string) =>
+  invoke<void>("launch_app", { serial, packageName });
+
+export const takeScreenshot = (serial: string) =>
+  invoke<number[]>("take_screenshot", { serial });
