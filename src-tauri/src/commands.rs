@@ -10,10 +10,10 @@ use crate::state::{poison_error, AppState, Session};
 
 /// Filename of the bundled adb sidecar (target-triple suffixed by Tauri).
 /// Kept Windows-only for M1; extend per-platform when we add macOS/Linux.
-#[cfg(windows)]
-const ADB_SIDECAR: &str = "adb-x86_64-pc-windows-msvc.exe";
-#[cfg(not(windows))]
-const ADB_SIDECAR: &str = "adb";
+#[cfg(target_os = "windows")]
+const ADB_SIDECAR: &str = concat!("adb-", env!("TARGET"), ".exe");
+#[cfg(not(target_os = "windows"))]
+const ADB_SIDECAR: &str = concat!("adb-", env!("TARGET"));
 
 #[derive(Serialize, Clone)]
 pub struct DeviceInfo {
@@ -88,11 +88,14 @@ fn now_ms() -> i64 {
 pub(crate) fn adb_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
+    let exe_name = if cfg!(windows) { "adb.exe" } else { "adb" };
     let candidates = [
-        dir.join("adb.exe"),
+        dir.join(exe_name),
         dir.join(ADB_SIDECAR),
-        // dev fallback: src-tauri/target/debug -> src-tauri/binaries
+        dir.join("..").join("Resources").join(ADB_SIDECAR),
+        dir.join("..").join("Resources").join(exe_name),
         dir.join("..").join("..").join("binaries").join(ADB_SIDECAR),
+        dir.join("..").join("..").join("binaries").join(exe_name),
     ];
     candidates.into_iter().find(|c| c.exists())
 }
