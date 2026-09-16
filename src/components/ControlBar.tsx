@@ -4,6 +4,7 @@ import {
   Bell,
   Camera,
   Circle,
+  HelpCircle,
   Monitor,
   MonitorOff,
   Moon,
@@ -14,6 +15,7 @@ import {
   Sun,
   Volume2,
   VolumeX,
+  X,
   Zap,
   ZoomIn,
   ZoomOut,
@@ -68,7 +70,7 @@ export function ControlBar({
   const swipeScroll = !!toggles?.swipeScroll;
   const sz = SIZE[config.size];
   const [torchOn, setTorchOn] = useState(false);
-
+  const [showObsGuide, setShowObsGuide] = useState(false);
   const toggleTorch = () => {
     const next = !torchOn;
     sendCameraShortcut(serial, next ? "torch_on" : "torch_off")
@@ -173,7 +175,15 @@ export function ControlBar({
             )}
             <Button
               variant="outline"
-              className={`${sz.btn} text-rose-400 hover:bg-rose-950/50 hover:text-rose-300 border-rose-900/40`}
+              className={`${sz.btn} text-sky-400 hover:bg-sky-950/50 hover:text-sky-300 border-sky-900/40`}
+              onClick={() => setShowObsGuide((v) => !v)}
+              title="How to use with Google Meet, Zoom, or OBS"
+            >
+              <HelpCircle className={sz.icon} />
+              Guide
+            </Button>
+            <Button
+              variant="outline"
               onClick={async () => {
                 const sessions = await listSessions().catch(() => []);
                 const current = sessions.find((s) => s.serial === serial);
@@ -269,6 +279,49 @@ export function ControlBar({
           </>
         )}
       </div>
+      {showObsGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs">
+          <div className="relative w-full max-w-sm rounded-xl border border-sky-500/30 bg-[#0e121a] p-4 text-left shadow-2xl space-y-3">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-sky-400">
+                <Camera className="h-4 w-4" />
+                <span>Google Meet & OBS Virtual Camera</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowObsGuide(false)}
+                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <ol className="list-decimal list-inside space-y-2 text-[11px] text-zinc-300 leading-relaxed">
+              <li>
+                Open <strong className="text-white">OBS Studio</strong> (free desktop app).
+              </li>
+              <li>
+                In Sources, click <strong>+ → Window Capture</strong>.
+              </li>
+              <li>
+                Select <strong className="text-cyan-300">AnyLeap Camera Studio</strong>.
+              </li>
+              <li>
+                In OBS (bottom right), click <strong className="text-emerald-400">Start Virtual Camera</strong>.
+              </li>
+              <li>
+                In <strong className="text-sky-300">meet.google.com</strong> or Zoom settings, choose <strong className="text-sky-300">OBS Virtual Camera</strong>.
+              </li>
+            </ol>
+            <button
+              type="button"
+              onClick={() => setShowObsGuide(false)}
+              className="w-full rounded-lg bg-sky-600 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition-colors cursor-pointer"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

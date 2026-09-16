@@ -116,13 +116,26 @@ export function CameraLaunchDialog({
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-xs text-zinc-500">
-            Stream high-quality camera video directly from{" "}
+            Stream camera video directly from{" "}
             <span className="font-medium text-zinc-900 dark:text-zinc-100">
               {deviceName ?? serial}
             </span>{" "}
-            as a PC camera source. For Google Meet or OBS, use OBS Window Capture + Virtual Camera.
+            as a PC camera source.
           </div>
 
+          {/* Virtual Webcam / Google Meet Guide Card */}
+          <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs space-y-1.5 dark:border-sky-500/20 dark:bg-sky-950/30">
+            <div className="flex items-center gap-1.5 font-semibold text-sky-400">
+              <Video className="h-3.5 w-3.5" />
+              <span>Using with Google Meet, Zoom, or Discord:</span>
+            </div>
+            <ol className="list-decimal list-inside space-y-1 text-[11px] text-zinc-400 leading-relaxed">
+              <li>Open <strong className="text-zinc-200">OBS Studio</strong>.</li>
+              <li>Add source: <strong className="text-zinc-200">Window Capture → AnyLeap Camera Studio</strong>.</li>
+              <li>Click <strong className="text-emerald-400">Start Virtual Camera</strong> in OBS.</li>
+              <li>In Google Meet or Zoom, choose <strong className="text-sky-300">OBS Virtual Camera</strong>.</li>
+            </ol>
+          </div>
           {error && (
             <div className="rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">
               {error}
