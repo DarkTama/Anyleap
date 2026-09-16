@@ -640,6 +640,32 @@ fn spawn_session(
     retried: bool,
     mode: &str,
 ) -> Result<SessionInfo, String> {
+    // Terminate any stale session for this serial before spawning a new one
+    if let Some(st) = app.try_state::<AppState>() {
+        if let Ok(mut map) = st.sessions.lock() {
+            let stale_ids: Vec<String> = map
+                .iter()
+                .filter(|(_, s)| s.serial == serial)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for sid in stale_ids {
+                if let Some(old) = map.remove(&sid) {
+                    let _ = old.child.kill();
+                }
+            }
+        }
+    }
+    crate::embed::remove_embedded_scrcpy_hwnd(&serial);
+    let mirror_label = format!(
+        "mirror-{}",
+        serial
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect::<String>()
+    );
+    if let Some(w) = app.get_webview_window(&mirror_label) {
+        let _ = w.destroy();
+    }
     let (mut rx, child) = scrcpy_cmd(app)?
         .args(args.clone())
         .spawn()
@@ -826,10 +852,10 @@ pub fn send_camera_shortcut(
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use windows::core::{BOOL, PCWSTR};
+        use windows::core::BOOL;
         use windows::Win32::Foundation::{HWND, LPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
         };
 
         extern "system" {
@@ -878,25 +904,7 @@ pub fn send_camera_shortcut(
                 by_pid = data.hwnd;
             }
 
-            if by_pid.is_some() {
-                by_pid
-            } else {
-                let titles = [
-                    format!("AnyLeap Camera — {}", serial),
-                    format!("AnyLeap — {}", serial),
-                ];
-                let mut found = None;
-                for t in &titles {
-                    let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
-                    if let Ok(h) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
-                        if !h.0.is_null() {
-                            found = Some(h);
-                            break;
-                        }
-                    }
-                }
-                found
-            }
+            by_pid
         };
 
         let hwnd = hwnd.ok_or_else(|| format!("scrcpy camera window for {} not found", serial))?;

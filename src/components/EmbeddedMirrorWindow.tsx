@@ -33,21 +33,26 @@ export function EmbeddedMirrorWindow({
 
   useEffect(() => {
     let active = true;
-    listSessions()
-      .then((sessions) => {
-        if (!active) return;
-        const found = sessions.find((s) => s.serial === serial);
-        if (!found) {
-          // Session already exited or failed on startup; destroy immediately to prevent black screen
-          win.destroy().catch(() => win.close().catch(() => {}));
-        } else {
-          setSession(found);
-          if (found.mode) {
-            setMode(found.mode as SessionMode);
+    const checkSession = async () => {
+      for (let attempt = 0; attempt < 8 && active; attempt++) {
+        try {
+          const sessions = await listSessions();
+          if (!active) return;
+          const found = sessions.find((s) => s.serial === serial);
+          if (found) {
+            setSession(found);
+            if (found.mode) setMode(found.mode as SessionMode);
+            return;
           }
-        }
-      })
-      .catch(() => {});
+        } catch (_) {}
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (active) {
+        // No active session after 3.2s of polling -> session failed or was not found
+        win.destroy().catch(() => win.close().catch(() => {}));
+      }
+    };
+    checkSession();
 
     return () => {
       active = false;

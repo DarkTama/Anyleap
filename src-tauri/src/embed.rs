@@ -9,10 +9,10 @@ mod win_embed {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId,
-        IsWindowVisible, SetParent, SetWindowLongPtrW, SetWindowPos,
-        GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-        WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+        EnumWindows, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindowVisible,
+        SetParent, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_POPUP,
+        WS_THICKFRAME, WS_VISIBLE,
     };
     use crate::state::AppState;
 
@@ -33,47 +33,33 @@ mod win_embed {
 
     struct EnumData {
         target_pid: u32,
-        hwnd: Option<HWND>,
+        tauri_hwnd_raw: isize,
+        hwnd: Option<isize>,
     }
 
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let data = &mut *(lparam.0 as *mut EnumData);
+        // Ensure we never match or reparent AnyLeap's own Tauri window into itself
+        if (hwnd.0 as isize) == data.tauri_hwnd_raw {
+            return BOOL(1);
+        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        let data = &mut *(lparam.0 as *mut EnumData);
         if pid == data.target_pid && IsWindowVisible(hwnd).as_bool() {
-            data.hwnd = Some(hwnd);
+            data.hwnd = Some(hwnd.0 as isize);
             return BOOL(0);
         }
         BOOL(1)
     }
-    fn find_hwnd_by_pid(target_pid: u32) -> Option<HWND> {
+
+    fn find_hwnd_by_pid(target_pid: u32, tauri_hwnd_raw: isize) -> Option<isize> {
         let mut data = EnumData {
             target_pid,
+            tauri_hwnd_raw,
             hwnd: None,
         };
         let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
         data.hwnd
-    }
-
-    fn find_hwnd_by_pid_or_title(target_pid: u32, serial: &str) -> Option<HWND> {
-        if let Some(h) = find_hwnd_by_pid(target_pid) {
-            return Some(h);
-        }
-        use windows::core::PCWSTR;
-        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-        let titles = [
-            format!("AnyLeap Camera — {}", serial),
-            format!("AnyLeap — {}", serial),
-        ];
-        for t in &titles {
-            let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
-            if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
-                if !hwnd.0.is_null() && unsafe { IsWindowVisible(hwnd).as_bool() } {
-                    return Some(hwnd);
-                }
-            }
-        }
-        None
     }
 
     pub async fn embed_mirror_impl(
@@ -93,11 +79,11 @@ mod win_embed {
         }
         .ok_or_else(|| format!("No active session found for serial '{}'", serial))?;
 
-        // scrcpy may take a brief moment (especially on wireless) to create its window; retry for up to 15 seconds.
+        // scrcpy may take a brief moment (especially on wireless) to create its window; retry for up to 12 seconds.
         let mut scrcpy_hwnd_raw: Option<isize> = None;
-        for _ in 0..150 {
-            if let Some(h) = find_hwnd_by_pid_or_title(target_pid, serial) {
-                scrcpy_hwnd_raw = Some(h.0 as isize);
+        for _ in 0..120 {
+            if let Some(h) = find_hwnd_by_pid(target_pid, tauri_hwnd_raw) {
+                scrcpy_hwnd_raw = Some(h);
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -105,9 +91,14 @@ mod win_embed {
 
         let scrcpy_hwnd_raw = scrcpy_hwnd_raw
             .ok_or_else(|| format!("scrcpy HWND not found for pid {}", target_pid))?;
-        let scrcpy_hwnd = HWND(scrcpy_hwnd_raw as *mut _);
 
+        if scrcpy_hwnd_raw == tauri_hwnd_raw {
+            return Err("Cannot embed host Tauri window into itself".to_string());
+        }
+
+        let scrcpy_hwnd = HWND(scrcpy_hwnd_raw as *mut _);
         let tauri_hwnd = HWND(tauri_hwnd_raw as *mut _);
+
         unsafe {
             // Reparent window
             let _ = SetParent(scrcpy_hwnd, Some(tauri_hwnd));
@@ -140,7 +131,7 @@ mod win_embed {
         }
 
         if let Ok(mut map) = get_embedded_map().lock() {
-            map.insert(serial.to_string(), scrcpy_hwnd.0 as isize);
+            map.insert(serial.to_string(), scrcpy_hwnd_raw);
         }
 
         Ok(())
@@ -158,14 +149,15 @@ mod win_embed {
         let win = app
             .get_webview_window(window_label)
             .ok_or_else(|| format!("Window '{}' not found", window_label))?;
+        let tauri_hwnd_raw = win.hwnd().map_err(|e| e.to_string())?.0 as isize;
 
         let cached_hwnd = get_embedded_map()
             .lock()
             .ok()
             .and_then(|map| map.get(serial).copied());
 
-        let scrcpy_hwnd = match cached_hwnd {
-            Some(h) => HWND(h as *mut _),
+        let scrcpy_hwnd_raw = match cached_hwnd {
+            Some(h) => h,
             None => {
                 let state = app.state::<AppState>();
                 let pid = {
@@ -173,10 +165,16 @@ mod win_embed {
                     map.values().find(|s| s.serial == serial).map(|s| s.pid)
                 }
                 .ok_or_else(|| format!("No active session found for serial '{}'", serial))?;
-                find_hwnd_by_pid(pid)
+                find_hwnd_by_pid(pid, tauri_hwnd_raw)
                     .ok_or_else(|| format!("scrcpy HWND not found for pid {}", pid))?
             }
         };
+
+        if scrcpy_hwnd_raw == tauri_hwnd_raw {
+            return Err("Target window is host window".to_string());
+        }
+
+        let scrcpy_hwnd = HWND(scrcpy_hwnd_raw as *mut _);
 
         let scale = win.scale_factor().unwrap_or(1.0);
         let pos_x = x.unwrap_or(0);

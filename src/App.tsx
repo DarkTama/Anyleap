@@ -167,7 +167,7 @@ function App() {
             try {
               const w = new WebviewWindow(mirrorLabel, {
                 url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}`,
-                title: mode === "camera" ? `AnyLeap Camera — ${serial}` : `AnyLeap — ${serial}`,
+                title: mode === "camera" ? `AnyLeap Camera Studio — ${serial}` : `AnyLeap Workstation — ${serial}`,
                 width: 480,
                 height: 860,
                 resizable: true,
