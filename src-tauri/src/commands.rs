@@ -48,6 +48,14 @@ pub struct CameraSettings {
     pub torch: bool,
     #[serde(default)]
     pub no_audio: bool,
+    #[serde(default)]
+    pub embedded: bool,
+    #[serde(default)]
+    pub orientation: Option<String>,
+    #[serde(default)]
+    pub video_bit_rate: Option<u32>,
+    #[serde(default)]
+    pub video_buffer: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -343,14 +351,29 @@ pub fn build_scrcpy_camera_args(serial: &str, s: &CameraSettings) -> Vec<String>
         if !size.is_empty() {
             a.push(format!("--camera-size={}", size));
         } else {
-            a.push("--camera-size=1920x1080".into());
+            a.push("--camera-size=1280x720".into());
         }
     } else {
-        a.push("--camera-size=1920x1080".into());
+        a.push("--camera-size=1280x720".into());
     }
     if let Some(fps) = s.fps {
         if fps > 0 {
             a.push(format!("--camera-fps={}", fps));
+        }
+    }
+    if let Some(ref ori) = s.orientation {
+        if !ori.is_empty() && ori != "auto" {
+            a.push(format!("--capture-orientation={}", ori));
+        }
+    }
+    if let Some(br) = s.video_bit_rate {
+        if br > 0 {
+            a.push(format!("--video-bit-rate={}", br));
+        }
+    }
+    if let Some(buf) = s.video_buffer {
+        if buf > 0 {
+            a.push(format!("--video-buffer={}", buf));
         }
     }
     if s.high_speed {
@@ -362,6 +385,11 @@ pub fn build_scrcpy_camera_args(serial: &str, s: &CameraSettings) -> Vec<String>
     if s.no_audio {
         a.push("--no-audio".into());
     }
+    if s.embedded {
+        a.push("--window-borderless".into());
+        a.push("--no-window-aspect-ratio-lock".into());
+    }
+    // handled above
     a.push(format!("--window-title=AnyLeap Camera — {}", serial));
     a
 }
@@ -911,6 +939,20 @@ pub fn send_camera_shortcut(
                     keybd_event(VK_MENU, 0, 0, 0);
                     keybd_event(VK_DOWN, 0, 0, 0);
                     keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+                "rotate" | "rotate_cw" => {
+                    const VK_RIGHT: u8 = 0x27;
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    keybd_event(VK_RIGHT, 0, 0, 0);
+                    keybd_event(VK_RIGHT, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+                }
+                "rotate_ccw" => {
+                    const VK_LEFT: u8 = 0x25;
+                    keybd_event(VK_MENU, 0, 0, 0);
+                    keybd_event(VK_LEFT, 0, 0, 0);
+                    keybd_event(VK_LEFT, 0, KEYEVENTF_KEYUP, 0);
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
                 _ => {
@@ -1745,18 +1787,26 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
             high_speed: false,
             torch: true,
             no_audio: false,
+            embedded: true,
+            orientation: Some("90".into()),
+            video_bit_rate: Some(4_000_000),
+            video_buffer: Some(50),
         };
         let args = build_scrcpy_camera_args("SER123", &s);
         assert!(args.contains(&"--video-source=camera".to_string()));
         assert!(args.contains(&"--camera-facing=back".to_string()));
         assert!(args.contains(&"--camera-size=1920x1080".to_string()));
         assert!(args.contains(&"--camera-fps=30".to_string()));
+        assert!(args.contains(&"--capture-orientation=90".to_string()));
+        assert!(args.contains(&"--video-bit-rate=4000000".to_string()));
+        assert!(args.contains(&"--video-buffer=50".to_string()));
+        assert!(args.contains(&"--window-borderless".to_string()));
+        assert!(args.contains(&"--no-window-aspect-ratio-lock".to_string()));
         assert!(args.contains(&"--camera-torch".to_string()));
         assert!(!args.contains(&"--no-audio".to_string()));
         assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
-        assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
 
-        // Without size, defaults to 1920x1080
+        // Without size, defaults to 1280x720
         let s_default = CameraSettings {
             facing: "front".into(),
             camera_id: None,
@@ -1765,9 +1815,13 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
             high_speed: false,
             torch: false,
             no_audio: true,
+            embedded: false,
+            orientation: None,
+            video_bit_rate: None,
+            video_buffer: None,
         };
         let args_default = build_scrcpy_camera_args("SER123", &s_default);
-        assert!(args_default.contains(&"--camera-size=1920x1080".to_string()));
+        assert!(args_default.contains(&"--camera-size=1280x720".to_string()));
         assert!(args_default.contains(&"--no-audio".to_string()));
 
         // degrade_args on camera source falls back to 1280x720 30fps
@@ -1788,6 +1842,10 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert_eq!(s.high_speed, false);
         assert_eq!(s.torch, false);
         assert_eq!(s.no_audio, false);
+        assert_eq!(s.embedded, false);
+        assert_eq!(s.orientation, None);
+        assert_eq!(s.video_bit_rate, None);
+        assert_eq!(s.video_buffer, None);
     }
 
     #[test]

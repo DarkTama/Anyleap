@@ -161,6 +161,10 @@ export interface CameraSettings {
   highSpeed?: boolean;
   torch?: boolean;
   noAudio?: boolean;
+  embedded?: boolean;
+  orientation?: string;
+  videoBitRate?: number;
+  videoBuffer?: number;
 }
 
 export type SessionMode = "display" | "camera";

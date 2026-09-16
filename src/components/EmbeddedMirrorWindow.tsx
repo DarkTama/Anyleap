@@ -38,8 +38,8 @@ export function EmbeddedMirrorWindow({
         if (!active) return;
         const found = sessions.find((s) => s.serial === serial);
         if (!found) {
-          // Session already exited or failed on startup; close immediately to prevent black screen
-          win.close().catch(() => {});
+          // Session already exited or failed on startup; destroy immediately to prevent black screen
+          win.destroy().catch(() => win.close().catch(() => {}));
         } else {
           setSession(found);
           if (found.mode) {
@@ -57,11 +57,11 @@ export function EmbeddedMirrorWindow({
   useEffect(() => {
     const unlistenPromise = onSessionExited(async (e) => {
       if (session?.id === e.payload.id) {
-        win.close().catch(() => {});
+        await win.destroy().catch(() => win.close().catch(() => {}));
       } else {
         const activeSessions = await listSessions().catch(() => []);
         if (!activeSessions.some((s) => s.serial === serial)) {
-          win.close().catch(() => {});
+          await win.destroy().catch(() => win.close().catch(() => {}));
         }
       }
     });
@@ -72,8 +72,8 @@ export function EmbeddedMirrorWindow({
       if (active) {
         await stopMirror(active.id).catch(() => {});
       }
+      await win.destroy().catch(() => win.close().catch(() => {}));
     });
-
     return () => {
       unlistenPromise.then((un) => un()).catch(() => {});
       unlistenClosePromise.then((un) => un()).catch(() => {});
@@ -84,11 +84,19 @@ export function EmbeddedMirrorWindow({
     const label = win.label;
     let active = true;
 
-    // Trigger embed reparenting
-    embedMirror(label, serial).catch((err) => {
-      console.warn("Failed to embed scrcpy mirror:", err);
-    });
-
+    // Trigger embed reparenting with progressive retry loop for wireless connections
+    const attemptEmbed = async () => {
+      for (let attempt = 0; attempt < 12 && active; attempt++) {
+        try {
+          await embedMirror(label, serial);
+          break;
+        } catch (err) {
+          if (!active) break;
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      }
+    };
+    attemptEmbed();
     const updateSize = () => {
       if (!active || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
@@ -205,9 +213,8 @@ export function EmbeddedMirrorWindow({
                   await stopMirror(active.id);
                 }
               } catch (_) {}
-              win.close().catch(console.error);
+              await win.destroy().catch(() => win.close().catch(console.error));
             }}
-            className="rounded p-1 text-zinc-400 hover:bg-red-900/50 hover:text-red-300 transition-colors"
             aria-label="Close"
           >
             <X className="h-3.5 w-3.5" />

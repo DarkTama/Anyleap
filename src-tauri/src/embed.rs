@@ -46,7 +46,6 @@ mod win_embed {
         }
         BOOL(1)
     }
-
     fn find_hwnd_by_pid(target_pid: u32) -> Option<HWND> {
         let mut data = EnumData {
             target_pid,
@@ -54,6 +53,27 @@ mod win_embed {
         };
         let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
         data.hwnd
+    }
+
+    fn find_hwnd_by_pid_or_title(target_pid: u32, serial: &str) -> Option<HWND> {
+        if let Some(h) = find_hwnd_by_pid(target_pid) {
+            return Some(h);
+        }
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+        let titles = [
+            format!("AnyLeap Camera — {}", serial),
+            format!("AnyLeap — {}", serial),
+        ];
+        for t in &titles {
+            let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
+            if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
+                if !hwnd.0.is_null() && unsafe { IsWindowVisible(hwnd).as_bool() } {
+                    return Some(hwnd);
+                }
+            }
+        }
+        None
     }
 
     pub async fn embed_mirror_impl(
@@ -73,14 +93,14 @@ mod win_embed {
         }
         .ok_or_else(|| format!("No active session found for serial '{}'", serial))?;
 
-        // scrcpy may take a brief moment to create its window; retry for up to 3 seconds.
+        // scrcpy may take a brief moment (especially on wireless) to create its window; retry for up to 15 seconds.
         let mut scrcpy_hwnd_raw: Option<isize> = None;
-        for _ in 0..60 {
-            if let Some(h) = find_hwnd_by_pid(target_pid) {
+        for _ in 0..150 {
+            if let Some(h) = find_hwnd_by_pid_or_title(target_pid, serial) {
                 scrcpy_hwnd_raw = Some(h.0 as isize);
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         let scrcpy_hwnd_raw = scrcpy_hwnd_raw

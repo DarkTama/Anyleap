@@ -46,7 +46,7 @@ function App() {
           const mirrorLabel = `mirror-${exited.serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
           const closeMirror = () => {
             WebviewWindow.getByLabel(mirrorLabel)
-              .then((w) => w?.close().catch(() => {}))
+              .then((w) => w?.destroy().catch(() => w?.close().catch(() => {})))
               .catch(() => {});
           };
           closeMirror();
@@ -147,7 +147,7 @@ function App() {
       // Close any mirror windows whose sessions have ended
       for (const w of allWindows) {
         if (w.label.startsWith("mirror-") && !activeMirrorLabels.has(w.label)) {
-          await w.close().catch(() => {});
+          await w.destroy().catch(() => w.close().catch(() => {}));
         }
       }
 

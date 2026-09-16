@@ -95,7 +95,13 @@ export function ControlBar({
       .then(() => setDeviceToggle(serial, "screenOff", next))
       .catch((e) => setError(String(e)));
   };
-  const rotate = () => toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
+  const rotate = () => {
+    if (sessionMode === "camera") {
+      sendCameraShortcut(serial, "rotate_cw").catch((e) => setError(String(e)));
+    } else {
+      toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
+    }
+  };
   const toggleSwipeScroll = () => {
     const next = !swipeScroll;
     setWheelSwipe(serial, next)

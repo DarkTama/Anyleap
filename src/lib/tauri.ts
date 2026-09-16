@@ -72,7 +72,14 @@ export const listDeviceCameras = (serial: string) =>
 export const startCameraMirror = (serial: string, settings: CameraSettings) =>
   invoke<SessionInfo>("start_camera_mirror", { serial, settings });
 
-export type CameraAction = "torch_on" | "torch_off" | "zoom_in" | "zoom_out";
+export type CameraAction =
+  | "torch_on"
+  | "torch_off"
+  | "zoom_in"
+  | "zoom_out"
+  | "rotate"
+  | "rotate_cw"
+  | "rotate_ccw";
 
 export const sendCameraShortcut = (serial: string, action: CameraAction) =>
   invoke<void>("send_camera_shortcut", { serial, action });
