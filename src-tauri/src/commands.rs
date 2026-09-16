@@ -342,7 +342,11 @@ pub fn build_scrcpy_camera_args(serial: &str, s: &CameraSettings) -> Vec<String>
     if let Some(ref size) = s.size {
         if !size.is_empty() {
             a.push(format!("--camera-size={}", size));
+        } else {
+            a.push("--camera-size=1920x1080".into());
         }
+    } else {
+        a.push("--camera-size=1920x1080".into());
     }
     if let Some(fps) = s.fps {
         if fps > 0 {
@@ -479,6 +483,8 @@ fn stderr_suggests_encoder_failure(s: &str) -> bool {
         || low.contains("encoding error")
         || low.contains("server connection failed")
         || low.contains("demuxer 'video'")
+        || low.contains("demuxer error")
+        || low.contains("camera configuration error")
         || low.contains("connection error")
         || low.contains("failed to start")
 }
@@ -490,11 +496,17 @@ fn degrade_args(args: &[String]) -> Vec<String> {
         .filter(|a| {
             !a.starts_with("--max-fps")
                 && !a.starts_with("--video-codec")
+                && !a.starts_with("--camera-size")
+                && !a.starts_with("--camera-fps")
                 && a.as_str() != "--no-audio"
         })
         .cloned()
         .collect();
     out.push("--video-codec=h264".to_string());
+    if args.iter().any(|a| a.starts_with("--video-source=camera")) {
+        out.push("--camera-size=1280x720".to_string());
+        out.push("--camera-fps=30".to_string());
+    }
     out.push("--no-audio".to_string());
     out
 }
@@ -685,6 +697,17 @@ fn spawn_session(
                     if let Some(w) = app2.get_webview_window(&mirror_label) {
                         let _ = w.close();
                     }
+                    let app_clean = app2.clone();
+                    let mirror_label_clean = mirror_label.clone();
+                    tauri::async_runtime::spawn(async move {
+                        for _ in 0..12 {
+                            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                            if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
+                                let _ = w.close();
+                                break;
+                            }
+                        }
+                    });
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
                     if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf)
@@ -767,41 +790,95 @@ pub fn start_camera_mirror(
     spawn_session(&app, serial, args, false, "camera")
 }
 
-/// Send camera shortcut to the running scrcpy camera window.
 #[tauri::command]
 pub fn send_camera_shortcut(
-    _app: AppHandle,
+    app: AppHandle,
     serial: String,
     action: String,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use windows::core::PCWSTR;
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
+        use windows::core::{BOOL, PCWSTR};
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+        };
 
         extern "system" {
+            fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+            fn GetCurrentThreadId() -> u32;
         }
 
-        let titles = [
-            format!("AnyLeap Camera — {}", serial),
-            format!("AnyLeap — {}", serial),
-        ];
+        struct EnumData {
+            target_pid: u32,
+            hwnd: Option<HWND>,
+        }
 
-        let mut found_hwnd = None;
-        for t in &titles {
-            let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
-            if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
-                if !hwnd.0.is_null() {
-                    found_hwnd = Some(hwnd);
-                    break;
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd).as_bool() {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let data = &mut *(lparam.0 as *mut EnumData);
+                if pid == data.target_pid {
+                    data.hwnd = Some(hwnd);
+                    return BOOL(0);
                 }
             }
+            BOOL(1)
         }
 
-        let hwnd = found_hwnd.ok_or_else(|| format!("scrcpy camera window for {} not found", serial))?;
+        let embedded_hwnd = crate::embed::get_embedded_scrcpy_hwnd(&serial)
+            .map(|h| HWND(h as *mut _));
+
+        let hwnd = if let Some(h) = embedded_hwnd {
+            Some(h)
+        } else {
+            let target_pid = {
+                let state = app.state::<AppState>();
+                let map = state.sessions.lock().map_err(poison_error)?;
+                map.values().find(|s| s.serial == serial).map(|s| s.pid)
+            };
+
+            let mut by_pid = None;
+            if let Some(pid) = target_pid {
+                let mut data = EnumData {
+                    target_pid: pid,
+                    hwnd: None,
+                };
+                let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
+                by_pid = data.hwnd;
+            }
+
+            if by_pid.is_some() {
+                by_pid
+            } else {
+                let titles = [
+                    format!("AnyLeap Camera — {}", serial),
+                    format!("AnyLeap — {}", serial),
+                ];
+                let mut found = None;
+                for t in &titles {
+                    let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
+                    if let Ok(h) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
+                        if !h.0.is_null() {
+                            found = Some(h);
+                            break;
+                        }
+                    }
+                }
+                found
+            }
+        };
+
+        let hwnd = hwnd.ok_or_else(|| format!("scrcpy camera window for {} not found", serial))?;
         unsafe {
+            let target_thread = GetWindowThreadProcessId(hwnd, None);
+            let current_thread = GetCurrentThreadId();
+            let attached = AttachThreadInput(current_thread, target_thread, 1);
             let _ = SetForegroundWindow(hwnd);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
             const VK_MENU: u8 = 0x12;
             const VK_SHIFT: u8 = 0x10;
             const VK_T: u8 = 0x54;
@@ -836,9 +913,22 @@ pub fn send_camera_shortcut(
                     keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0);
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
-                _ => return Err(format!("unknown camera shortcut action: {}", action)),
+                _ => {
+                    if attached != 0 {
+                        let _ = AttachThreadInput(current_thread, target_thread, 0);
+                    }
+                    return Err(format!("unknown camera shortcut action: {}", action));
+                }
+            }
+
+            if attached != 0 {
+                let _ = AttachThreadInput(current_thread, target_thread, 0);
             }
         }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, serial, action);
     }
     Ok(())
 }
@@ -1008,6 +1098,17 @@ pub async fn stop_mirror(
         if let Some(w) = app.get_webview_window(&mirror_label) {
             let _ = w.close();
         }
+        let app_clean = app.clone();
+        let mirror_label_clean = mirror_label.clone();
+        tauri::async_runtime::spawn(async move {
+            for _ in 0..12 {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
+                    let _ = w.close();
+                    break;
+                }
+            }
+        });
         s.child.kill().map_err(|e| e.to_string())
     } else {
         Err("no such session".into())
@@ -1653,6 +1754,27 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert!(args.contains(&"--camera-torch".to_string()));
         assert!(!args.contains(&"--no-audio".to_string()));
         assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
+        assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
+
+        // Without size, defaults to 1920x1080
+        let s_default = CameraSettings {
+            facing: "front".into(),
+            camera_id: None,
+            size: None,
+            fps: None,
+            high_speed: false,
+            torch: false,
+            no_audio: true,
+        };
+        let args_default = build_scrcpy_camera_args("SER123", &s_default);
+        assert!(args_default.contains(&"--camera-size=1920x1080".to_string()));
+        assert!(args_default.contains(&"--no-audio".to_string()));
+
+        // degrade_args on camera source falls back to 1280x720 30fps
+        let degraded = degrade_args(&args);
+        assert!(degraded.contains(&"--camera-size=1280x720".to_string()));
+        assert!(degraded.contains(&"--camera-fps=30".to_string()));
+        assert!(degraded.contains(&"--no-audio".to_string()));
     }
 
     #[test]

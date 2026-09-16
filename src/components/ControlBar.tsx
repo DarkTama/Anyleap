@@ -27,6 +27,8 @@ import {
   toggleDeviceOrientation,
   sendCameraShortcut,
   restartWithScreenOff,
+  listSessions,
+  stopMirror,
 } from "@/lib/tauri";
 import type { SessionMode } from "@/lib/types";
 import { KEYCODE } from "@/lib/keycodes";
@@ -153,6 +155,21 @@ export function ControlBar({
                 Rotate
               </Button>
             )}
+            <Button
+              variant="outline"
+              className={`${sz.btn} text-rose-400 hover:bg-rose-950/50 hover:text-rose-300 border-rose-900/40`}
+              onClick={async () => {
+                const sessions = await listSessions().catch(() => []);
+                const current = sessions.find((s) => s.serial === serial);
+                if (current) {
+                  stopMirror(current.id).catch((e) => setError(String(e)));
+                }
+              }}
+              title="Stop Camera Stream"
+            >
+              <Power className={sz.icon} />
+              Stop
+            </Button>
           </>
         ) : (
           <>

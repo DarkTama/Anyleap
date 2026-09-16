@@ -28,7 +28,7 @@ export function CameraLaunchDialog({
   const [cameras, setCameras] = useState<CameraDeviceOption[]>([]);
   const [facing, setFacing] = useState<"back" | "front" | "external">("back");
   const [selectedId, setSelectedId] = useState<string>("");
-  const [resolution, setResolution] = useState<string>("");
+  const [resolution, setResolution] = useState<string>("1920x1080");
   const [fps, setFps] = useState<number>(30);
   const [torch, setTorch] = useState<boolean>(false);
   const [micAudio, setMicAudio] = useState<boolean>(true);
@@ -186,10 +186,10 @@ export function CameraLaunchDialog({
                 value={resolution}
                 onChange={(e) => setResolution(e.target.value)}
               >
-                <option value="">Full Sensor (Auto)</option>
-                <option value="1920x1080">1080p FHD (1920×1080)</option>
+                <option value="1920x1080">1080p FHD (1920×1080) — Recommended</option>
                 <option value="1280x720">720p HD (1280×720)</option>
                 <option value="3840x2160">4K UHD (3840×2160)</option>
+                <option value="">Full Sensor (Auto)</option>
               </select>
             </div>
 

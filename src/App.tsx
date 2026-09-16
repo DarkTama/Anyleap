@@ -44,9 +44,14 @@ function App() {
         removeSession(e.payload.id);
         if (exited) {
           const mirrorLabel = `mirror-${exited.serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-          WebviewWindow.getByLabel(mirrorLabel)
-            .then((w) => w?.close().catch(() => {}))
-            .catch(() => {});
+          const closeMirror = () => {
+            WebviewWindow.getByLabel(mirrorLabel)
+              .then((w) => w?.close().catch(() => {}))
+              .catch(() => {});
+          };
+          closeMirror();
+          setTimeout(closeMirror, 250);
+          setTimeout(closeMirror, 750);
         }
         if (e.payload.last_error) setError(e.payload.last_error);
         setErrorDetails(e.payload.stderr || null);
@@ -149,6 +154,7 @@ function App() {
       if (sessions.length > 0) {
         const lastSession = sessions[sessions.length - 1];
         const serial = lastSession.serial;
+        const mode = lastSession.mode || "display";
         const mirrorLabel = `mirror-${serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         const existingMirror = await WebviewWindow.getByLabel(mirrorLabel);
         const isEmbedded = useAppStore.getState().settings.embedded;
@@ -160,8 +166,8 @@ function App() {
           if (!existingMirror) {
             try {
               const w = new WebviewWindow(mirrorLabel, {
-                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}`,
-                title: `AnyLeap — ${serial}`,
+                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}`,
+                title: mode === "camera" ? `AnyLeap Camera — ${serial}` : `AnyLeap — ${serial}`,
                 width: 480,
                 height: 860,
                 resizable: true,

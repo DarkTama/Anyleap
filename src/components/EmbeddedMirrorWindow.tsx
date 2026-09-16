@@ -1,42 +1,74 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Minus, Square, X, GripHorizontal } from "lucide-react";
+import { Camera, Minus, Square, X, GripHorizontal } from "lucide-react";
 import {
   embedMirror,
   resizeEmbeddedMirror,
   pushClipboardImage,
   stopMirror,
+  listSessions,
   onSessionExited,
 } from "@/lib/tauri";
 import { ControlBar } from "./ControlBar";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
-import { useAppStore } from "@/store/useAppStore";
+import type { SessionInfo, SessionMode } from "@/lib/types";
 
-export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
+export function EmbeddedMirrorWindow({
+  serial,
+  initialMode = "display",
+}: {
+  serial: string;
+  initialMode?: SessionMode;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
   const [toast, setToast] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [mode, setMode] = useState<SessionMode>(initialMode);
   const win = getCurrentWebviewWindow();
-  const sessions = useAppStore((s) => s.sessions);
-  const session = sessions.find((s) => s.serial === serial);
 
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
   }, []);
+
   useEffect(() => {
-    const unlistenPromise = onSessionExited((e) => {
-      const activeSessions = useAppStore.getState().sessions;
-      const current = activeSessions.find((s) => s.id === e.payload.id);
-      if (
-        current?.serial === serial ||
-        !activeSessions.some((s) => s.serial === serial && s.id !== e.payload.id)
-      ) {
+    let active = true;
+    listSessions()
+      .then((sessions) => {
+        if (!active) return;
+        const found = sessions.find((s) => s.serial === serial);
+        if (!found) {
+          // Session already exited or failed on startup; close immediately to prevent black screen
+          win.close().catch(() => {});
+        } else {
+          setSession(found);
+          if (found.mode) {
+            setMode(found.mode as SessionMode);
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [serial, win]);
+
+  useEffect(() => {
+    const unlistenPromise = onSessionExited(async (e) => {
+      if (session?.id === e.payload.id) {
         win.close().catch(() => {});
+      } else {
+        const activeSessions = await listSessions().catch(() => []);
+        if (!activeSessions.some((s) => s.serial === serial)) {
+          win.close().catch(() => {});
+        }
       }
     });
 
     const unlistenClosePromise = win.onCloseRequested(async () => {
-      const active = useAppStore.getState().sessions.find((s) => s.serial === serial);
+      const activeSessions = await listSessions().catch(() => []);
+      const active = activeSessions.find((s) => s.serial === serial);
       if (active) {
         await stopMirror(active.id).catch(() => {});
       }
@@ -46,7 +78,7 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
       unlistenPromise.then((un) => un()).catch(() => {});
       unlistenClosePromise.then((un) => un()).catch(() => {});
     };
-  }, [serial, win]);
+  }, [serial, session, win]);
 
   useEffect(() => {
     const label = win.label;
@@ -127,8 +159,20 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
         className="flex h-9 cursor-grab items-center justify-between border-b border-zinc-800/80 bg-zinc-900 px-3 shrink-0 select-none active:cursor-grabbing"
       >
         <div className="flex items-center gap-2 pointer-events-none">
-          <GripHorizontal className="h-3.5 w-3.5 text-zinc-500" />
-          <span className="text-xs font-medium text-zinc-200">AnyLeap — {serial}</span>
+          {mode === "camera" ? (
+            <>
+              <Camera className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="text-xs font-medium text-zinc-200">AnyLeap Camera — {serial}</span>
+              <span className="rounded bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300 uppercase tracking-wider">
+                Studio
+              </span>
+            </>
+          ) : (
+            <>
+              <GripHorizontal className="h-3.5 w-3.5 text-zinc-500" />
+              <span className="text-xs font-medium text-zinc-200">AnyLeap — {serial}</span>
+            </>
+          )}
         </div>
         <div
           className="flex items-center gap-1"
@@ -153,10 +197,14 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (session) {
-                stopMirror(session.id).catch(() => {});
-              }
+            onClick={async () => {
+              try {
+                const activeSessions = await listSessions();
+                const active = activeSessions.find((s) => s.serial === serial);
+                if (active) {
+                  await stopMirror(active.id);
+                }
+              } catch (_) {}
               win.close().catch(console.error);
             }}
             className="rounded p-1 text-zinc-400 hover:bg-red-900/50 hover:text-red-300 transition-colors"
@@ -183,8 +231,8 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
             config={config}
             orientation="vertical"
             showOrientToggle={true}
-            showSwipeScroll={true}
-            sessionMode={session?.mode}
+            showSwipeScroll={mode !== "camera"}
+            sessionMode={mode}
           />
         </div>
       </div>
