@@ -91,9 +91,19 @@ export function ControlBar({
   };
   const toggleScreenOff = () => {
     const next = !screenOff;
-    restartWithScreenOff(serial, next)
-      .then(() => setDeviceToggle(serial, "screenOff", next))
-      .catch((e) => setError(String(e)));
+    if (sessionMode === "camera") {
+      sendKeyevent(serial, KEYCODE.POWER)
+        .then(() => setDeviceToggle(serial, "screenOff", next))
+        .catch((e) => setError(String(e)));
+    } else {
+      restartWithScreenOff(serial, next)
+        .then(() => setDeviceToggle(serial, "screenOff", next))
+        .catch(() => {
+          sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
+            .then(() => setDeviceToggle(serial, "screenOff", next))
+            .catch((e) => setError(String(e)));
+        });
+    }
   };
   const rotate = () => {
     if (sessionMode === "camera") {

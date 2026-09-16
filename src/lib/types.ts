@@ -28,6 +28,7 @@ export interface SessionInfo {
 
 export interface SessionExited {
   id: string;
+  serial: string;
   code: number | null;
   signal: number | null;
   last_error: string;

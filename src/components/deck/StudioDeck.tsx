@@ -475,17 +475,22 @@ export function StudioDeck() {
               )}
 
               {currentMode === "camera" && (
-                <div className="rounded-xl border border-[#1e2330] bg-[#12151d]/60 p-4">
+                <div className="rounded-xl border border-[#1e2330] bg-[#12151d]/60 p-4 space-y-2">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-amber-400" />
                     <span className="text-xs font-semibold text-zinc-200">
                       High-Definition Camera Studio Ready
                     </span>
                   </div>
-                  <p className="mt-1 text-xs text-zinc-400 leading-relaxed">
-                    Uses Android camera streams for Discord, OBS, or Zoom. Audio capture is
-                    muted by default to avoid echo feedback loops.
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Streams high-fidelity Android camera video to your PC workstation without phone battery drain.
                   </p>
+                  <div className="rounded-lg border border-cyan-500/20 bg-cyan-950/20 p-2.5 text-[11px] text-zinc-300">
+                    <span className="font-semibold text-cyan-300">Google Meet, Zoom & OBS Usage:</span>
+                    <p className="mt-0.5 text-zinc-400">
+                      In OBS Studio, add <span className="font-mono text-cyan-200">Window Capture → AnyLeap Camera Studio</span>, then click <span className="font-semibold text-emerald-400">Start Virtual Camera</span> to select it as your camera in Google Meet and browsers.
+                    </p>
+                  </div>
                 </div>
               )}
 

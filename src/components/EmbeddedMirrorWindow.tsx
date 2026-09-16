@@ -61,7 +61,7 @@ export function EmbeddedMirrorWindow({
 
   useEffect(() => {
     const unlistenPromise = onSessionExited(async (e) => {
-      if (session?.id === e.payload.id) {
+      if (e.payload.serial === serial || session?.id === e.payload.id) {
         await win.destroy().catch(() => win.close().catch(() => {}));
       } else {
         const activeSessions = await listSessions().catch(() => []);
@@ -71,7 +71,8 @@ export function EmbeddedMirrorWindow({
       }
     });
 
-    const unlistenClosePromise = win.onCloseRequested(async () => {
+    const unlistenClosePromise = win.onCloseRequested(async (e) => {
+      e.preventDefault();
       const activeSessions = await listSessions().catch(() => []);
       const active = activeSessions.find((s) => s.serial === serial);
       if (active) {
@@ -210,16 +211,20 @@ export function EmbeddedMirrorWindow({
           </button>
           <button
             type="button"
-            onClick={async () => {
-              try {
-                const activeSessions = await listSessions();
-                const active = activeSessions.find((s) => s.serial === serial);
-                if (active) {
-                  await stopMirror(active.id);
-                }
-              } catch (_) {}
-              await win.destroy().catch(() => win.close().catch(console.error));
+            onClick={() => {
+              if (session) {
+                stopMirror(session.id).catch(() => {});
+              } else {
+                listSessions()
+                  .then((sessions) => {
+                    const active = sessions.find((s) => s.serial === serial);
+                    if (active) stopMirror(active.id).catch(() => {});
+                  })
+                  .catch(() => {});
+              }
+              win.destroy().catch(() => win.close().catch(() => {}));
             }}
+            className="rounded p-1 text-zinc-400 hover:bg-red-900/50 hover:text-red-300 transition-colors cursor-pointer"
             aria-label="Close"
           >
             <X className="h-3.5 w-3.5" />

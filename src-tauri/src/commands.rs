@@ -71,6 +71,7 @@ pub struct CameraDeviceOption {
 #[derive(Serialize, Clone)]
 struct SessionExited {
     id: String,
+    serial: String,
     code: Option<i32>,
     signal: Option<i32>,
     last_error: String,
@@ -749,7 +750,7 @@ fn spawn_session(
                             .collect::<String>()
                     );
                     if let Some(w) = app2.get_webview_window(&mirror_label) {
-                        let _ = w.close();
+                        let _ = w.destroy();
                     }
                     let app_clean = app2.clone();
                     let mirror_label_clean = mirror_label.clone();
@@ -757,7 +758,7 @@ fn spawn_session(
                         for _ in 0..12 {
                             tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                             if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
-                                let _ = w.close();
+                                let _ = w.destroy();
                                 break;
                             }
                         }
@@ -771,6 +772,7 @@ fn spawn_session(
                             "session-exited",
                             SessionExited {
                                 id: id2.clone(),
+                                serial: serial2.clone(),
                                 code: payload.code,
                                 signal: payload.signal,
                                 last_error: String::new(),
@@ -785,6 +787,7 @@ fn spawn_session(
                         "session-exited",
                         SessionExited {
                             id: id2.clone(),
+                            serial: serial2.clone(),
                             code: payload.code,
                             signal: payload.signal,
                             last_error: summary,
@@ -862,6 +865,7 @@ pub fn send_camera_shortcut(
             fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
             fn GetCurrentThreadId() -> u32;
+            fn SetFocus(hWnd: HWND) -> HWND;
         }
 
         struct EnumData {
@@ -913,13 +917,17 @@ pub fn send_camera_shortcut(
             let current_thread = GetCurrentThreadId();
             let attached = AttachThreadInput(current_thread, target_thread, 1);
             let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(hwnd);
             std::thread::sleep(std::time::Duration::from_millis(50));
 
             const VK_MENU: u8 = 0x12;
             const VK_SHIFT: u8 = 0x10;
             const VK_T: u8 = 0x54;
+            const VK_LEFT: u8 = 0x25;
             const VK_UP: u8 = 0x26;
+            const VK_RIGHT: u8 = 0x27;
             const VK_DOWN: u8 = 0x28;
+            const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
             const KEYEVENTF_KEYUP: u32 = 0x0002;
 
             match action.as_str() {
@@ -939,28 +947,26 @@ pub fn send_camera_shortcut(
                 }
                 "zoom_in" => {
                     keybd_event(VK_MENU, 0, 0, 0);
-                    keybd_event(VK_UP, 0, 0, 0);
-                    keybd_event(VK_UP, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_UP, 0, KEYEVENTF_EXTENDEDKEY, 0);
+                    keybd_event(VK_UP, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
                 "zoom_out" => {
                     keybd_event(VK_MENU, 0, 0, 0);
-                    keybd_event(VK_DOWN, 0, 0, 0);
-                    keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_DOWN, 0, KEYEVENTF_EXTENDEDKEY, 0);
+                    keybd_event(VK_DOWN, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
                 "rotate" | "rotate_cw" => {
-                    const VK_RIGHT: u8 = 0x27;
                     keybd_event(VK_MENU, 0, 0, 0);
-                    keybd_event(VK_RIGHT, 0, 0, 0);
-                    keybd_event(VK_RIGHT, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_RIGHT, 0, KEYEVENTF_EXTENDEDKEY, 0);
+                    keybd_event(VK_RIGHT, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
                 "rotate_ccw" => {
-                    const VK_LEFT: u8 = 0x25;
                     keybd_event(VK_MENU, 0, 0, 0);
-                    keybd_event(VK_LEFT, 0, 0, 0);
-                    keybd_event(VK_LEFT, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_LEFT, 0, KEYEVENTF_EXTENDEDKEY, 0);
+                    keybd_event(VK_LEFT, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
                 _ => {
@@ -1015,6 +1021,7 @@ pub fn restart_with_screen_off(
             fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
             fn GetCurrentThreadId() -> u32;
+            fn SetFocus(hWnd: HWND) -> HWND;
         }
 
         struct EnumData {
@@ -1058,6 +1065,7 @@ pub fn restart_with_screen_off(
                     let current_thread = GetCurrentThreadId();
                     let attached = AttachThreadInput(current_thread, target_thread, 1);
                     let _ = SetForegroundWindow(hwnd);
+                    let _ = SetFocus(hwnd);
                     std::thread::sleep(std::time::Duration::from_millis(50));
 
                     const VK_MENU: u8 = 0x12;
@@ -1079,7 +1087,6 @@ pub fn restart_with_screen_off(
                     if attached != 0 {
                         let _ = AttachThreadInput(current_thread, target_thread, 0);
                     }
-
                     // Also post direct key message as fallback guarantee for SDL window
                     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSKEYDOWN, WM_SYSKEYUP};
                     const VK_O_WPARAM: windows::Win32::Foundation::WPARAM = windows::Win32::Foundation::WPARAM(0x4F);
@@ -1146,7 +1153,7 @@ pub async fn stop_mirror(
                 .collect::<String>()
         );
         if let Some(w) = app.get_webview_window(&mirror_label) {
-            let _ = w.close();
+            let _ = w.destroy();
         }
         let app_clean = app.clone();
         let mirror_label_clean = mirror_label.clone();
@@ -1154,7 +1161,7 @@ pub async fn stop_mirror(
             for _ in 0..12 {
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
-                    let _ = w.close();
+                    let _ = w.destroy();
                     break;
                 }
             }

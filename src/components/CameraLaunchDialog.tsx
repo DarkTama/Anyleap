@@ -120,7 +120,7 @@ export function CameraLaunchDialog({
             <span className="font-medium text-zinc-900 dark:text-zinc-100">
               {deviceName ?? serial}
             </span>{" "}
-            as a PC camera source.
+            as a PC camera source. For Google Meet or OBS, use OBS Window Capture + Virtual Camera.
           </div>
 
           {error && (

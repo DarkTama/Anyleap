@@ -38,20 +38,20 @@ function App() {
     const unlisteners = [
       onSessionStarted((e) => upsertSession(e.payload)),
       onSessionExited((e) => {
-        const exited = useAppStore
-          .getState()
-          .sessions.find((x) => x.id === e.payload.id);
         removeSession(e.payload.id);
-        if (exited) {
-          const mirrorLabel = `mirror-${exited.serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+        const targetSerial =
+          e.payload.serial ||
+          useAppStore.getState().sessions.find((x) => x.id === e.payload.id)?.serial;
+        if (targetSerial) {
+          const mirrorLabel = `mirror-${targetSerial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
           const closeMirror = () => {
             WebviewWindow.getByLabel(mirrorLabel)
               .then((w) => w?.destroy().catch(() => w?.close().catch(() => {})))
               .catch(() => {});
           };
           closeMirror();
-          setTimeout(closeMirror, 250);
-          setTimeout(closeMirror, 750);
+          setTimeout(closeMirror, 150);
+          setTimeout(closeMirror, 500);
         }
         if (e.payload.last_error) setError(e.payload.last_error);
         setErrorDetails(e.payload.stderr || null);
