@@ -25,6 +25,11 @@ mod win_embed {
     pub fn get_embedded_hwnd_for_serial(serial: &str) -> Option<isize> {
         get_embedded_map().lock().ok().and_then(|map| map.get(serial).copied())
     }
+    pub fn remove_embedded_hwnd_for_serial(serial: &str) {
+        if let Ok(mut map) = get_embedded_map().lock() {
+            map.remove(serial);
+        }
+    }
 
     struct EnumData {
         target_pid: u32,
@@ -222,5 +227,16 @@ pub fn get_embedded_scrcpy_hwnd(serial: &str) -> Option<isize> {
     {
         let _ = serial;
         None
+    }
+}
+
+pub fn remove_embedded_scrcpy_hwnd(serial: &str) {
+    #[cfg(windows)]
+    {
+        win_embed::remove_embedded_hwnd_for_serial(serial);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = serial;
     }
 }

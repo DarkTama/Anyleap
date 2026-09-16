@@ -36,11 +36,17 @@ pub struct SessionInfo {
 #[serde(rename_all = "camelCase")]
 pub struct CameraSettings {
     pub facing: String,
+    #[serde(default)]
     pub camera_id: Option<String>,
+    #[serde(default)]
     pub size: Option<String>,
+    #[serde(default)]
     pub fps: Option<u32>,
+    #[serde(default)]
     pub high_speed: bool,
+    #[serde(default)]
     pub torch: bool,
+    #[serde(default)]
     pub no_audio: bool,
 }
 
@@ -668,6 +674,17 @@ fn spawn_session(
                             Err(e) => eprintln!("Sessions mutex poisoned on session exit: {}", e),
                         }
                     }
+                    crate::embed::remove_embedded_scrcpy_hwnd(&serial2);
+                    let mirror_label = format!(
+                        "mirror-{}",
+                        serial2
+                            .chars()
+                            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                            .collect::<String>()
+                    );
+                    if let Some(w) = app2.get_webview_window(&mirror_label) {
+                        let _ = w.close();
+                    }
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
                     if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf)
@@ -976,8 +993,20 @@ pub async fn stop_mirror(
         // device restore its original density and launcher layout, which can
         // get stuck otherwise.
         if s.display_id.is_some() {
-            let _ = send_keyevent(app, s.serial.clone(), 4).await;
+            let _ = send_keyevent(app.clone(), s.serial.clone(), 4).await;
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        let serial = s.serial.clone();
+        crate::embed::remove_embedded_scrcpy_hwnd(&serial);
+        let mirror_label = format!(
+            "mirror-{}",
+            serial
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .collect::<String>()
+        );
+        if let Some(w) = app.get_webview_window(&mirror_label) {
+            let _ = w.close();
         }
         s.child.kill().map_err(|e| e.to_string())
     } else {
@@ -1624,6 +1653,19 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert!(args.contains(&"--camera-torch".to_string()));
         assert!(!args.contains(&"--no-audio".to_string()));
         assert!(args.contains(&"--window-title=AnyLeap Camera — SER123".to_string()));
+    }
+
+    #[test]
+    fn test_camera_settings_deserialization_defaults() {
+        let json = r#"{"facing":"back"}"#;
+        let s: CameraSettings = serde_json::from_str(json).expect("should deserialize with defaults");
+        assert_eq!(s.facing, "back");
+        assert_eq!(s.camera_id, None);
+        assert_eq!(s.size, None);
+        assert_eq!(s.fps, None);
+        assert_eq!(s.high_speed, false);
+        assert_eq!(s.torch, false);
+        assert_eq!(s.no_audio, false);
     }
 
     #[test]

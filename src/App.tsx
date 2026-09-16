@@ -38,7 +38,16 @@ function App() {
     const unlisteners = [
       onSessionStarted((e) => upsertSession(e.payload)),
       onSessionExited((e) => {
+        const exited = useAppStore
+          .getState()
+          .sessions.find((x) => x.id === e.payload.id);
         removeSession(e.payload.id);
+        if (exited) {
+          const mirrorLabel = `mirror-${exited.serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+          WebviewWindow.getByLabel(mirrorLabel)
+            .then((w) => w?.close().catch(() => {}))
+            .catch(() => {});
+        }
         if (e.payload.last_error) setError(e.payload.last_error);
         setErrorDetails(e.payload.stderr || null);
         setShowDetails(false);
@@ -124,7 +133,19 @@ function App() {
   // Floating, always-on-top control window: open while mirroring, close when idle.
   useEffect(() => {
     (async () => {
-      const existingControls = await WebviewWindow.getByLabel("controls");
+      const allWindows = await WebviewWindow.getAll();
+      const existingControls = allWindows.find((w) => w.label === "controls");
+      const activeMirrorLabels = new Set(
+        sessions.map((s) => `mirror-${s.serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`)
+      );
+
+      // Close any mirror windows whose sessions have ended
+      for (const w of allWindows) {
+        if (w.label.startsWith("mirror-") && !activeMirrorLabels.has(w.label)) {
+          await w.close().catch(() => {});
+        }
+      }
+
       if (sessions.length > 0) {
         const lastSession = sessions[sessions.length - 1];
         const serial = lastSession.serial;
@@ -134,7 +155,7 @@ function App() {
 
         if (isEmbedded) {
           if (existingControls) {
-            await existingControls.close();
+            await existingControls.close().catch(() => {});
           }
           if (!existingMirror) {
             try {
@@ -153,6 +174,9 @@ function App() {
             }
           }
         } else {
+          if (existingMirror) {
+            await existingMirror.close().catch(() => {});
+          }
           if (!existingControls) {
             try {
               const w = new WebviewWindow("controls", {
@@ -176,7 +200,7 @@ function App() {
           }
         }
       } else {
-        if (existingControls) await existingControls.close();
+        if (existingControls) await existingControls.close().catch(() => {});
       }
     })();
   }, [sessions]);

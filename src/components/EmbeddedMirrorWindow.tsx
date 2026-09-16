@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Minus, Square, X, GripHorizontal } from "lucide-react";
-import { embedMirror, resizeEmbeddedMirror, pushClipboardImage } from "@/lib/tauri";
+import {
+  embedMirror,
+  resizeEmbeddedMirror,
+  pushClipboardImage,
+  stopMirror,
+  onSessionExited,
+} from "@/lib/tauri";
 import { ControlBar } from "./ControlBar";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
 import { useAppStore } from "@/store/useAppStore";
@@ -17,6 +23,30 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
   }, []);
+  useEffect(() => {
+    const unlistenPromise = onSessionExited((e) => {
+      const activeSessions = useAppStore.getState().sessions;
+      const current = activeSessions.find((s) => s.id === e.payload.id);
+      if (
+        current?.serial === serial ||
+        !activeSessions.some((s) => s.serial === serial && s.id !== e.payload.id)
+      ) {
+        win.close().catch(() => {});
+      }
+    });
+
+    const unlistenClosePromise = win.onCloseRequested(async () => {
+      const active = useAppStore.getState().sessions.find((s) => s.serial === serial);
+      if (active) {
+        await stopMirror(active.id).catch(() => {});
+      }
+    });
+
+    return () => {
+      unlistenPromise.then((un) => un()).catch(() => {});
+      unlistenClosePromise.then((un) => un()).catch(() => {});
+    };
+  }, [serial, win]);
 
   useEffect(() => {
     const label = win.label;
@@ -123,7 +153,12 @@ export function EmbeddedMirrorWindow({ serial }: { serial: string }) {
           </button>
           <button
             type="button"
-            onClick={() => win.close().catch(console.error)}
+            onClick={() => {
+              if (session) {
+                stopMirror(session.id).catch(() => {});
+              }
+              win.close().catch(console.error);
+            }}
             className="rounded p-1 text-zinc-400 hover:bg-red-900/50 hover:text-red-300 transition-colors"
             aria-label="Close"
           >

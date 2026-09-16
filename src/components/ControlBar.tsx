@@ -26,6 +26,7 @@ import {
   setWheelSwipe,
   toggleDeviceOrientation,
   sendCameraShortcut,
+  restartWithScreenOff,
 } from "@/lib/tauri";
 import type { SessionMode } from "@/lib/types";
 import { KEYCODE } from "@/lib/keycodes";
@@ -88,13 +89,9 @@ export function ControlBar({
   };
   const toggleScreenOff = () => {
     const next = !screenOff;
-    sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
+    restartWithScreenOff(serial, next)
       .then(() => setDeviceToggle(serial, "screenOff", next))
-      .catch(() => {
-        sendKeyevent(serial, KEYCODE.POWER)
-          .then(() => setDeviceToggle(serial, "screenOff", next))
-          .catch((e) => setError(String(e)));
-      });
+      .catch((e) => setError(String(e)));
   };
   const rotate = () => toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
   const toggleSwipeScroll = () => {

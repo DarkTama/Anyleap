@@ -77,6 +77,7 @@ export function CameraLaunchDialog({
         cameraId: selectedId || undefined,
         size: resolution || undefined,
         fps: fps > 0 ? fps : undefined,
+        highSpeed: false,
         torch,
         noAudio: !micAudio,
       };
