@@ -106,6 +106,8 @@ export const resizeEmbeddedMirror = (
     y,
   });
 
+export const resetDeviceDisplay = (serial: string) =>
+  invoke<void>("reset_device_display", { serial });
 // --- Escrcpy Features (SPEC-07) ---
 
 export const handleDroppedFiles = (serial: string, paths: string[]) =>

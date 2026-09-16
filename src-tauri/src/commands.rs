@@ -315,7 +315,6 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
             a.push(format!("--new-display={}", s.flex_display_size));
         }
         a.push("--flex-display".into());
-        a.push("--no-vd-destroy-content".into());
         if s.hide_virtual_taskbar {
             a.push("--no-vd-system-decorations".into());
         }
@@ -763,6 +762,14 @@ fn spawn_session(
                             }
                         }
                     });
+                    let is_flex = args2.iter().any(|a| a == "--flex-display");
+                    if is_flex {
+                        let app_flex = app2.clone();
+                        let serial_flex = serial2.clone();
+                        tauri::async_runtime::spawn(async move {
+                            cleanup_flex_display(&app_flex, &serial_flex).await;
+                        });
+                    }
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
                     if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf)
@@ -1136,14 +1143,11 @@ pub async fn stop_mirror(
     // Take ownership out of the map, then kill outside the lock.
     let session = state.sessions.lock().map_err(poison_error)?.remove(&session_id);
     if let Some(s) = session {
-        // For flex mode, send a BACK keypress before killing. This helps the
-        // device restore its original density and launcher layout, which can
-        // get stuck otherwise.
-        if s.display_id.is_some() {
-            let _ = send_keyevent(app.clone(), s.serial.clone(), 4).await;
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        }
         let serial = s.serial.clone();
+        let is_flex = s.display_id.is_some() || s.args.iter().any(|a| a == "--flex-display");
+        if is_flex {
+            cleanup_flex_display(&app, &serial).await;
+        }
         crate::embed::remove_embedded_scrcpy_hwnd(&serial);
         let mirror_label = format!(
             "mirror-{}",
@@ -1170,6 +1174,62 @@ pub async fn stop_mirror(
     } else {
         Err("no such session".into())
     }
+}
+/// Clean up virtual display remnants on Android: reset density & size, and restart the home launcher
+/// so physical phone display icons and grid layout are restored to native metrics.
+pub async fn cleanup_flex_display(app: &AppHandle, serial: &str) {
+    if let Ok(cmd) = adb_cmd(app) {
+        let _ = cmd.args(["-s", serial, "shell", "wm", "density", "reset"]).output().await;
+    }
+    if let Ok(cmd) = adb_cmd(app) {
+        let _ = cmd.args(["-s", serial, "shell", "wm", "size", "reset"]).output().await;
+    }
+    let mut launcher_pkg: Option<String> = None;
+    if let Ok(cmd) = adb_cmd(app) {
+        if let Ok(out) = cmd
+            .args([
+                "-s",
+                serial,
+                "shell",
+                "cmd",
+                "package",
+                "resolve-activity",
+                "--brief",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.HOME",
+            ])
+            .output()
+            .await
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                if let Some(pos) = line.find('/') {
+                    let candidate = line[..pos].trim();
+                    if candidate.contains('.') && !candidate.contains(' ') {
+                        launcher_pkg = Some(candidate.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(pkg) = launcher_pkg {
+        if let Ok(cmd) = adb_cmd(app) {
+            let _ = cmd.args(["-s", serial, "shell", "am", "force-stop", &pkg]).output().await;
+        }
+    }
+    if let Ok(cmd) = adb_cmd(app) {
+        let _ = cmd.args(["-s", serial, "shell", "input", "keyevent", "3"]).output().await;
+    }
+}
+
+/// Reset any display overrides on the physical device (wm density/size reset + launcher restart).
+#[tauri::command]
+pub async fn reset_device_display(app: AppHandle, serial: String) -> Result<(), String> {
+    cleanup_flex_display(&app, &serial).await;
+    Ok(())
 }
 
 /// List currently running sessions.

@@ -49,6 +49,7 @@ pub fn run() {
             commands::get_system_resolution,
             commands::push_clipboard_image,
             commands::get_battery_info,
+            commands::reset_device_display,
             wheel_swipe::set_wheel_swipe,
             embed::embed_mirror,
             embed::resize_embedded_mirror,

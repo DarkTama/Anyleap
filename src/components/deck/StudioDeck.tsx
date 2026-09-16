@@ -21,6 +21,7 @@ import {
   getSystemResolution,
   connectDevice,
   discoverWireless,
+  resetDeviceDisplay,
 } from "@/lib/tauri";
 import { DeviceRack } from "./DeviceRack";
 import { LaunchMatrix, type StudioMode } from "./LaunchMatrix";
@@ -322,15 +323,28 @@ export function StudioDeck() {
                     <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-zinc-400">
                       DESKTOP FLEX CONFIGURATION
                     </span>
-                    <button
-                      type="button"
-                      onClick={handleSetPCResolution}
-                      className="flex items-center gap-1 text-[11px] font-mono text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
-                    >
-                      Match PC Display Resolution
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedSerial) {
+                            resetDeviceDisplay(selectedSerial).catch((e) => setError(String(e)));
+                          }
+                        }}
+                        className="flex items-center gap-1 text-[11px] font-mono text-zinc-400 hover:text-amber-300 underline underline-offset-2 cursor-pointer"
+                        title="Force-restore phone home launcher and reset display density"
+                      >
+                        Reset Phone Density
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSetPCResolution}
+                        className="flex items-center gap-1 text-[11px] font-mono text-cyan-400 hover:text-cyan-300 underline underline-offset-2 cursor-pointer"
+                      >
+                        Match PC Display Resolution
+                      </button>
+                    </div>
                   </div>
-
                   {/* DPI Visualizer */}
                   <DpiVisualizer dpi={currentDpi} onChange={handleDpiChange} />
 
