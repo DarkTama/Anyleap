@@ -4,7 +4,7 @@ A desktop GUI that makes connecting your Android phone to your PC — **wired or
 
 Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experience, on *any* Android 11+ phone, with all of scrcpy's power exposed as a GUI instead of command-line flags.
 
-> **Status:** Active development. Latest release: **v0.9.0** (Studio Deck workstation, Android Camera Studio mode, embedded mirror container, wireless pairing, and adaptive control bars).
+> **Status:** Active development. Latest release: **v0.9.5** (Studio Deck workstation, Android Camera Studio mode with meeting virtual camera integration, embedded mirror container, wireless pairing, and adaptive control bars).
 
 ## Features
 
@@ -36,7 +36,22 @@ Builds are currently **unsigned**, so Windows SmartScreen may warn on first run 
    - **Auto-discover / Manual** — use the *Pair device with pairing code* screen and enter the 6-digit code.
 3. **Launch Modes**:
    - **Mirror**: Launch display mirroring directly from the device list or Studio Deck.
-   - **Camera Studio**: Click **Camera** on any connected device row or select **Camera Studio** in the Studio Deck Launch Matrix to configure resolution, lens, torch, and audio before streaming.
+   - **Camera Studio**: Click **Camera** on any connected device row or select **Camera Studio** in the Studio Deck Launch Matrix to configure resolution (720p, 1080p, 4K), orientation (Portrait/Landscape), torch, and audio before streaming.
+
+### Using Phone Camera for Google Meet, Zoom, or Discord (OBS Virtual Camera Workaround)
+
+Windows web browsers and video conferencing apps (Google Meet, Zoom, Microsoft Teams, Discord) require a registered DirectShow virtual webcam device to recognize a camera source in their settings dropdown.
+
+To stream your AnyLeap camera wirelessly into online meetings:
+
+1. Launch **Camera Studio** in AnyLeap for your connected phone.
+2. Open [**OBS Studio**](https://obsproject.com/) (free and open source).
+3. In OBS under **Sources**, click **`+` → Window Capture**.
+4. Choose **`AnyLeap Camera Studio`** as the window target and click **OK**.
+5. In the bottom-right OBS Controls dock, click **Start Virtual Camera**.
+6. In **Google Meet**, **Zoom**, or **Discord** video settings, select **OBS Virtual Camera** as your camera input.
+
+> **Tip for Android 14+ wired users:** If plugged in via USB, you can also swipe down on your phone, tap *USB charging notification*, and select **Webcam** for native plug-and-play driverless webcam mode.
 ## Build from source
 
 Prerequisites (Windows):
