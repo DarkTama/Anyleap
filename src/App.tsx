@@ -12,7 +12,8 @@ import {
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
 import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
-import { checkForUpdates } from "@/lib/updateCheck";
+import { UpdateModal } from "@/components/shell/UpdateModal";
+import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -116,7 +117,7 @@ function App() {
     loadAppPrefs()
       .then((p) => {
         setAppPrefs(p);
-        if (p.checkUpdates) void checkForUpdates();
+        if (p.checkUpdates) void useAppUpdateStore.getState().checkForUpdates();
       })
       .catch(() => {});
     getNicknames().then(setNicknames).catch(() => {});
@@ -247,6 +248,7 @@ function App() {
       )}
 
       <StudioDeck />
+      <UpdateModal />
     </div>
   );
 }

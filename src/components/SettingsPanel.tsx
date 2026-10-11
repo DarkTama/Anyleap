@@ -1,7 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LayoutGrid, Monitor } from "lucide-react";
+import { LayoutGrid, Monitor, RefreshCw, Sparkles } from "lucide-react";
 import { getSystemResolution } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
+import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import {
   PRESET_BUNDLES,
   PRESET_HINTS,
@@ -65,6 +66,13 @@ export function SettingsPanel() {
     setAppPrefs(next);
     void saveAppPrefs(next);
   }
+
+  const updatePhase = useAppUpdateStore((s) => s.phase);
+  const hasUpdate = useAppUpdateStore((s) => s.hasUpdate);
+  const availableVersion = useAppUpdateStore((s) => s.availableVersion);
+  const currentVersion = useAppUpdateStore((s) => s.currentVersion);
+  const openUpdateModal = useAppUpdateStore((s) => s.openModal);
+  const checkForUpdatesNow = useAppUpdateStore((s) => s.checkForUpdates);
 
   return (
     <div className="space-y-4">
@@ -311,6 +319,44 @@ export function SettingsPanel() {
             checked={appPrefs.checkUpdates}
             onChange={(v) => updateAppPrefs({ ...appPrefs, checkUpdates: v })}
           />
+
+          <div className="flex items-center justify-between pt-2">
+            <div>
+              <div className="text-xs font-medium text-zinc-300">Application Updates</div>
+              <div className="text-[11px] text-zinc-500">
+                {updatePhase === "checking"
+                  ? "Checking GitHub releases..."
+                  : hasUpdate
+                  ? `v${availableVersion} available`
+                  : `Current version: v${currentVersion}`}
+              </div>
+            </div>
+
+            {hasUpdate ? (
+              <button
+                type="button"
+                onClick={openUpdateModal}
+                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 active:scale-[0.98] transition-all"
+              >
+                <Sparkles className="h-3 w-3 text-cyan-400" />
+                <span>View Update</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={updatePhase === "checking"}
+                onClick={() => void checkForUpdatesNow(true)}
+                className="flex items-center gap-1.5 rounded-lg border border-[#1e2330] bg-[#141722] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:bg-[#181c2b] active:scale-[0.98] transition-all disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${
+                    updatePhase === "checking" ? "animate-spin text-cyan-400" : ""
+                  }`}
+                />
+                <span>Check Now</span>
+              </button>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

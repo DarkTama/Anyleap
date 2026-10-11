@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Tag pushes release under the pushed tag; manual dispatch derives the
       # tag from tauri.conf.json (v<version>) and creates it at HEAD.
@@ -29,6 +31,49 @@ jobs:
             $tag = "v$ver"
           }
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Sync version from git tag
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.tag.outputs.tag }}'.TrimStart('v')
+          Write-Host "Syncing app version to $ver across manifests"
+
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $pkg.version = $ver
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
+
+          $tconf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $tconf.version = $ver
+          $tconf | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
+
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $cargo = $cargo -replace '(?m)^version = ".*"', "version = `"$ver`""
+          Set-Content src-tauri/Cargo.toml $cargo
+
+      - name: Generate release notes from git commits
+        id: changelog
+        shell: pwsh
+        run: |
+          $prevTag = git describe --tags --abbrev=0 HEAD^ 2>$null
+          if ($prevTag) {
+            $log = git log "$prevTag..HEAD" --no-merges --pretty=format:"- %s (%h)"
+          } else {
+            $log = git log -n 25 --no-merges --pretty=format:"- %s (%h)"
+          }
+          if (-not $log) {
+            $log = "- Maintenance and performance improvements"
+          }
+
+          $body = @"
+          ## What's Changed
+          $log
+
+          ### Assets
+          - ``AnyLeap_*_x64-setup.exe`` — Windows installer
+          - ``AnyLeap-*-portable-win64.zip`` — Portable archive (unzip and run anyleap.exe)
+          "@
+
+          "body<<EOF`n$body`nEOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # Rust first: fetch-binaries.ps1 derives the target triple from rustc.
       - name: Setup Rust (stable-msvc)
@@ -54,27 +99,22 @@ jobs:
         run: npm run fetch-binaries
 
       # Builds the frontend + Rust, produces the NSIS installer, creates the
-      # GitHub Release and uploads the installer.
+      # GitHub Release and uploads the installer with updater artifacts.
       - name: Build app + create Release (NSIS)
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ steps.tag.outputs.tag }}
           releaseName: 'AnyLeap ${{ steps.tag.outputs.tag }}'
           releaseDraft: false
           prerelease: false
-          releaseBody: |
-            AnyLeap ${{ steps.tag.outputs.tag }} (Windows x64)
-
-            Assets:
-            - `AnyLeap_*_x64-setup.exe` — installer
-            - `AnyLeap-*-portable-win64.zip` — portable (unzip and run anyleap.exe)
-
-            Builds are unsigned — Windows SmartScreen may warn on first run
-            ("More info" → "Run anyway"). Requires the WebView2 runtime
-            (preinstalled on Windows 11 / most Windows 10).
+          releaseBody: ${{ steps.changelog.outputs.body }}
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
 
       # Assemble a portable ZIP that mirrors the bundler's resource layout, so
       # the same runtime path resolution in src-tauri/src/commands.rs succeeds.

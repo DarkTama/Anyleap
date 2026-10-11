@@ -29,6 +29,8 @@ import { DpiVisualizer } from "./DpiVisualizer";
 import { PairDialog } from "@/components/PairDialog";
 import { CameraLaunchDialog } from "@/components/CameraLaunchDialog";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { UpdateBadge } from "@/components/shell/UpdateBadge";
+import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import type { DeviceInfo, SavedDevice } from "@/lib/types";
 
 export function StudioDeck() {
@@ -64,6 +66,8 @@ export function StudioDeck() {
     if (!selectedSerial) return null;
     return sessions.find((s) => s.serial === selectedSerial) ?? null;
   }, [sessions, selectedSerial]);
+
+  const currentVersion = useAppUpdateStore((s) => s.currentVersion);
 
   const isLive = Boolean(
     activeDevice &&
@@ -181,7 +185,7 @@ export function StudioDeck() {
                   STUDIO DECK
                 </span>
               </div>
-              <p className="text-[10px] font-mono text-zinc-500">v0.7.0 HARDWARE WORKSTATION</p>
+              <p className="text-[10px] font-mono text-zinc-500">v{currentVersion} HARDWARE WORKSTATION</p>
             </div>
           </div>
 
@@ -204,6 +208,8 @@ export function StudioDeck() {
 
         {/* Global Deck Actions */}
         <div className="flex items-center gap-2">
+          <UpdateBadge />
+
           <button
             type="button"
             onClick={handleRefresh}
