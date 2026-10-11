@@ -18,6 +18,7 @@ import { loadControlConfig } from "@/lib/controlConfig";
 import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
 import { UpdateModal } from "@/components/shell/UpdateModal";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
+import { useKvmStore } from "@/stores/kvmStore";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -217,6 +218,70 @@ function App() {
       }
     })();
   }, [sessions]);
+
+  // Manage native OS topmost Desktop HUD Overlay window
+  const kvmIndicatorHud = useKvmStore((s) => s.settings.indicatorHud);
+  const kvmHudCorner = useKvmStore((s) => s.settings.indicatorHudCorner);
+  const kvmIsTrapped = useKvmStore((s) => s.status.is_input_trapped);
+  const kvmHasPeers = useKvmStore((s) => s.status.connected_peers.length > 0 || s.topology.computers.length > 1);
+
+  useEffect(() => {
+    (async () => {
+      const existingHud = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
+      // ONLY show HUD on whichever machine CURRENTLY owns the cursor
+      // If host is trapped (cursor remote), host hides HUD. If host is untrapped and linked, host shows HUD.
+      const shouldShowHud = kvmIndicatorHud && kvmHasPeers && !kvmIsTrapped;
+
+      if (shouldShowHud) {
+        // Calculate corner coordinates
+        const screenW = window.screen.availWidth || 1920;
+        const screenH = window.screen.availHeight || 1080;
+        let posX = 40;
+        let posY = 40;
+
+        if (kvmHudCorner === "top-right") {
+          posX = Math.max(40, screenW - 220);
+          posY = 40;
+        } else if (kvmHudCorner === "bottom-left") {
+          posX = 40;
+          posY = Math.max(40, screenH - 80);
+        } else if (kvmHudCorner === "bottom-right") {
+          posX = Math.max(40, screenW - 220);
+          posY = Math.max(40, screenH - 80);
+        }
+
+        if (!existingHud) {
+          try {
+            const w = new WebviewWindow("kvm-hud", {
+              url: "index.html?kvm_hud=1",
+              title: "AnyLeap KVM HUD",
+              width: 190,
+              height: 48,
+              x: posX,
+              y: posY,
+              resizable: false,
+              decorations: false,
+              alwaysOnTop: true,
+              skipTaskbar: true,
+              transparent: true,
+              shadow: false,
+              focus: false,
+            });
+            w.once("tauri://error", (e) => console.error("kvm-hud window error:", e));
+          } catch (e) {
+            console.error("Failed to spawn native desktop HUD overlay:", e);
+          }
+        } else {
+          // Reposition if corner changed
+          await existingHud.setPosition(new (await import("@tauri-apps/api/dpi")).PhysicalPosition(posX, posY)).catch(() => {});
+        }
+      } else {
+        if (existingHud) {
+          await existingHud.close().catch(() => {});
+        }
+      }
+    })();
+  }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmIsTrapped]);
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#0c0c0e] text-zinc-100">

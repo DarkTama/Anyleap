@@ -1,5 +1,6 @@
 mod commands;
 mod embed;
+pub mod kvm;
 mod state;
 mod wheel_swipe;
 use state::AppState;
@@ -55,6 +56,15 @@ pub fn run() {
             wheel_swipe::set_wheel_swipe,
             embed::embed_mirror,
             embed::resize_embedded_mirror,
+            kvm::commands::kvm_get_status,
+            kvm::commands::kvm_start_server,
+            kvm::commands::kvm_stop_server,
+            kvm::commands::kvm_get_discovered_peers,
+            kvm::commands::kvm_connect_peer,
+            kvm::commands::kvm_disconnect_peer,
+            kvm::commands::kvm_send_file,
+            kvm::commands::kvm_update_topology,
+            kvm::commands::kvm_emergency_release,
         ])
         .setup(|app| {
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).

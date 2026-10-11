@@ -8,6 +8,7 @@ Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experi
 
 ## Features
 
+- **Computer Link (Virtual KVM)** — Roam your physical mouse cursor and keyboard across multiple computers seamlessly over local Wi-Fi or USB. Sub-millisecond UDP mouse acceleration, automatic keystroke forwarding, interactive 2D monitor topology arranger, bidirectional clipboard text synchronization, and emergency unhook failsafe (`ScrollLock`).
 - **Minimalist Graphite Console** — Clean, high-contrast graphite workstation with tactile physics, quick segmented navigation (Devices, Computers KVM, Settings), and persistent hardware rack.
 - **Silent In-App Auto-Updater** — Seamless updates verified with Minisign Ed25519 cryptographic signatures, background download progress, zero-wizard silent installation, one-click app relaunch, and rich commit changelog viewer.
 - **Camera Studio (PC Webcam)** — Stream your phone's front or back camera sensors directly to your PC with custom resolutions (1080p, 720p, 4K), configurable frame rates, microphone audio capture, and in-session controls (torch toggle, zoom in/out, lens flip).
@@ -36,9 +37,11 @@ Builds are currently **unsigned**, so Windows SmartScreen may warn on first run 
 2. **Wireless:** on the phone, *Settings → Developer options → Wireless debugging*. In AnyLeap click **Add wireless device**:
    - **QR code** (default) — scan the shown QR with the phone's *Pair device with QR code*; it pairs and connects automatically.
    - **Auto-discover / Manual** — use the *Pair device with pairing code* screen and enter the 6-digit code.
-3. **Launch Modes**:
-   - **Mirror**: Launch display mirroring directly from the device list or Studio Deck.
-   - **Camera Studio**: Click **Camera** on any connected device row or select **Camera Studio** in the Studio Deck Launch Matrix to configure resolution (720p, 1080p, 4K), orientation (Portrait/Landscape), torch, and audio before streaming.
+4. **Computer Link (Virtual KVM)**:
+   - Navigate to the **Computers** tab.
+   - Click **Start KVM Host** to begin listening on local network (port 4177 TCP / 4178 UDP).
+   - Nearby AnyLeap computers automatically appear via LAN discovery beacon. Click **Link PC** or enter direct IP address.
+   - Arrange your screens in the interactive 2D layout canvas. Move your mouse across the monitor boundary to seamlessly control the adjacent PC. Press `ScrollLock` anytime to instantly release the cursor.
 
 ### Using Phone Camera for Google Meet, Zoom, or Discord (OBS Virtual Camera Workaround)
 

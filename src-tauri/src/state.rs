@@ -1,7 +1,34 @@
+use crate::kvm::client::KvmClientHandle;
+use crate::kvm::discovery::DiscoveryManager;
+use crate::kvm::hooks::HookController;
+use crate::kvm::protocol::TopologyConfig;
+use crate::kvm::server::KvmServerHandle;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use tauri_plugin_shell::process::CommandChild;
+
+pub struct KvmState {
+    pub server: Option<KvmServerHandle>,
+    pub client: Option<KvmClientHandle>,
+    pub discovery: DiscoveryManager,
+    pub hooks: HookController,
+    pub topology: TopologyConfig,
+    pub connected_peers: Vec<String>,
+}
+
+impl Default for KvmState {
+    fn default() -> Self {
+        Self {
+            server: None,
+            client: None,
+            discovery: DiscoveryManager::new(),
+            hooks: HookController::new(),
+            topology: TopologyConfig::default(),
+            connected_peers: Vec::new(),
+        }
+    }
+}
 
 /// A running scrcpy mirror session.
 pub struct Session {
@@ -29,6 +56,7 @@ pub struct Session {
 #[derive(Default)]
 pub struct AppState {
     pub sessions: Mutex<HashMap<String, Session>>,
+    pub kvm: Mutex<KvmState>,
 }
 
 /// Format a PoisonError into a human-readable String for Tauri command results.

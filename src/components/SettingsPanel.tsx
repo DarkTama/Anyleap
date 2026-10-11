@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LayoutGrid, Monitor, RefreshCw, Sparkles } from "lucide-react";
+import { LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
 import { getSystemResolution } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
@@ -22,6 +22,7 @@ import {
   type ControlConfig,
 } from "@/lib/controlConfig";
 import { saveAppPrefs, saveQuality, type AppPrefs } from "@/lib/persist";
+import { useKvmStore } from "@/stores/kvmStore";
 
 const CODECS: Codec[] = ["h264", "h265", "av1"];
 const SIZE_LABELS: Record<ControlConfig["size"], string> = {
@@ -429,7 +430,196 @@ export function SettingsPanel() {
         </p>
       </CardContent>
     </Card>
+
+    <KvmSettingsCard />
     </div>
+  );
+}
+
+function KvmSettingsCard() {
+  const kvmSettings = useKvmStore((s) => s.settings);
+  const updateKvmSettings = useKvmStore((s) => s.updateSettings);
+
+  return (
+    <Card className="rounded-xl border border-[#222226] bg-[#141417]">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+          <Laptop className="h-4 w-4 text-sky-400" />
+          Computer Link & Virtual KVM
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Edge Resistance Slider */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <label className="font-medium text-zinc-300">
+              Edge Push Resistance (Dwell Delay)
+            </label>
+            <span className="font-mono text-sky-400 font-semibold">
+              {kvmSettings.edgeResistanceMs} ms
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={300}
+            step={10}
+            value={kvmSettings.edgeResistanceMs}
+            onChange={(e) =>
+              updateKvmSettings({ edgeResistanceMs: Number(e.target.value) })
+            }
+            className="w-full accent-sky-500 cursor-pointer"
+          />
+          <p className="text-[11px] text-zinc-400">
+            Prevents accidental leaps when interacting with browser sidebars or scrollbars. Set to 0ms for instant leap.
+          </p>
+        </div>
+
+        {/* Corner Deadzone Slider */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <label className="font-medium text-zinc-300">
+              Corner Deadzone Margin
+            </label>
+            <span className="font-mono text-amber-400 font-semibold">
+              {kvmSettings.cornerDeadzonePx} px
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={120}
+            step={4}
+            value={kvmSettings.cornerDeadzonePx}
+            onChange={(e) =>
+              updateKvmSettings({ cornerDeadzonePx: Number(e.target.value) })
+            }
+            className="w-full accent-amber-500 cursor-pointer"
+          />
+          <p className="text-[11px] text-zinc-400">
+            Top and bottom corner screen zones where leaps are blocked (tabs, titlebars, taskbars).
+          </p>
+        </div>
+
+        {/* Indicators */}
+        <div className="space-y-2.5 pt-2 border-t border-[#222226]">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            Visual Indicators
+          </span>
+          <div className="grid grid-cols-2 gap-3">
+            <Toggle
+              label="Floating Desktop HUD Pill"
+              checked={kvmSettings.indicatorHud}
+              onChange={(checked) =>
+                updateKvmSettings({ indicatorHud: checked })
+              }
+            />
+            <Toggle
+              label="Canvas Traveling Cursor Beacon"
+              checked={kvmSettings.indicatorCanvasDot}
+              onChange={(checked) =>
+                updateKvmSettings({ indicatorCanvasDot: checked })
+              }
+            />
+          </div>
+
+          {kvmSettings.indicatorHud && (
+            <div className="space-y-1 pt-1 max-w-xs">
+              <label className="text-xs font-medium text-zinc-400">
+                Desktop HUD Corner
+              </label>
+              <select
+                className={selectClass}
+                value={kvmSettings.indicatorHudCorner}
+                onChange={(e) =>
+                  updateKvmSettings({
+                    indicatorHudCorner: e.target.value as any,
+                  })
+                }
+              >
+                <option value="top-right" className={optionClass}>
+                  Top Right
+                </option>
+                <option value="top-left" className={optionClass}>
+                  Top Left
+                </option>
+                <option value="bottom-right" className={optionClass}>
+                  Bottom Right
+                </option>
+                <option value="bottom-left" className={optionClass}>
+                  Bottom Left
+                </option>
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* Emergency Escape Shortcut Customization */}
+        <div className="space-y-2 pt-2 border-t border-[#222226]">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            Emergency Unhook Shortcut
+          </span>
+          <div className="space-y-1 max-w-sm">
+            <label className="text-xs font-medium text-zinc-300">
+              Trigger Combination
+            </label>
+            <select
+              className={selectClass}
+              value={kvmSettings.emergencyKeyCombo}
+              onChange={(e) =>
+                updateKvmSettings({ emergencyKeyCombo: e.target.value })
+              }
+            >
+              <option value="Ctrl + Alt + Escape" className={optionClass}>
+                Ctrl + Alt + Escape (Default)
+              </option>
+              <option value="ScrollLock" className={optionClass}>
+                ScrollLock
+              </option>
+              <option value="Pause / Break" className={optionClass}>
+                Pause / Break
+              </option>
+              <option value="All Keys (ScrollLock, Pause, Ctrl+Alt+Esc)" className={optionClass}>
+                Any of (ScrollLock, Pause, Ctrl+Alt+Esc)
+              </option>
+            </select>
+            <p className="text-[11px] text-zinc-400">
+              Immediately breaks cursor trap, unclips boundary lock, and returns pointer to host.
+            </p>
+          </div>
+        </div>
+
+        {/* Media & Clipboard Synchronization */}
+        <div className="space-y-2.5 pt-2 border-t border-[#222226]">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            Clipboard & Media Sync
+          </span>
+          <div className="space-y-2">
+            <Toggle
+              label="Sync Text Clipboard"
+              checked={kvmSettings.syncClipboardText}
+              onChange={(checked) =>
+                updateKvmSettings({ syncClipboardText: checked })
+              }
+            />
+            <Toggle
+              label="Sync Image Clipboard (Screenshots & Bitmaps)"
+              checked={kvmSettings.syncClipboardImage}
+              onChange={(checked) =>
+                updateKvmSettings({ syncClipboardImage: checked })
+              }
+            />
+            <Toggle
+              label="File Transfer Drop Sync"
+              checked={kvmSettings.syncFileTransfer}
+              onChange={(checked) =>
+                updateKvmSettings({ syncFileTransfer: checked })
+              }
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
