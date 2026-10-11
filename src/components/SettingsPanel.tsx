@@ -307,7 +307,7 @@ export function SettingsPanel() {
           </div>
         </div>
 
-        <div className="space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/60">
+        <div className="space-y-2 border-t border-[#222226] pt-3">
           <label className="text-xs font-medium text-zinc-500">App</label>
           <Toggle
             label="Minimize to tray on close"
@@ -336,7 +336,7 @@ export function SettingsPanel() {
               <button
                 type="button"
                 onClick={openUpdateModal}
-                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 active:scale-[0.98] transition-all"
+                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 cursor-pointer"
               >
                 <Sparkles className="h-3 w-3 text-cyan-400" />
                 <span>View Update</span>
@@ -346,11 +346,11 @@ export function SettingsPanel() {
                 type="button"
                 disabled={updatePhase === "checking"}
                 onClick={() => void checkForUpdatesNow(true)}
-                className="flex items-center gap-1.5 rounded-lg border border-[#1e2330] bg-[#141722] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:bg-[#181c2b] active:scale-[0.98] transition-all disabled:opacity-50"
+                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw
                   className={`h-3 w-3 ${
-                    updatePhase === "checking" ? "animate-spin text-cyan-400" : ""
+                    updatePhase === "checking" ? "animate-spin text-zinc-200" : "text-zinc-400"
                   }`}
                 />
                 <span>Check Now</span>

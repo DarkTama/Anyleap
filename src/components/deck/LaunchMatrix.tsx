@@ -59,38 +59,30 @@ export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
     description: string;
     features: string[];
     icon: typeof Monitor;
-    color: string;
-    border: string;
   }[] = [
     {
       id: "flex",
       title: "Desktop Flex",
-      badge: "DeX Virtual Workspace",
-      description: "Secondary independent virtual display on Android 10+ with custom DPI scaling & app multi-windowing.",
-      features: ["Custom DPI density", "Multi-window apps", "PC taskbar integration"],
+      badge: "DeX Workspace",
+      description: "Secondary independent virtual display with custom DPI scaling & app multi-windowing.",
+      features: ["Custom DPI scaling", "Multi-window apps", "PC taskbar integration"],
       icon: Monitor,
-      color: "text-cyan-400",
-      border: "border-cyan-500/80",
     },
     {
       id: "mirror",
       title: "Phone Mirror",
       badge: "1:1 Native Portrait",
-      description: "Direct zero-lag portrait screen mirror. Full touch, hardware key injection, and seamless wheel swipe navigation.",
+      description: "Direct zero-lag portrait screen mirror with full touch and wheel swipe navigation.",
       features: ["Low latency feed", "Reels wheel swipe", "Direct touch & keys"],
       icon: Smartphone,
-      color: "text-emerald-400",
-      border: "border-emerald-500/80",
     },
     {
       id: "camera",
       title: "Camera Studio",
       badge: "HD Device Webcam",
-      description: "Transform your Android flagship lenses into an ultra-sharp desktop camera feed for streaming & calls.",
+      description: "Transform your Android flagship lenses into a sharp desktop camera feed for streaming & calls.",
       features: ["Front / rear camera", "Torch toggle ready", "Ultra-low latency"],
       icon: Video,
-      color: "text-amber-400",
-      border: "border-amber-500/80",
     },
     {
       id: "hifi",
@@ -99,19 +91,17 @@ export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
       description: "Maximum bitrate AV1/H.265 pipeline for crisp typography, mobile gaming, and media fidelity.",
       features: ["AV1 / HEVC codec", "20 Mbps bitrate", "Fluid 60 FPS"],
       icon: Zap,
-      color: "text-purple-400",
-      border: "border-purple-500/80",
     },
   ];
 
   return (
     <div className="space-y-2.5">
       <div className="flex items-center justify-between">
-        <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-          LAUNCH MATRIX · WORKSTATION PROFILE
+        <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+          Virtualization Profile
         </span>
         <span className="text-[11px] text-zinc-500">
-          Select target virtualization mode
+          Select target streaming mode
         </span>
       </div>
 
@@ -125,28 +115,34 @@ export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
               key={p.id}
               type="button"
               onClick={() => handleSelect(p.id)}
-              className={`group relative flex flex-col justify-between rounded-xl border p-3.5 text-left transition-all active:scale-[0.98] ${
+              className={`btn-tactile group relative flex flex-col justify-between rounded-xl border p-3.5 text-left cursor-pointer ${
                 isActive
-                  ? `${p.border} bg-[#161a26] shadow-[0_0_20px_rgba(56,189,248,0.15)] ring-1 ring-cyan-500/40`
-                  : "border-[#1e2330] bg-[#12151d]/70 hover:border-zinc-700 hover:bg-[#151924]"
+                  ? "border-[#52525b] bg-[#1a1a20] shadow-sm"
+                  : "border-[#222226] bg-[#131316] text-zinc-400 hover:border-zinc-700 hover:bg-[#16161a]"
               }`}
             >
-              {/* Header Icon + Active Checkmark */}
+              {/* Header Icon + Active Status */}
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2.5">
                   <div
-                    className={`flex h-8 w-8 items-center justify-center rounded-lg border border-[#1e2330] bg-[#0a0c10] ${p.color}`}
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg border ${
+                      isActive
+                        ? "border-zinc-500 bg-[#222228] text-zinc-100"
+                        : "border-[#27272a] bg-[#18181c] text-zinc-400 group-hover:text-zinc-200"
+                    }`}
                   >
                     <Icon className="h-4 w-4" />
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold text-zinc-100">{p.title}</h3>
+                    <h3 className={`text-xs font-semibold ${isActive ? "text-zinc-100" : "text-zinc-300"}`}>
+                      {p.title}
+                    </h3>
                     <span className="font-mono text-[10px] text-zinc-500">{p.badge}</span>
                   </div>
                 </div>
 
                 {isActive && (
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-cyan-500/20 text-cyan-400 ring-1 ring-cyan-400">
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-100 text-zinc-950 font-bold">
                     <Check className="h-2.5 w-2.5" />
                   </span>
                 )}
@@ -158,11 +154,11 @@ export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
               </p>
 
               {/* Feature Tags */}
-              <div className="mt-3 flex flex-wrap gap-1 border-t border-[#1e2330]/80 pt-2">
+              <div className="mt-3 flex flex-wrap gap-1 border-t border-[#222226] pt-2">
                 {p.features.map((feat) => (
                   <span
                     key={feat}
-                    className="rounded bg-[#0d1017] px-1.5 py-0.5 text-[9px] font-mono text-zinc-400 border border-[#1e2330]"
+                    className="rounded bg-[#0f0f12] px-1.5 py-0.5 text-[9px] font-mono text-zinc-400 border border-[#222226]"
                   >
                     {feat}
                   </span>

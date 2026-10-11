@@ -183,14 +183,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   };
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-r border-[#1e2330] bg-[#12151d]/90 select-none">
+    <div className="flex h-full w-72 shrink-0 flex-col border-r border-[#222226] bg-[#0e0e11] select-none">
       {/* Rack Title Header */}
-      <div className="flex items-center justify-between border-b border-[#1e2330] px-4 py-3 bg-[#0d1017]/80">
+      <div className="flex items-center justify-between border-b border-[#222226] px-4 py-3 bg-[#0e0e11]">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-cyan-400">
-            DEVICE RACK
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            Device Rack
           </span>
-          <span className="rounded bg-[#1e2330] px-1.5 py-0.2 text-[10px] font-mono text-zinc-400">
+          <span className="rounded bg-[#1a1a20] px-1.5 py-0.5 text-[9px] font-mono text-zinc-400 border border-[#27272a]">
             {devices.length + savedRows.filter((r) => !r.device).length}
           </span>
         </div>
@@ -200,10 +200,10 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
       {/* Device Rack Items Scroll */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
         {savedRows.length === 0 && otherDevices.length === 0 && (
-          <div className="rounded-lg border border-dashed border-[#1e2330] p-4 text-center">
-            <p className="text-xs text-zinc-400 font-medium">No devices detected</p>
-            <p className="mt-1 text-[11px] text-zinc-500">
-              Connect via USB with USB Debugging enabled, or pair wirelessly.
+          <div className="rounded-xl border border-dashed border-[#222226] p-5 text-center">
+            <p className="text-xs text-zinc-300 font-medium">No devices detected</p>
+            <p className="mt-1 text-[11px] text-zinc-500 leading-relaxed">
+              Connect via USB with USB Debugging enabled, or click Pair Device.
             </p>
           </div>
         )}
@@ -222,17 +222,17 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
             <div
               key={dev.serial}
               onClick={() => onSelectDevice(dev.serial)}
-              className={`group relative rounded-xl border p-3 transition-all cursor-pointer ${
+              className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
                 isSelected
-                  ? "border-cyan-500/80 bg-[#161a26] shadow-[0_0_15px_rgba(56,189,248,0.12)] ring-1 ring-cyan-500/40"
-                  : "border-[#1e2330] bg-[#141722]/70 hover:border-zinc-700 hover:bg-[#161a26]/70"
+                  ? "border-[#52525b] bg-[#1a1a20] shadow-sm"
+                  : "border-[#222226] bg-[#131316] text-zinc-400 hover:border-zinc-700 hover:bg-[#16161a]"
               }`}
             >
               {/* Header: Status Beacon & Hardware Identity */}
               <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <div
-                    className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                    className={`h-2 w-2 rounded-full shrink-0 ${
                       status === "mirroring"
                         ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse"
                         : status === "connected"
@@ -241,11 +241,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     }`}
                   />
                   <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-xs text-zinc-100 truncate">
-                        {dev.model || dev.product || dev.serial}
-                      </span>
-                    </div>
+                    <span className="font-semibold text-xs text-zinc-100 truncate block">
+                      {dev.model || dev.product || dev.serial}
+                    </span>
 
                     {/* Nickname inline display / edit */}
                     {editingSerial === dev.serial ? (
@@ -255,7 +253,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       >
                         <input
                           type="text"
-                          className="h-6 rounded bg-zinc-800 px-1.5 text-xs text-zinc-200 border border-cyan-500/50 outline-none w-28"
+                          className="h-6 rounded bg-[#18181c] px-1.5 text-xs text-zinc-200 border border-zinc-500 outline-none w-28"
                           value={editingName}
                           autoFocus
                           onChange={(e) => setEditingName(e.target.value)}
@@ -267,7 +265,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                         <button
                           type="button"
                           onClick={() => handleSaveNickname(dev.serial)}
-                          className="text-cyan-400 hover:text-cyan-300 p-0.5"
+                          className="text-zinc-200 hover:text-white p-0.5"
                         >
                           <Check className="h-3 w-3" />
                         </button>
@@ -300,10 +298,10 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 </div>
 
                 {/* Transport Badge */}
-                <div className="flex items-center gap-1 rounded bg-[#0d1017] px-1.5 py-0.5 border border-[#1e2330] text-[10px] font-mono text-zinc-400 shrink-0">
+                <div className="flex items-center gap-1 rounded bg-[#18181c] px-1.5 py-0.5 border border-[#27272a] text-[10px] font-mono text-zinc-400 shrink-0">
                   {wireless ? (
                     <>
-                      <Wifi className="h-3 w-3 text-cyan-400" />
+                      <Wifi className="h-3 w-3 text-zinc-300" />
                       <span>Wi-Fi</span>
                     </>
                   ) : (
@@ -316,7 +314,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
               </div>
 
               {/* Hardware Telemetry Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-[#1e2330]/70 pt-2 text-[10px] text-zinc-400 font-mono">
+              <div className="mt-2.5 flex items-center justify-between border-t border-[#222226] pt-2 text-[10px] text-zinc-400 font-mono">
                 <span className="truncate max-w-[120px]">{dev.serial}</span>
                 {batt?.level !== null && batt?.level !== undefined && (
                   <div className="flex items-center gap-1 text-zinc-300">
@@ -340,7 +338,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleStop(session.id, dev.serial)}
-                    className="flex-1 flex items-center justify-center gap-1 rounded bg-rose-500/20 py-1 text-[11px] font-medium text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 active:scale-[0.98] transition-all"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-rose-500/15 py-1 text-[11px] font-medium text-rose-300 border border-rose-500/30 hover:bg-rose-500/25"
                   >
                     <Square className="h-3 w-3 fill-rose-300" />
                     Stop
@@ -350,9 +348,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleMirror(dev.serial)}
-                    className="flex-1 flex items-center justify-center gap-1 rounded bg-cyan-500/20 py-1 text-[11px] font-medium text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 active:scale-[0.98] transition-all"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-[#222228] py-1 text-[11px] font-medium text-zinc-200 border border-[#2e2e36] hover:bg-[#282830]"
                   >
-                    <Play className="h-3 w-3 fill-cyan-300" />
+                    <Play className="h-3 w-3 fill-zinc-300" />
                     Launch
                   </button>
                 )}
@@ -362,7 +360,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleDisconnect(dev.serial)}
-                    className="rounded bg-zinc-800 p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 active:scale-[0.98] transition-all"
+                    className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-400 border border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
                     title="Disconnect wireless"
                   >
                     <Unplug className="h-3.5 w-3.5" />
@@ -389,19 +387,19 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
             <div
               key={saved.id}
               onClick={() => onSelectDevice(targetSerial)}
-              className={`group relative rounded-xl border p-3 transition-all cursor-pointer ${
+              className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
                 isSelected
-                  ? "border-cyan-500/80 bg-[#161a26] shadow-[0_0_15px_rgba(56,189,248,0.12)] ring-1 ring-cyan-500/40"
+                  ? "border-[#52525b] bg-[#1a1a20] shadow-sm"
                   : status === "offline"
-                  ? "border-[#1e2330]/70 bg-[#12151d]/50 opacity-80 hover:opacity-100 hover:border-zinc-700"
-                  : "border-[#1e2330] bg-[#141722]/70 hover:border-zinc-700 hover:bg-[#161a26]/70"
+                  ? "border-[#222226]/60 bg-[#111114]/50 opacity-70 hover:opacity-100 hover:border-zinc-700"
+                  : "border-[#222226] bg-[#131316] text-zinc-400 hover:border-zinc-700 hover:bg-[#16161a]"
               }`}
             >
               {/* Header */}
               <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <div
-                    className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                    className={`h-2 w-2 rounded-full shrink-0 ${
                       status === "mirroring"
                         ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse"
                         : status === "connected"
@@ -422,7 +420,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       >
                         <input
                           type="text"
-                          className="h-6 rounded bg-zinc-800 px-1.5 text-xs text-zinc-200 border border-cyan-500/50 outline-none w-28"
+                          className="h-6 rounded bg-[#18181c] px-1.5 text-xs text-zinc-200 border border-zinc-500 outline-none w-28"
                           value={editingName}
                           autoFocus
                           onChange={(e) => setEditingName(e.target.value)}
@@ -434,7 +432,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                         <button
                           type="button"
                           onClick={() => handleSaveNickname(nicknameKey, serial)}
-                          className="text-cyan-400 hover:text-cyan-300 p-0.5"
+                          className="text-zinc-200 hover:text-white p-0.5"
                         >
                           <Check className="h-3 w-3" />
                         </button>
@@ -467,14 +465,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 </div>
 
                 {/* Wireless Badge */}
-                <div className="flex items-center gap-1 rounded bg-[#0d1017] px-1.5 py-0.5 border border-[#1e2330] text-[10px] font-mono text-cyan-400 shrink-0">
-                  <Wifi className="h-3 w-3" />
+                <div className="flex items-center gap-1 rounded bg-[#18181c] px-1.5 py-0.5 border border-[#27272a] text-[10px] font-mono text-zinc-400 shrink-0">
+                  <Wifi className="h-3 w-3 text-zinc-300" />
                   <span>Wi-Fi</span>
                 </div>
               </div>
 
               {/* Hardware Telemetry Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-[#1e2330]/70 pt-2 text-[10px] text-zinc-400 font-mono">
+              <div className="mt-2.5 flex items-center justify-between border-t border-[#222226] pt-2 text-[10px] text-zinc-400 font-mono">
                 <span className="truncate max-w-[120px]">
                   {status === "offline" ? "Saved Device" : serial}
                 </span>
@@ -500,7 +498,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleConnect(saved)}
-                    className="flex-1 flex items-center justify-center gap-1 rounded bg-zinc-800 py-1 text-[11px] font-medium text-zinc-200 border border-zinc-700 hover:bg-zinc-700 active:scale-[0.98] transition-all"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-[#18181c] py-1 text-[11px] font-medium text-zinc-200 border border-[#27272a] hover:bg-[#202026]"
                   >
                     <RefreshCw className={`h-3 w-3 ${isBusy ? "animate-spin" : ""}`} />
                     Connect
@@ -510,7 +508,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleStop(session.id, targetSerial)}
-                    className="flex-1 flex items-center justify-center gap-1 rounded bg-rose-500/20 py-1 text-[11px] font-medium text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 active:scale-[0.98] transition-all"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-rose-500/15 py-1 text-[11px] font-medium text-rose-300 border border-rose-500/30 hover:bg-rose-500/25"
                   >
                     <Square className="h-3 w-3 fill-rose-300" />
                     Stop
@@ -520,9 +518,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => serial && handleMirror(serial)}
-                    className="flex-1 flex items-center justify-center gap-1 rounded bg-cyan-500/20 py-1 text-[11px] font-medium text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 active:scale-[0.98] transition-all"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-[#222228] py-1 text-[11px] font-medium text-zinc-200 border border-[#2e2e36] hover:bg-[#282830]"
                   >
-                    <Play className="h-3 w-3 fill-cyan-300" />
+                    <Play className="h-3 w-3 fill-zinc-300" />
                     Launch
                   </button>
                 )}
@@ -532,7 +530,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleDisconnect(serial)}
-                    className="rounded bg-zinc-800 p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 active:scale-[0.98] transition-all"
+                    className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-400 border border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
                     title="Disconnect wireless"
                   >
                     <Unplug className="h-3.5 w-3.5" />
@@ -543,7 +541,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   type="button"
                   disabled={isBusy}
                   onClick={() => handleForget(saved.id)}
-                  className="rounded bg-zinc-800 p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-700 active:scale-[0.98] transition-all"
+                  className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-500 border border-[#27272a] hover:text-rose-400 hover:bg-[#202026]"
                   title="Forget device"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

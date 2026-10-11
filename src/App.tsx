@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { StudioDeck } from "@/components/deck/StudioDeck";
+import { ComputersView } from "@/components/computers/ComputersView";
+import { SettingsPanel } from "@/components/SettingsPanel";
+import { AppHeader, type ShellTab } from "@/components/shell/AppHeader";
+import { PairDialog } from "@/components/PairDialog";
 import { useAppStore } from "@/store/useAppStore";
 import {
   connectDevice,
@@ -33,6 +37,8 @@ function App() {
   const setNicknames = useAppStore((s) => s.setNicknames);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [activeTab, setActiveTab] = useState<ShellTab>("devices");
+  const [pairOpen, setPairOpen] = useState(false);
 
   // Event listeners + initial hydrate.
   useEffect(() => {
@@ -213,9 +219,15 @@ function App() {
   }, [sessions]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#0a0c10] text-zinc-100">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#0c0c0e] text-zinc-100">
+      <AppHeader
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onOpenPair={() => setPairOpen(true)}
+      />
+
       {error && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl rounded-lg border border-rose-500/40 bg-rose-950/90 px-3.5 py-2.5 text-xs text-rose-200 shadow-2xl backdrop-blur-md">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl rounded-lg border border-rose-500/40 bg-rose-950/90 px-3.5 py-2.5 text-xs text-rose-200 shadow-2xl backdrop-blur-md">
           <div className="flex items-start justify-between gap-2">
             <span className="font-mono">{error}</span>
             <button
@@ -247,7 +259,17 @@ function App() {
         </div>
       )}
 
-      <StudioDeck />
+      <main className="relative flex flex-1 overflow-hidden">
+        {activeTab === "devices" && <StudioDeck onOpenPair={() => setPairOpen(true)} />}
+        {activeTab === "computers" && <ComputersView />}
+        {activeTab === "settings" && (
+          <div className="flex flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-6 max-w-4xl mx-auto w-full">
+            <SettingsPanel />
+          </div>
+        )}
+      </main>
+
+      {pairOpen && <PairDialog onClose={() => setPairOpen(false)} />}
       <UpdateModal />
     </div>
   );

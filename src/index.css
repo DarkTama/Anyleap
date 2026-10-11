@@ -1,7 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --canvas-bg: #0c0c0e;
+  --surface-card: #141417;
+  --surface-active: #1b1b20;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-focus: #52525b;
 }
 
 html,
@@ -12,4 +18,27 @@ body,
 
 body {
   margin: 0;
+  background-color: var(--canvas-bg);
+  color: #f4f4f5;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Emil Kowalski Tactile Button Physics */
+.btn-tactile {
+  transition: transform 140ms var(--ease-out), background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+  user-select: none;
+}
+
+.btn-tactile:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-tactile {
+    transition: none;
+  }
+  .btn-tactile:active {
+    transform: none;
+  }
 }
