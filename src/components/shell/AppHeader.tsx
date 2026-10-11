@@ -2,6 +2,7 @@ import { Smartphone, Monitor, Sliders, Wifi } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { UpdateBadge } from "./UpdateBadge";
+import { AppLogo } from "./AppLogo";
 
 export type ShellTab = "devices" | "computers" | "settings";
 
@@ -19,7 +20,8 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair }: AppHeaderProps
     <header className="flex h-13 shrink-0 items-center justify-between border-b border-[#222226] bg-[#0c0c0e] px-4 select-none">
       {/* Brand & Version Chip */}
       <div className="flex items-center gap-2.5">
-        <div className="flex items-center gap-1.5 font-bold tracking-tight text-zinc-100 text-[13px]">
+        <div className="flex items-center gap-2 font-bold tracking-tight text-zinc-100 text-[13px]">
+          <AppLogo className="h-5 w-5 shrink-0" />
           <span className="bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
             AnyLeap
           </span>

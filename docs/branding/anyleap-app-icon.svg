@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>AnyLeap App Icon</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#18181f" />
+      <stop offset="100%" stop-color="#0e0e12" />
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#22d3ee" />
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base Tile -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)" stroke="rgba(255,255,255,0.08)" stroke-width="2" />
+
+  <!-- Device Frame (Clean White-Zinc) -->
+  <path fill="#f4f4f5" d="M 60 84 C 60 65 75 50 94 50 L 130 50 C 136 50 141 55 141 61 C 141 67 136 72 130 72 L 94 72 C 86.2 72 80 78.2 80 86 L 80 178 C 80 185.8 86.2 192 94 192 L 158 192 C 165.8 192 172 185.8 172 178 L 172 144 C 172 138 177 133 183 133 C 189 133 194 138 194 144 L 194 178 C 194 197 179 212 160 212 L 94 212 C 75 212 60 197 60 178 Z" />
+
+  <!-- The Beam Leap Vector Arrow (Cyan Beam) -->
+  <path fill="url(#beam)" d="M 112 152 L 174 90 L 150 90 C 144 90 139 85 139 79 C 139 73 144 68 150 68 L 206 68 C 212 68 217 73 217 79 L 217 135 C 217 141 212 146 206 146 C 200 146 195 141 195 135 L 195 111 L 133 173 C 129 177 122 177 118 173 C 114 169 114 162 118 158 Z" />
+</svg>
