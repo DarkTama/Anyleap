@@ -107,13 +107,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_CLI_NO_VERSION_CHECK: "true"
         with:
           tagName: ${{ steps.tag.outputs.tag }}
           releaseName: 'AnyLeap ${{ steps.tag.outputs.tag }}'
           releaseDraft: false
           prerelease: false
           releaseBody: ${{ steps.changelog.outputs.body }}
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
 
       # Assemble a portable ZIP that mirrors the bundler's resource layout, so
