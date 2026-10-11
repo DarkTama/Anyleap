@@ -36,8 +36,13 @@ All commit messages must strictly adhere to the Conventional Commits specificati
 - **Generic Architectural Terminology**: Use generic engineering descriptors: "Native Host", "Reference Architecture", "Peer Desktop Protocol", "Hardware Sensor Assembly".
 - **Zero Secret Leaks**: Never commit `.key` files, private signing credentials, or environment secrets to git.
 
-### 1.4 Always Update README.md on Feature Completion
-- **Mandatory README Sync**: Whenever a new feature, capability, or user-facing workflow is completed, `README.md` must be updated under `## Features` (and status line if bumping version) before the feature is finalized. Never leave new features undocumented.
+### 1.4 Mandatory Documentation Synchronization on Feature Completion
+Whenever a new feature, specification, or architectural capability is completed, the agent must check and synchronize all relevant project documentation before the feature is finalized:
+- **`README.md`**: Update `## Features` to describe the new capability, and bump the version/status banner if releasing. Never leave new features undocumented.
+- **`CONTEXT.md`**: Record any new domain vocabulary, entity names, or system boundaries into the active glossary.
+- **`docs/PLAN.md` & `docs/BACKLOG.md`**: Check and update roadmap milestones, settled architecture decisions, and strike out or archive completed backlog items.
+- **`docs/adr/`**: Author an Architectural Decision Record (ADR) whenever introducing hard-to-reverse architectural patterns or new subsystems (format: `docs/adr/NNNN-<topic>.md`).
+- **`docs/specs/`**: Mark completed specifications with updated status (`Status: Implemented / Shipped in vX.X.X`).
 
 ---
 
