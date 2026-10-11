@@ -1,6 +1,6 @@
 # SPEC-12: Multi-PC Hub & Seamless Virtual KVM (Computer Link)
 
-> **Status:** Draft / Active Design | Target Version: `v1.0.0`
+> **Status:** Implemented (Shipped in v1.0.0) | Target Version: `v1.0.0`
 > **Path:** Architectural (Phase 1 of Multi-PC Workstation Expansion)
 
 ## 1. System Overview & Objective

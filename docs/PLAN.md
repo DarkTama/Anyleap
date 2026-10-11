@@ -30,10 +30,12 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 | App framework | **Tauri** (Rust core + web UI) | Small native binary, modern UI, cross-platform; our backend is thin (just process orchestration). |
 | Frontend | **React + shadcn/ui** | Best accessible form-control ecosystem for a settings-heavy app + a pairing wizard. |
 | Wireless pairing | **Delegate to adb CLI** (adb-qr model) | No need to implement SPAKE2/mDNS ourselves; works reliably incl. on Windows. |
+| Multi-PC Link (KVM) | **Axum WSS (4177) + UDP deltas (4178)** | Ultra-low latency cursor glide over UDP with reliable TCP/WSS key and clipboard sync (ADR 0001, 0002). |
 
 ## Scope
 
-### v1 — "It just connects" (wireless-first)
+### v1.0 — Workstation Hub (Android + Multi-PC Link)
+- **Computer Link (Virtual KVM)**: Roam mouse and keyboard across connected PCs, 2D monitor layout canvas, clipboard sync.
 - Device list: USB devices + wireless devices (via `adb mdns services`) in one view.
 - Pairing wizard:
   - **QR code** (primary) — phone scans a QR shown by the app.
