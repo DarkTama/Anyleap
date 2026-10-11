@@ -188,6 +188,22 @@ fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     None
 }
 
+fn is_valid_device_state(state: &str) -> bool {
+    matches!(
+        state,
+        "device"
+            | "unauthorized"
+            | "offline"
+            | "authorizing"
+            | "connecting"
+            | "no permissions"
+            | "bootloader"
+            | "recovery"
+            | "sideload"
+            | "host"
+    )
+}
+
 /// Parse `adb devices -l` output into structured device records.
 ///
 /// Skips the header line and any `* daemon ...` startup noise, keeps non-`device`
@@ -196,7 +212,13 @@ fn parse_adb_devices(text: &str) -> Vec<DeviceInfo> {
     let mut out = Vec::new();
     for raw in text.lines() {
         let line = raw.trim();
-        if line.is_empty() || line.starts_with("List of devices") || line.starts_with('*') {
+        if line.is_empty()
+            || line.starts_with("List of devices")
+            || line.starts_with('*')
+            || line.starts_with("adb ")
+            || line.starts_with("error:")
+            || line.starts_with("cannot ")
+        {
             continue;
         }
         let mut it = line.split_whitespace();
@@ -212,6 +234,9 @@ fn parse_adb_devices(text: &str) -> Vec<DeviceInfo> {
         // "no permissions" is the only multi-word state we expect.
         if state == "no" && rest.first() == Some(&"permissions") {
             state = "no permissions".to_string();
+        }
+        if !is_valid_device_state(&state) {
+            continue;
         }
         let mut model = None;
         let mut product = None;
@@ -1594,15 +1619,12 @@ fn parse_installed_packages(text: &str) -> Vec<String> {
         .map(|line| line.trim())
         .filter(|line| !line.is_empty())
         .filter_map(|line| {
-            if let Some(pkg) = line.strip_prefix("package:") {
-                let p = pkg.trim();
-                if !p.is_empty() {
-                    Some(p.to_string())
-                } else {
-                    None
-                }
+            let pkg = line.strip_prefix("package:")?;
+            let p = pkg.trim();
+            if !p.is_empty() {
+                Some(p.to_string())
             } else {
-                Some(line.to_string())
+                None
             }
         })
         .collect();
@@ -1967,6 +1989,17 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert_eq!(pkgs, vec!["com.android.chrome", "com.example.app", "org.mozilla.firefox"]);
     }
     #[test]
+    fn parses_installed_packages_output_ignores_daemon_and_warning_noise() {
+        let text = "\
+* daemon not running; starting now at tcp:5037 *\n\
+* daemon started successfully *\n\
+WARNING: linker: [vdso] is missing\n\
+package:com.android.chrome\n\
+package:org.mozilla.firefox\n";
+        let pkgs = parse_installed_packages(text);
+        assert_eq!(pkgs, vec!["com.android.chrome", "org.mozilla.firefox"]);
+    }
+    #[test]
     fn parses_battery_info() {
         let text = "Current Battery Service state:\n\
   AC powered: false\n\
@@ -1976,6 +2009,25 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         let info = parse_battery_info(text);
         assert_eq!(info.level, Some(82));
         assert!(info.charging);
+    }
+
+    #[test]
+    fn parse_adb_devices_ignores_server_and_daemon_errors() {
+        let text = "\
+List of devices attached\n\
+adb server version (41) doesn't match this client (39); killing...\n\
+* daemon started successfully *\n\
+cannot connect to daemon at tcp:5037\n\
+error: protocol fault (couldn't read status)\n\
+emulator-5554          device product:sdk_gphone64 model:Pixel_7 device:emulator64 transport_id:1\n\
+192.168.1.50:5555      unauthorized transport_id:2\n";
+        let devs = parse_adb_devices(text);
+        assert_eq!(devs.len(), 2);
+        assert_eq!(devs[0].serial, "emulator-5554");
+        assert_eq!(devs[0].state, "device");
+        assert_eq!(devs[0].model.as_deref(), Some("Pixel_7"));
+        assert_eq!(devs[1].serial, "192.168.1.50:5555");
+        assert_eq!(devs[1].state, "unauthorized");
     }
 
 }

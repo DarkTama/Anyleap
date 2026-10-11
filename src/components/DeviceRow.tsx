@@ -15,7 +15,13 @@ import {
   stopMirror,
 } from "@/lib/tauri";
 import { forgetSaved } from "@/lib/savedDevices";
-import { deviceStatusOf, type DeviceStatus, type SavedRow } from "@/lib/deviceStatus";
+import {
+  deviceStatusOf,
+  type DeviceStatus,
+  type SavedRow,
+  resolveDeviceNickname,
+  getNicknameKey,
+} from "@/lib/deviceStatus";
 import type { DeviceInfo } from "@/lib/types";
 import { saveNickname } from "@/lib/settingsStore";
 
@@ -246,12 +252,16 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const serial = device?.serial;
-  const targetSerial = serial ?? `${saved.host}:${saved.port}`;
-  const nickname = nicknames[targetSerial] ?? (serial ? nicknames[serial] : undefined);
+  const nickname = resolveDeviceNickname(nicknames, { serial, saved });
+  const nicknameKey = getNicknameKey({ serial, saved });
   const handleSaveNickname = async () => {
     try {
-      await saveNickname(targetSerial, editName);
-      setNickname(targetSerial, editName);
+      await saveNickname(nicknameKey, editName);
+      setNickname(nicknameKey, editName);
+      if (serial && serial !== nicknameKey) {
+        await saveNickname(serial, editName);
+        setNickname(serial, editName);
+      }
       setEditing(false);
     } catch (e) {
       setError(String(e));

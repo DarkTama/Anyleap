@@ -24,7 +24,12 @@ import {
   getBatteryInfo,
 } from "@/lib/tauri";
 import { forgetSaved } from "@/lib/savedDevices";
-import { buildRows, deviceStatusOf } from "@/lib/deviceStatus";
+import {
+  buildRows,
+  deviceStatusOf,
+  resolveDeviceNickname,
+  getNicknameKey,
+} from "@/lib/deviceStatus";
 import { saveNickname } from "@/lib/settingsStore";
 import type { SavedDevice } from "@/lib/types";
 
@@ -98,10 +103,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
     setEditingName(currentVal);
   };
 
-  const handleSaveNickname = async (serial: string) => {
+  const handleSaveNickname = async (primaryKey: string, secondaryKey?: string) => {
     try {
-      await saveNickname(serial, editingName);
-      setNickname(serial, editingName);
+      await saveNickname(primaryKey, editingName);
+      setNickname(primaryKey, editingName);
+      if (secondaryKey && secondaryKey !== primaryKey) {
+        await saveNickname(secondaryKey, editingName);
+        setNickname(secondaryKey, editingName);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -372,7 +381,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
           const isSelected = selectedSerial === targetSerial || (serial && selectedSerial === serial);
           const isBusy = busySerial === saved.id || Boolean(serial && busySerial === serial);
           const session = serial ? sessions.find((s) => s.serial === serial) : undefined;
-          const nickname = nicknames[targetSerial] ?? (serial ? nicknames[serial] : undefined);
+          const nickname = resolveDeviceNickname(nicknames, { serial, saved });
+          const nicknameKey = getNicknameKey({ serial, saved });
           const batt = serial ? batteryMap[serial] : undefined;
 
           return (
@@ -417,13 +427,13 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                           autoFocus
                           onChange={(e) => setEditingName(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSaveNickname(targetSerial);
+                            if (e.key === "Enter") handleSaveNickname(nicknameKey, serial);
                             if (e.key === "Escape") setEditingSerial(null);
                           }}
                         />
                         <button
                           type="button"
-                          onClick={() => handleSaveNickname(targetSerial)}
+                          onClick={() => handleSaveNickname(nicknameKey, serial)}
                           className="text-cyan-400 hover:text-cyan-300 p-0.5"
                         >
                           <Check className="h-3 w-3" />

@@ -51,3 +51,37 @@ export function buildRows(
 
   return { savedRows, otherDevices };
 }
+
+/**
+ * Resolve device nickname robustly across dynamic reconnect ports.
+ * Saved devices look up by persistent id / host first, falling back to
+ * last-known serial or active serial. Unsaved devices look up by serial.
+ */
+export function resolveDeviceNickname(
+  nicknames: Record<string, string>,
+  target: { serial?: string; saved?: SavedDevice },
+): string | undefined {
+  const { serial, saved } = target;
+  if (saved) {
+    if (saved.id && nicknames[saved.id]) return nicknames[saved.id];
+    if (saved.host && nicknames[saved.host]) return nicknames[saved.host];
+    if (saved.lastSerial && nicknames[saved.lastSerial]) return nicknames[saved.lastSerial];
+    const fallback = `${saved.host}:${saved.port}`;
+    if (nicknames[fallback]) return nicknames[fallback];
+  }
+  if (serial && nicknames[serial]) {
+    return nicknames[serial];
+  }
+  return undefined;
+}
+
+/**
+ * Returns the canonical, persistent storage key for saving a nickname.
+ * Saved devices use stable saved ID (host); ad-hoc devices use serial.
+ */
+export function getNicknameKey(target: { serial?: string; saved?: SavedDevice }): string {
+  if (target.saved) {
+    return target.saved.id || target.saved.host;
+  }
+  return target.serial ?? "";
+}
