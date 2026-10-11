@@ -4,7 +4,7 @@ A desktop GUI that makes connecting your Android phone to your PC — **wired or
 
 Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experience, on *any* Android 11+ phone, with all of scrcpy's power exposed as a GUI instead of command-line flags.
 
-> **Status:** Active development. Latest release: **v0.9.7** (Silent auto-updater, release changelog viewer, Studio Deck workstation, Android Camera Studio mode with meeting virtual camera integration, flex display launcher recovery, embedded mirror container, wireless pairing, and adaptive control bars).
+> **Status:** Active development. Latest release: **v0.9.8** (Multi-PC Virtual KVM Computer Link, media clipboard and file transfer sync, silent auto-updater, Studio Deck workstation, Android Camera Studio mode, embedded mirror container).
 
 ## Features
 
