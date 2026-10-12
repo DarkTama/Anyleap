@@ -55,22 +55,47 @@ jobs:
         shell: pwsh
         run: |
           $prevTag = git describe --tags --abbrev=0 HEAD^ 2>$null
+          $repo = $env:GITHUB_REPOSITORY
+          $ver = '${{ steps.tag.outputs.tag }}'.TrimStart('v')
+          $tag = "v$ver"
           if ($prevTag) {
-            $log = git log "$prevTag..HEAD" --no-merges --pretty=format:"- %s (%h)"
+            $lines = git log "$prevTag..HEAD" --no-merges --pretty=format:"%s|%h"
           } else {
-            $log = git log -n 25 --no-merges --pretty=format:"- %s (%h)"
+            $lines = git log -n 25 --no-merges --pretty=format:"%s|%h"
           }
-          if (-not $log) {
-            $log = "- Maintenance and performance improvements"
+
+          $feat = @(); $fix = @(); $other = @()
+          foreach ($l in $lines) {
+            if (-not $l) { continue }
+            $s, $h = $l -split '\|', 2
+            # skip release bumps and docs-only commits
+            if ($s -match '^(chore\(release\)|docs)') { continue }
+            $type = if ($s -match '^(\w+)') { $Matches[1] } else { '' }
+            $s = $s -replace '^\w+(\([^)]*\))?!?:\s*', ''
+            $item = "- $s ([$h](https://github.com/$repo/commit/$h))"
+            switch ($type) {
+              'feat'  { $feat  += $item }
+              'fix'   { $fix   += $item }
+              default { $other += $item }
+            }
           }
+
+          $sections = @()
+          if ($feat)  { $sections += "### Features`n"      + ($feat  -join "`n") }
+          if ($fix)   { $sections += "### Fixes`n"         + ($fix   -join "`n") }
+          if ($other) { $sections += "### Other changes`n" + ($other -join "`n") }
+          $log = if ($sections) { $sections -join "`n`n" } else { "- Maintenance and performance improvements" }
+
+          $compare = if ($prevTag) { "**Full Changelog**: [$prevTag...$tag](https://github.com/$repo/compare/$prevTag...$tag)`n`n" } else { '' }
 
           $body = @"
           ## What's Changed
+
           $log
 
-          ### Assets
-          - ``AnyLeap_*_x64-setup.exe`` — Windows installer
-          - ``AnyLeap-*-portable-win64.zip`` — Portable archive (unzip and run anyleap.exe)
+          $($compare)### Assets
+          - ``AnyLeap_${ver}_x64-setup.exe`` — Windows installer
+          - ``AnyLeap-${ver}-portable-win64.zip`` — Portable archive (unzip and run anyleap.exe)
           "@
 
           "body<<EOF`n$body`nEOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
