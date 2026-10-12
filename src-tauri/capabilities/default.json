@@ -37,6 +37,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://github.com/*" }]
     },
-    "dialog:default"
+    "dialog:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

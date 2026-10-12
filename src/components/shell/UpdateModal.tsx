@@ -1,5 +1,8 @@
 import { X, Sparkles, CheckCircle2, AlertCircle, RefreshCw, ArrowRight } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
+import { stripAssetsSection } from "@/lib/releaseNotes";
 
 export function UpdateModal() {
   const isModalOpen = useAppUpdateStore((s) => s.isModalOpen);
@@ -91,9 +94,33 @@ export function UpdateModal() {
                         </span>
                       )}
                     </div>
-                    {rel.body ? (
-                      <div className="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto font-mono text-[11px] bg-black/30 p-2.5 rounded-lg border border-[#1e2330]/60">
-                        {rel.body}
+                    {stripAssetsSection(rel.body ?? "") ? (
+                      <div className="text-xs text-zinc-300 leading-relaxed max-h-48 overflow-y-auto bg-black/30 p-2.5 rounded-lg border border-[#1e2330]/60 space-y-2">
+                        <ReactMarkdown
+                          components={{
+                            h1: (p) => <h4 className="text-xs font-semibold text-zinc-100" {...p} />,
+                            h2: (p) => <h4 className="text-xs font-semibold text-zinc-100" {...p} />,
+                            h3: (p) => <h5 className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-300" {...p} />,
+                            ul: (p) => <ul className="list-disc space-y-1 pl-4" {...p} />,
+                            p: (p) => <p className="text-zinc-300" {...p} />,
+                            strong: (p) => <strong className="font-semibold text-zinc-100" {...p} />,
+                            code: (p) => <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-[11px]" {...p} />,
+                            a: ({ href, children }) => (
+                              <a
+                                href={href}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  if (href && /^https:\/\/github\.com\//.test(href)) void openUrl(href);
+                                }}
+                                className="text-cyan-400 underline-offset-2 hover:underline cursor-pointer"
+                              >
+                                {children}
+                              </a>
+                            ),
+                          }}
+                        >
+                          {stripAssetsSection(rel.body ?? "")}
+                        </ReactMarkdown>
                       </div>
                     ) : (
                       <p className="text-xs text-zinc-500 italic">No release notes provided.</p>
