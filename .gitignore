@@ -28,3 +28,7 @@ Thumbs.db
 .superpowers/
 *.key
 *.key.pub
+
+# pnpm (project uses npm; CI runs npm ci)
+pnpm-lock.yaml
+pnpm-workspace.yaml
