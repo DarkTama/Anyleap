@@ -120,6 +120,12 @@ pub struct KvmStatus {
     pub monitors: Vec<MonitorDisplay>,
     #[serde(default)]
     pub peers: Vec<ComputerNode>,
+    /// Edge of this PC that leaps to the peer while this PC is the active controller.
+    #[serde(default)]
+    pub controller_edge: Option<String>,
+    /// True while a remote controller currently drives this PC's cursor.
+    #[serde(default)]
+    pub receiver_entered: bool,
 }
 
 /// Outbound traffic: control packets or a clipboard image (own uni stream).

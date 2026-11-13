@@ -39,35 +39,28 @@ export function DesktopHudWindow() {
     };
   }, []);
 
-  const isRemote = status?.is_input_trapped ?? false;
-  const peerName = status?.peers?.[0]?.name || status?.connected_peers?.[0] || "Remote PC";
-  const activeName = isRemote ? peerName : status?.local_name || "This PC";
+  // This window is only shown on the machine that currently owns the cursor.
+  const isRemote = status?.receiver_entered ?? false; // driven by a remote controller
+  const activeName = status?.local_name || "This PC";
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center p-2 select-none overflow-hidden bg-transparent pointer-events-none">
+    <div className="flex h-screen w-screen items-center justify-center select-none overflow-hidden bg-transparent pointer-events-none">
       <div
-        className={`flex items-center gap-2.5 rounded-full border px-3.5 py-1.5 text-xs font-mono shadow-2xl backdrop-blur-md transition-all duration-200 pointer-events-none ${
+        className={`flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] backdrop-blur-md pointer-events-none animate-in fade-in duration-150 ${
           isRemote
-            ? "border-sky-400 bg-[#0c182b]/95 text-sky-200 shadow-[0_0_24px_rgba(56,189,248,0.45)] ring-1 ring-sky-400/40"
-            : "border-zinc-700/80 bg-[#121216]/90 text-zinc-300 shadow-xl"
+            ? "border-sky-400/60 bg-[#0c182b]/90 text-sky-100"
+            : "border-zinc-700/70 bg-[#121216]/85 text-zinc-200"
         }`}
       >
-        <span
-          className={`h-2.5 w-2.5 rounded-full ${
-            isRemote ? "bg-sky-400" : "bg-emerald-400"
-          }`}
-        />
         {isRemote ? (
-          <Laptop className="h-3.5 w-3.5 text-sky-400" />
+          <Laptop className="h-3 w-3 shrink-0 text-sky-300" />
         ) : (
-          <Monitor className="h-3.5 w-3.5 text-zinc-400" />
+          <Monitor className="h-3 w-3 shrink-0 text-zinc-400" />
         )}
-        <span className="font-semibold tracking-wide truncate max-w-[130px]">
-          {activeName}
-        </span>
-        <span className="text-[10px] uppercase font-bold text-zinc-400 border-l border-zinc-700/80 pl-2">
-          {isRemote ? "REMOTE" : "LOCAL"}
-        </span>
+        <span className="truncate font-medium">{activeName}</span>
+        {isRemote && (
+          <span className="shrink-0 text-[9px] uppercase tracking-wide text-sky-300/80">remote</span>
+        )}
       </div>
     </div>
   );

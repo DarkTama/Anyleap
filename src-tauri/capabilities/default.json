@@ -18,6 +18,7 @@
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-set-size",
+    "core:window:allow-set-ignore-cursor-events",
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/scrcpy", "sidecar": true, "args": true }]

@@ -366,66 +366,67 @@ function App() {
   // Manage native OS topmost Desktop HUD Overlay window
   const kvmIndicatorHud = useKvmStore((s) => s.settings.indicatorHud);
   const kvmHudCorner = useKvmStore((s) => s.settings.indicatorHudCorner);
-  const kvmIsTrapped = useKvmStore((s) => s.status.is_input_trapped);
   const kvmHasPeers = useKvmStore((s) => s.status.connected_peers.length > 0 || s.topology.computers.length > 1);
+  // The cursor is on this machine when it is a controller that is not trapped,
+  // or a receiver that a remote controller has entered.
+  const kvmOwnsCursor = useKvmStore(
+    (s) => !!s.status.receiver_entered || (!!s.status.controller_edge && !s.status.is_input_trapped)
+  );
 
+  // Transient toast: appears on the machine that just received the cursor,
+  // stays ~1.8 s, is click-through, and never lingers over the user's work.
   useEffect(() => {
+    const HUD_W = 200;
+    const HUD_H = 36;
+    const MARGIN = 16;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const closeHud = async () => {
+      const w = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
+      await w?.close().catch(() => {});
+    };
+
+    if (!(kvmIndicatorHud && kvmHasPeers && kvmOwnsCursor)) {
+      void closeHud();
+      return;
+    }
+
     (async () => {
-      const existingHud = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
-      // ONLY show HUD on whichever machine CURRENTLY owns the cursor
-      // If host is trapped (cursor remote), host hides HUD. If host is untrapped and linked, host shows HUD.
-      const shouldShowHud = kvmIndicatorHud && kvmHasPeers && !kvmIsTrapped;
+      const screenW = window.screen.availWidth || 1920;
+      const screenH = window.screen.availHeight || 1080;
+      const right = kvmHudCorner === "top-right" || kvmHudCorner === "bottom-right";
+      const bottom = kvmHudCorner === "bottom-left" || kvmHudCorner === "bottom-right";
+      const x = right ? Math.max(MARGIN, screenW - HUD_W - MARGIN) : MARGIN;
+      const y = bottom ? Math.max(MARGIN, screenH - HUD_H - MARGIN) : MARGIN;
 
-      if (shouldShowHud) {
-        // Calculate corner coordinates
-        const screenW = window.screen.availWidth || 1920;
-        const screenH = window.screen.availHeight || 1080;
-        let posX = 40;
-        let posY = 40;
-
-        if (kvmHudCorner === "top-right") {
-          posX = Math.max(40, screenW - 220);
-          posY = 40;
-        } else if (kvmHudCorner === "bottom-left") {
-          posX = 40;
-          posY = Math.max(40, screenH - 80);
-        } else if (kvmHudCorner === "bottom-right") {
-          posX = Math.max(40, screenW - 220);
-          posY = Math.max(40, screenH - 80);
-        }
-
-        if (!existingHud) {
-          try {
-            const w = new WebviewWindow("kvm-hud", {
-              url: "index.html?kvm_hud=1",
-              title: "AnyLeap KVM HUD",
-              width: 190,
-              height: 48,
-              x: posX,
-              y: posY,
-              resizable: false,
-              decorations: false,
-              alwaysOnTop: true,
-              skipTaskbar: true,
-              transparent: true,
-              shadow: false,
-              focus: false,
-            });
-            w.once("tauri://error", (e) => console.error("kvm-hud window error:", e));
-          } catch (e) {
-            console.error("Failed to spawn native desktop HUD overlay:", e);
-          }
-        } else {
-          // Reposition if corner changed
-          await existingHud.setPosition(new (await import("@tauri-apps/api/dpi")).PhysicalPosition(posX, posY)).catch(() => {});
-        }
-      } else {
-        if (existingHud) {
-          await existingHud.close().catch(() => {});
-        }
+      await closeHud();
+      try {
+        const w = new WebviewWindow("kvm-hud", {
+          url: "index.html?kvm_hud=1",
+          title: "AnyLeap KVM HUD",
+          width: HUD_W,
+          height: HUD_H,
+          x,
+          y,
+          resizable: false,
+          decorations: false,
+          alwaysOnTop: true,
+          skipTaskbar: true,
+          transparent: true,
+          shadow: false,
+          focus: false,
+        });
+        w.once("tauri://created", () => void w.setIgnoreCursorEvents(true).catch(() => {}));
+        w.once("tauri://error", (e) => console.error("kvm-hud window error:", e));
+      } catch (e) {
+        console.error("Failed to spawn native desktop HUD overlay:", e);
       }
+      closeTimer = setTimeout(() => void closeHud(), 1800);
     })();
-  }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmIsTrapped]);
+
+    return () => {
+      if (closeTimer) clearTimeout(closeTimer);
+    };
+  }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmOwnsCursor]);
 
   const paletteCommands = useMemo(() => {
     const hasOnlineDevice = Boolean(

@@ -52,6 +52,10 @@ export interface KvmStatus {
   screen_height?: number;
   monitors?: MonitorDisplay[];
   peers?: ComputerNode[];
+  /** Edge of this PC that leaps to the peer while this PC is the active controller. */
+  controller_edge?: string | null;
+  /** True while a remote controller drives this PC's cursor. */
+  receiver_entered?: boolean;
 }
 
 export interface DiscoveredPeer {

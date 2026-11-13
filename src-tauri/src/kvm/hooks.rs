@@ -117,6 +117,12 @@ impl HookController {
         HOOK_ACTIVE.load(Ordering::Relaxed)
     }
 
+    /// Edge that leaps to the peer, when capture is active with a link.
+    pub fn active_link_edge(&self) -> Option<&'static str> {
+        (HOOK_ACTIVE.load(Ordering::Relaxed) && HAS_ACTIVE_LINK.load(Ordering::Acquire))
+            .then(|| Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed)).as_str())
+    }
+
     pub fn is_trapped(&self) -> bool {
         IS_TRAPPED.load(Ordering::Acquire)
     }
@@ -392,10 +398,11 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
 
     // Double-check live OS monitor topology on the adjacent pixel beyond the link edge
     let neighbor = match link_edge {
-        Edge::Right => POINT { x: mx + mw, y: pt.y },
-        Edge::Left => POINT { x: mx - 1, y: pt.y },
-        Edge::Top => POINT { x: pt.x, y: my - 1 },
-        Edge::Bottom => POINT { x: pt.x, y: my + mh },
+        // pt may lie past the screen edge; clamp onto the edge monitor first.
+        Edge::Right => POINT { x: mx + mw, y: pt.y.clamp(my, my + mh - 1) },
+        Edge::Left => POINT { x: mx - 1, y: pt.y.clamp(my, my + mh - 1) },
+        Edge::Top => POINT { x: pt.x.clamp(mx, mx + mw - 1), y: my - 1 },
+        Edge::Bottom => POINT { x: pt.x.clamp(mx, mx + mw - 1), y: my + mh },
     };
     if !MonitorFromPoint(neighbor, MONITOR_DEFAULTTONULL).is_invalid() {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
