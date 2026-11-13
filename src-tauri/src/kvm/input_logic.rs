@@ -121,9 +121,14 @@ pub fn detect_controller_edge(
     link_edge: Edge,
     deadzone_px: i32,
 ) -> Option<(usize, f32)> {
-    let (idx, mon) = monitor_at_point(monitors, pt.0, pt.1)?;
+    // A low-level hook reports the *proposed* position, which lies past the
+    // screen edge when the user pushes against it. Resolve it to the nearest
+    // monitor and clamp, otherwise pushes past the edge are never detected.
+    let (idx, mon) = monitor_at_point(monitors, pt.0, pt.1)
+        .or_else(|| nearest_monitor(monitors, pt.0, pt.1))?;
     let right = mon.x + mon.width;
     let bottom = mon.y + mon.height;
+    let pt = (pt.0.clamp(mon.x, right - 1), pt.1.clamp(mon.y, bottom - 1));
 
     let (at_edge, neighbor) = match link_edge {
         Edge::Right => (pt.0 >= right - 2, (right, pt.1)),
@@ -628,6 +633,20 @@ mod tests {
 
         // Away from edge (> 2 px inside): no leap
         assert_eq!(detect_controller_edge((1917, 150), &mons, Edge::Right, 48), None);
+    }
+
+    #[test]
+    fn controller_edge_detects_proposed_point_past_the_screen_edge() {
+        // Low-level hooks report the unclamped proposed position when pushing past the edge.
+        let mons = vec![mon("1", 0, 0, 1920, 1080, true)];
+        let hit = detect_controller_edge((1935, 540), &mons, Edge::Right, 48).unwrap();
+        assert_eq!(hit.0, 0);
+        assert!((hit.1 - 0.5).abs() < 1e-3);
+        assert!(detect_controller_edge((-12, 540), &mons, Edge::Left, 48).is_some());
+        // Past the edge but inside the corner deadzone: still no leap.
+        assert_eq!(detect_controller_edge((1935, 5), &mons, Edge::Right, 48), None);
+        // Past the bottom while linked on the right: not an edge hit.
+        assert_eq!(detect_controller_edge((900, 1100), &mons, Edge::Right, 48), None);
     }
 
     #[test]

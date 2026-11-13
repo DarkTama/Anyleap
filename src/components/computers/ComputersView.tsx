@@ -18,7 +18,6 @@ import { useKvmStore } from "@/stores/kvmStore";
 import { kvmSetSyncSettings } from "@/services/kvmService";
 import { TopologyCanvas } from "./TopologyCanvas";
 import { PairingPinModal } from "./PairingPinModal";
-import { DesktopHudPill } from "./DesktopHudPill";
 
 export function ComputersView() {
   const status = useKvmStore((s) => s.status);
@@ -75,9 +74,29 @@ export function ComputersView() {
     await handleConnectPeer(peer);
   };
 
+  const remotePeer = topology.computers.find((c) => !c.is_local);
+  const peerName = remotePeer?.name || status.connected_peers[0] || "the other PC";
+  const edge = status.controller_edge;
+  const [linkTone, linkMessage] = edge
+    ? status.is_input_trapped
+      ? ["bg-sky-400 animate-pulse", `Controlling ${peerName} now.`]
+      : [
+          "bg-emerald-400",
+          `Linked to ${peerName}. Push the cursor past the ${edge.toUpperCase()} edge of this PC's screen (hold briefly, away from the corners) to move to it.`,
+        ]
+    : status.is_host_running && status.connected_peers.length > 0
+      ? status.receiver_entered
+        ? ["bg-sky-400 animate-pulse", `${peerName} is controlling this PC.`]
+        : ["bg-emerald-400", `${peerName} can control this PC — move its cursor across the linked edge.`]
+      : remotePeer
+        ? ["bg-amber-400", `Linked to ${peerName}, but input capture is not active. Click "Link PC" again.`]
+        : [
+            "bg-zinc-500",
+            `Not linked. On the PC to be controlled, start the receiver; on the PC whose mouse you use, click "Link PC".`,
+          ];
+
   return (
     <div className="relative flex h-full flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-6 text-zinc-100 space-y-6 select-none">
-      <DesktopHudPill />
 
       {/* Top Header & Master Host Toggle */}
       <div className="flex items-center justify-between border-b border-[#222226] pb-4">
@@ -140,12 +159,12 @@ export function ComputersView() {
         </div>
       )}
 
-      {/* Emergency Escape Reminder Pill */}
+      {/* Link status: tells the user which role this PC has and which edge to use */}
       <div className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#141417] px-4 py-3 text-xs">
         <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className={`h-2 w-2 shrink-0 rounded-full ${linkTone}`} />
           <span className="font-medium text-zinc-300">
-            Cursor edge-leap active. Move mouse past edge to jump to adjacent screen; move back to return. Emergency escape: press <kbd className="rounded bg-[#202026] px-1.5 py-0.5 font-mono text-zinc-100 border border-[#27272a]">Scroll Lock, Pause, or Ctrl+Alt+Esc</kbd> anytime.
+            {linkMessage} Emergency escape: press <kbd className="rounded bg-[#202026] px-1.5 py-0.5 font-mono text-zinc-100 border border-[#27272a]">Scroll Lock, Pause, or Ctrl+Alt+Esc</kbd>.
           </span>
         </div>
 

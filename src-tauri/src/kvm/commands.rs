@@ -21,6 +21,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 const KVM_PORT: u16 = 4177;
 
+/// Receiver side: a remote controller currently drives this PC's cursor (UI status only).
+static RECEIVER_ENTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 struct ReceiverSessionState {
     is_entered: bool,
     entry_edge: Edge,
@@ -56,6 +59,7 @@ fn release_tracked_inputs(keys: Vec<super::input_logic::TrackedKey>, buttons: Ve
 fn release_receiver_inputs(rx_state: &Arc<Mutex<ReceiverSessionState>>) {
     let released = if let Ok(mut st) = rx_state.lock() {
         st.is_entered = false;
+        RECEIVER_ENTERED.store(false, std::sync::atomic::Ordering::Relaxed);
         st.last_pos_emit = None;
         Some(st.tracker.release_all())
     } else {
@@ -214,6 +218,8 @@ pub async fn kvm_get_status(
         screen_height: sh,
         monitors,
         peers,
+        controller_edge: kvm.hooks.active_link_edge().map(String::from),
+        receiver_entered: RECEIVER_ENTERED.load(std::sync::atomic::Ordering::Relaxed),
     })
 }
 
@@ -304,21 +310,17 @@ pub async fn kvm_start_server(
 
                     if let Ok(mut st) = rx_state_pkt.lock() {
                         st.is_entered = true;
+                        RECEIVER_ENTERED.store(true, std::sync::atomic::Ordering::Relaxed);
                         st.entry_edge = entry_edge;
                         st.monitors = fresh_monitors;
                         st.union = union;
                         st.last_pos_emit = None;
                     }
 
+                    // Keep the receiver's current keyboard focus: the entry point is the
+                    // screen edge (desktop/taskbar), so focusing the window under it would
+                    // send typed keys to the desktop until the user clicks something.
                     injector::set_cursor_position(pos.0, pos.1);
-                    #[cfg(windows)]
-                    unsafe {
-                        let pt = windows::Win32::Foundation::POINT { x: pos.0, y: pos.1 };
-                        let hwnd = windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(pt);
-                        if !hwnd.is_invalid() {
-                            let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
-                        }
-                    }
 
                     let _ = pkt_out_tx.send(Outbound::Packet(KvmPacket::CursorPosition {
                         norm_x,
@@ -436,6 +438,7 @@ pub async fn kvm_start_server(
                         }
                         ReceiverStep::Return { edge, relative_y } => {
                             st.is_entered = false;
+                            RECEIVER_ENTERED.store(false, std::sync::atomic::Ordering::Relaxed);
                             st.last_pos_emit = None;
                             let (keys, buttons) = st.tracker.release_all();
                             DeltaAction::Return {
@@ -509,6 +512,8 @@ pub async fn kvm_start_server(
         screen_height: sh,
         monitors,
         peers,
+        controller_edge: kvm.hooks.active_link_edge().map(String::from),
+        receiver_entered: RECEIVER_ENTERED.load(std::sync::atomic::Ordering::Relaxed),
     })
 }
 

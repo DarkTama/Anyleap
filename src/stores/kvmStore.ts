@@ -259,12 +259,17 @@ export const useKvmStore = create<KvmState>((set, get) => ({
           }
           void get().refreshStatus();
         });
+        // Both roles emit these events: a controller leaves/returns, a receiver is entered/left.
         void listen<string>("kvm-cursor-enter", () => {
-          set((state) => ({ status: { ...state.status, is_input_trapped: true } }));
+          set((state) =>
+            state.status.controller_edge
+              ? { status: { ...state.status, is_input_trapped: true } }
+              : { status: { ...state.status, receiver_entered: true } }
+          );
         });
         void listen<string>("kvm-cursor-return", () => {
           set((state) => ({
-            status: { ...state.status, is_input_trapped: false },
+            status: { ...state.status, is_input_trapped: false, receiver_entered: false },
             cursorPos: null,
           }));
         });
@@ -401,8 +406,10 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       };
 
       await kvmUpdateTopology(nextTopology);
+      // Re-read status so controller_edge reflects the capture just started.
+      const afterStatus = await kvmGetStatus().catch(() => status);
       set({
-        status,
+        status: afterStatus,
         topology: nextTopology,
         selectedPeer: { ...peer, id: peerId, name: peerName },
         isLoading: false,
