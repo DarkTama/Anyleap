@@ -158,8 +158,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage, (Join-Path $stage 'scrcpy') | Out-Null
 
           Copy-Item "$rel/anyleap.exe" $stage -Force
-          Copy-Item "$bin/adb-x86_64-pc-windows-msvc.exe"    $stage -Force
-          Copy-Item "$bin/scrcpy-x86_64-pc-windows-msvc.exe" $stage -Force
+          # Sidecars resolve as <name>.exe next to the app at runtime (no target triple).
+          Copy-Item "$bin/adb-x86_64-pc-windows-msvc.exe"    (Join-Path $stage 'adb.exe') -Force
+          Copy-Item "$bin/scrcpy-x86_64-pc-windows-msvc.exe" (Join-Path $stage 'scrcpy.exe') -Force
           Copy-Item "$bin/dll/*.dll" $stage -Force
           Copy-Item "$bin/*.png"     $stage -Force
           Copy-Item "$bin/scrcpy-server" (Join-Path $stage 'scrcpy/scrcpy-server') -Force
