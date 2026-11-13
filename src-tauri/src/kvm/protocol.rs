@@ -16,6 +16,8 @@ pub struct ComputerNode {
     pub is_local: bool,
     pub address: Option<String>,
     pub bounds: ScreenRect,
+    #[serde(default)]
+    pub monitors: Vec<MonitorDisplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -49,11 +51,15 @@ pub enum KvmPacket {
         computer_id: String,
         name: String,
         pin: String,
+        #[serde(default)]
+        monitors: Vec<MonitorDisplay>,
     },
     PairAck {
         accepted: bool,
         computer_id: String,
         name: String,
+        #[serde(default)]
+        monitors: Vec<MonitorDisplay>,
     },
     MouseButton {
         button: u8, // 1 = Left, 2 = Right, 3 = Middle
@@ -84,7 +90,12 @@ pub enum KvmPacket {
         norm_y: f32,
     },
     EmergencyRelease,
+    ReleaseAll,
     SessionDisconnect,
+    /// Internal server notification emitted when a single peer connection closes.
+    PeerDisconnected {
+        computer_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,6 +118,8 @@ pub struct KvmStatus {
     pub screen_width: i32,
     pub screen_height: i32,
     pub monitors: Vec<MonitorDisplay>,
+    #[serde(default)]
+    pub peers: Vec<ComputerNode>,
 }
 
 /// Outbound traffic: control packets or a clipboard image (own uni stream).

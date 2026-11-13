@@ -1,41 +1,50 @@
-use super::protocol::{KvmPacket, TopologyConfig, TopologyLink};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use super::input_logic::{
+    controller_return_pos, detect_controller_edge, Edge, PressedInputTracker,
+};
+use super::monitors::{get_local_monitors, MonitorDisplay};
+use super::protocol::{KvmPacket, TopologyConfig};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 #[cfg(windows)]
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 #[cfg(windows)]
+use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONULL};
+#[cfg(windows)]
 use windows::Win32::System::Threading::GetCurrentThreadId;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-static GLOBAL_TOPOLOGY: OnceLock<Mutex<Option<TopologyConfig>>> = OnceLock::new();
+#[cfg(windows)]
+const WM_KVM_RESTORE_CURSOR: u32 = WM_APP + 1;
+
 static PACKET_SENDER: OnceLock<Mutex<Option<mpsc::Sender<KvmPacket>>>> = OnceLock::new();
 static MOUSE_DELTA_SENDER: OnceLock<Mutex<Option<mpsc::Sender<(i32, i32)>>>> = OnceLock::new();
-static CLAMP_CENTER: OnceLock<Mutex<POINT>> = OnceLock::new();
-static LEAP_EDGE: OnceLock<Mutex<String>> = OnceLock::new();
+static LOCAL_MONITORS: OnceLock<Mutex<Vec<MonitorDisplay>>> = OnceLock::new();
+static CONTROLLER_TRACKER: OnceLock<Mutex<PressedInputTracker>> = OnceLock::new();
 
-static VIRTUAL_REMOTE_X: AtomicI32 = AtomicI32::new(0);
-static VIRTUAL_REMOTE_Y: AtomicI32 = AtomicI32::new(0);
 static RECENTERING: AtomicBool = AtomicBool::new(false);
 static HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static IS_TRAPPED: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
-// Multi-monitor virtual desktop bounds across all local displays
-static DESKTOP_MIN_X: AtomicI32 = AtomicI32::new(0);
-static DESKTOP_MAX_X: AtomicI32 = AtomicI32::new(1920);
-static DESKTOP_MIN_Y: AtomicI32 = AtomicI32::new(0);
-static DESKTOP_MAX_Y: AtomicI32 = AtomicI32::new(1080);
+static CLAMP_CENTER_X: AtomicI32 = AtomicI32::new(960);
+static CLAMP_CENTER_Y: AtomicI32 = AtomicI32::new(540);
+static TRAP_MON_X: AtomicI32 = AtomicI32::new(0);
+static TRAP_MON_Y: AtomicI32 = AtomicI32::new(0);
+static TRAP_MON_W: AtomicI32 = AtomicI32::new(1920);
+static TRAP_MON_H: AtomicI32 = AtomicI32::new(1080);
 
-static PEER_WIDTH: AtomicI32 = AtomicI32::new(1920);
-static PEER_HEIGHT: AtomicI32 = AtomicI32::new(1080);
+static LINK_FROM_EDGE: AtomicU8 = AtomicU8::new(Edge::Right as u8);
+static LINK_TO_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
+static HAS_ACTIVE_LINK: AtomicBool = AtomicBool::new(false);
+static DEADZONE_PX: AtomicI32 = AtomicI32::new(48);
+static RESISTANCE_MS: AtomicU64 = AtomicU64::new(120);
 
-// Key combo states for custom emergency unhook
+static MOUSE_BUTTONS_DOWN: AtomicU8 = AtomicU8::new(0);
 static KEY_CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static KEY_ALT_DOWN: AtomicBool = AtomicBool::new(false);
-
 static EDGE_DWELL_START: AtomicU64 = AtomicU64::new(0);
 
 fn now_millis() -> u64 {
@@ -43,10 +52,6 @@ fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-fn global_topology() -> &'static Mutex<Option<TopologyConfig>> {
-    GLOBAL_TOPOLOGY.get_or_init(|| Mutex::new(None))
 }
 
 fn packet_sender() -> &'static Mutex<Option<mpsc::Sender<KvmPacket>>> {
@@ -57,20 +62,43 @@ fn mouse_delta_sender() -> &'static Mutex<Option<mpsc::Sender<(i32, i32)>>> {
     MOUSE_DELTA_SENDER.get_or_init(|| Mutex::new(None))
 }
 
-fn clamp_center() -> &'static Mutex<POINT> {
-    CLAMP_CENTER.get_or_init(|| Mutex::new(POINT { x: 960, y: 540 }))
+fn local_monitors() -> &'static Mutex<Vec<MonitorDisplay>> {
+    LOCAL_MONITORS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn leap_edge() -> &'static Mutex<String> {
-    LEAP_EDGE.get_or_init(|| Mutex::new("right".to_string()))
+fn controller_tracker() -> &'static Mutex<PressedInputTracker> {
+    CONTROLLER_TRACKER.get_or_init(|| Mutex::new(PressedInputTracker::new()))
 }
 
-/// Reset cursor display counter so cursor never stays hidden
+fn try_send_packet(pkt: KvmPacket) {
+    if let Ok(guard) = packet_sender().try_lock() {
+        if let Some(ref tx) = *guard {
+            let _ = tx.try_send(pkt);
+        }
+    }
+}
+
+/// Reset cursor clip and display counter so cursor never stays hidden.
 pub fn restore_cursor_visibility() {
     #[cfg(windows)]
     unsafe {
         let _ = ClipCursor(None);
-        while ShowCursor(true) < 0 {}
+        for _ in 0..16 {
+            if ShowCursor(true) >= 0 {
+                break;
+            }
+        }
+    }
+}
+
+fn notify_hook_thread_restore() {
+    restore_cursor_visibility();
+    #[cfg(windows)]
+    unsafe {
+        let tid = HOOK_THREAD_ID.load(Ordering::Relaxed);
+        if tid != 0 {
+            let _ = PostThreadMessageW(tid, WM_KVM_RESTORE_CURSOR, WPARAM(0), LPARAM(0));
+        }
     }
 }
 
@@ -90,27 +118,54 @@ impl HookController {
     }
 
     pub fn is_trapped(&self) -> bool {
-        IS_TRAPPED.load(Ordering::Relaxed)
+        IS_TRAPPED.load(Ordering::Acquire)
     }
 
     pub fn set_trapped(&self, trapped: bool) {
         IS_TRAPPED.store(trapped, Ordering::SeqCst);
         if !trapped {
-            restore_cursor_visibility();
+            notify_hook_thread_restore();
         }
+    }
+
+    pub fn handle_cursor_return(&self, relative_y: f32) {
+        if !IS_TRAPPED.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        notify_hook_thread_restore();
+
+        let mon = MonitorDisplay {
+            id: String::new(),
+            x: TRAP_MON_X.load(Ordering::Relaxed),
+            y: TRAP_MON_Y.load(Ordering::Relaxed),
+            width: TRAP_MON_W.load(Ordering::Relaxed),
+            height: TRAP_MON_H.load(Ordering::Relaxed),
+            is_primary: true,
+        };
+        let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
+        let (rx, ry) = controller_return_pos(&mon, link_edge, relative_y);
+        #[cfg(windows)]
+        unsafe {
+            let _ = SetCursorPos(rx, ry);
+        }
+        #[cfg(not(windows))]
+        let _ = (rx, ry);
     }
 
     pub fn emergency_release(&self) {
         self.set_trapped(false);
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
         KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
         KEY_ALT_DOWN.store(false, Ordering::Relaxed);
-        restore_cursor_visibility();
-
-        let guard = packet_sender().lock().unwrap();
-        if let Some(ref tx) = *guard {
-            let _ = tx.try_send(KvmPacket::EmergencyRelease);
+        if let Ok(mut tracker) = controller_tracker().try_lock() {
+            let _ = tracker.release_all();
         }
+        notify_hook_thread_restore();
+
+        try_send_packet(KvmPacket::EmergencyRelease);
+        try_send_packet(KvmPacket::ReleaseAll);
     }
 
     pub fn start_hooks(
@@ -119,28 +174,35 @@ impl HookController {
         packet_tx: mpsc::Sender<KvmPacket>,
         delta_tx: mpsc::Sender<(i32, i32)>,
     ) {
-        // Calculate true combined bounding box of all local physical monitors
-        #[cfg(windows)]
-        unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::*;
-            let min_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            let min_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            let total_w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-            let total_h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            DESKTOP_MIN_X.store(min_x, Ordering::Relaxed);
-            DESKTOP_MAX_X.store(min_x + total_w, Ordering::Relaxed);
-            DESKTOP_MIN_Y.store(min_y, Ordering::Relaxed);
-            DESKTOP_MAX_Y.store(min_y + total_h, Ordering::Relaxed);
+        let monitors = get_local_monitors();
+        if let Ok(mut mons) = local_monitors().lock() {
+            *mons = monitors;
         }
 
-        if let Some(peer) = topology.computers.iter().find(|c| !c.is_local) {
-            PEER_WIDTH.store(peer.bounds.width, Ordering::Relaxed);
-            PEER_HEIGHT.store(peer.bounds.height, Ordering::Relaxed);
+        let local_id = topology
+            .computers
+            .iter()
+            .find(|c| c.is_local)
+            .map(|c| c.id.as_str());
+
+        if let Some(link) = local_id.and_then(|id| topology.links.iter().find(|l| l.from_id == id)) {
+            let from_edge = Edge::from_str(&link.from_edge).unwrap_or(Edge::Right);
+            let to_edge = Edge::from_str(&link.to_edge).unwrap_or_else(|| from_edge.opposite());
+            LINK_FROM_EDGE.store(from_edge as u8, Ordering::Relaxed);
+            LINK_TO_EDGE.store(to_edge as u8, Ordering::Relaxed);
+            DEADZONE_PX.store(link.deadzone_px.unwrap_or(48), Ordering::Relaxed);
+            RESISTANCE_MS.store(link.resistance_ms.unwrap_or(120) as u64, Ordering::Relaxed);
+            HAS_ACTIVE_LINK.store(true, Ordering::Release);
+        } else {
+            HAS_ACTIVE_LINK.store(false, Ordering::Release);
         }
 
-        *global_topology().lock().unwrap() = Some(topology);
-        *packet_sender().lock().unwrap() = Some(packet_tx);
-        *mouse_delta_sender().lock().unwrap() = Some(delta_tx);
+        if let Ok(mut g) = packet_sender().lock() {
+            *g = Some(packet_tx);
+        }
+        if let Ok(mut g) = mouse_delta_sender().lock() {
+            *g = Some(delta_tx);
+        }
 
         if HOOK_ACTIVE.swap(true, Ordering::SeqCst) {
             return;
@@ -151,24 +213,18 @@ impl HookController {
             let tid = GetCurrentThreadId();
             HOOK_THREAD_ID.store(tid, Ordering::SeqCst);
 
-            let h_mouse = SetWindowsHookExW(
-                WH_MOUSE_LL,
-                Some(low_level_mouse_proc),
-                None,
-                0,
-            );
-            let h_kbd = SetWindowsHookExW(
-                WH_KEYBOARD_LL,
-                Some(low_level_keyboard_proc),
-                None,
-                0,
-            );
+            let h_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0);
+            let h_kbd = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
 
             let mut msg = MSG::default();
             while HOOK_ACTIVE.load(Ordering::Relaxed) {
                 let res = GetMessageW(&mut msg, None, 0, 0);
                 if res.0 <= 0 {
                     break;
+                }
+                if msg.message == WM_KVM_RESTORE_CURSOR {
+                    restore_cursor_visibility();
+                    continue;
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -180,13 +236,17 @@ impl HookController {
             if let Ok(hook) = h_kbd {
                 let _ = UnhookWindowsHookEx(hook);
             }
+            HOOK_THREAD_ID.store(0, Ordering::SeqCst);
             restore_cursor_visibility();
         });
     }
 
     pub fn stop_hooks(&self) {
-        HOOK_ACTIVE.store(false, Ordering::SeqCst);
-        self.emergency_release();
+        let was_active = HOOK_ACTIVE.swap(false, Ordering::SeqCst);
+        if was_active || IS_TRAPPED.load(Ordering::Acquire) {
+            self.emergency_release();
+        }
+        HAS_ACTIVE_LINK.store(false, Ordering::Release);
 
         #[cfg(windows)]
         unsafe {
@@ -204,147 +264,150 @@ unsafe extern "system" fn low_level_mouse_proc(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
-    if n_code >= 0 && HOOK_ACTIVE.load(Ordering::Relaxed) {
-        let hook_struct = *(l_param.0 as *const MSLLHOOKSTRUCT);
-        let pt = hook_struct.pt;
-        let trapped = IS_TRAPPED.load(Ordering::Relaxed);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_mouse_event(n_code, w_param, l_param)
+    }));
 
-        if trapped {
-            if RECENTERING.load(Ordering::Relaxed) {
-                return LRESULT(1);
+    match outcome {
+        Ok(Some(res)) => res,
+        Ok(None) => CallNextHookEx(None, n_code, w_param, l_param),
+        Err(_) => {
+            IS_TRAPPED.store(false, Ordering::SeqCst);
+            EDGE_DWELL_START.store(0, Ordering::Relaxed);
+            MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+            restore_cursor_visibility();
+            CallNextHookEx(None, n_code, w_param, l_param)
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> Option<LRESULT> {
+    if n_code < 0 || !HOOK_ACTIVE.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    let hook_struct = *(l_param.0 as *const MSLLHOOKSTRUCT);
+    let pt = hook_struct.pt;
+    let msg = w_param.0 as u32;
+
+    match msg {
+        WM_LBUTTONDOWN => {
+            MOUSE_BUTTONS_DOWN.fetch_or(1, Ordering::Relaxed);
+        }
+        WM_LBUTTONUP => {
+            MOUSE_BUTTONS_DOWN.fetch_and(!1, Ordering::Relaxed);
+        }
+        WM_RBUTTONDOWN => {
+            MOUSE_BUTTONS_DOWN.fetch_or(2, Ordering::Relaxed);
+        }
+        WM_RBUTTONUP => {
+            MOUSE_BUTTONS_DOWN.fetch_and(!2, Ordering::Relaxed);
+        }
+        WM_MBUTTONDOWN => {
+            MOUSE_BUTTONS_DOWN.fetch_or(4, Ordering::Relaxed);
+        }
+        WM_MBUTTONUP => {
+            MOUSE_BUTTONS_DOWN.fetch_and(!4, Ordering::Relaxed);
+        }
+        WM_XBUTTONDOWN => {
+            let xbtn = ((hook_struct.mouseData >> 16) & 0xFFFF) as u16;
+            let bit = if xbtn == 2 { 16 } else { 8 };
+            MOUSE_BUTTONS_DOWN.fetch_or(bit, Ordering::Relaxed);
+        }
+        WM_XBUTTONUP => {
+            let xbtn = ((hook_struct.mouseData >> 16) & 0xFFFF) as u16;
+            let bit = if xbtn == 2 { 16 } else { 8 };
+            MOUSE_BUTTONS_DOWN.fetch_and(!bit, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+
+    if IS_TRAPPED.load(Ordering::Acquire) {
+        if msg == WM_MOUSEMOVE {
+            if RECENTERING.load(Ordering::SeqCst) {
+                return Some(LRESULT(1));
             }
-
-            let center = *clamp_center().lock().unwrap();
-            let dx = pt.x - center.x;
-            let dy = pt.y - center.y;
+            let cx = CLAMP_CENTER_X.load(Ordering::Relaxed);
+            let cy = CLAMP_CENTER_Y.load(Ordering::Relaxed);
+            let dx = pt.x - cx;
+            let dy = pt.y - cy;
 
             if dx != 0 || dy != 0 {
                 RECENTERING.store(true, Ordering::SeqCst);
-                let _ = SetCursorPos(center.x, center.y);
+                let _ = SetCursorPos(cx, cy);
                 RECENTERING.store(false, Ordering::SeqCst);
 
-                let desk_max_x = DESKTOP_MAX_X.load(Ordering::Relaxed);
-                let desk_min_x = DESKTOP_MIN_X.load(Ordering::Relaxed);
-                let remote_w = PEER_WIDTH.load(Ordering::Relaxed);
-                let remote_h = PEER_HEIGHT.load(Ordering::Relaxed);
-                let edge = leap_edge().lock().unwrap().clone();
-
-                let raw_vx = VIRTUAL_REMOTE_X.load(Ordering::Relaxed) + dx;
-                let raw_vy = (VIRTUAL_REMOTE_Y.load(Ordering::Relaxed) + dy).clamp(0, remote_h);
-                VIRTUAL_REMOTE_Y.store(raw_vy, Ordering::Relaxed);
-
-                // Auto-return check against virtual bounds
-                if edge == "right" {
-                    if raw_vx < 0 {
-                        untrap_and_return(desk_max_x - 30, pt.y, "right");
-                        return LRESULT(1);
+                if let Ok(guard) = mouse_delta_sender().try_lock() {
+                    if let Some(ref tx) = *guard {
+                        let _ = tx.try_send((dx, dy));
                     }
-                    let clamped_vx = raw_vx.min(remote_w + 20);
-                    VIRTUAL_REMOTE_X.store(clamped_vx, Ordering::Relaxed);
-                } else if edge == "left" {
-                    if raw_vx > remote_w {
-                        untrap_and_return(desk_min_x + 30, pt.y, "left");
-                        return LRESULT(1);
-                    }
-                    let clamped_vx = raw_vx.max(-20);
-                    VIRTUAL_REMOTE_X.store(clamped_vx, Ordering::Relaxed);
-                }
-
-                let guard = mouse_delta_sender().lock().unwrap();
-                if let Some(ref tx) = *guard {
-                    let _ = tx.try_send((dx, dy));
-                }
-
-                let cur_vx = VIRTUAL_REMOTE_X.load(Ordering::Relaxed);
-                let cur_vy = VIRTUAL_REMOTE_Y.load(Ordering::Relaxed);
-                let pkt_guard = packet_sender().lock().unwrap();
-                if let Some(ref tx) = *pkt_guard {
-                    let _ = tx.try_send(KvmPacket::CursorPosition {
-                        norm_x: (cur_vx as f32 / remote_w as f32).clamp(0.0, 1.0),
-                        norm_y: (cur_vy as f32 / remote_h as f32).clamp(0.0, 1.0),
-                    });
                 }
             }
-
-            match w_param.0 as u32 {
-                WM_LBUTTONDOWN => send_button(1, true),
-                WM_LBUTTONUP => send_button(1, false),
-                WM_RBUTTONDOWN => send_button(2, true),
-                WM_RBUTTONUP => send_button(2, false),
-                WM_MBUTTONDOWN => send_button(3, true),
-                WM_MBUTTONUP => send_button(3, false),
+        } else {
+            match msg {
+                WM_LBUTTONDOWN => try_send_packet(KvmPacket::MouseButton { button: 1, is_down: true }),
+                WM_LBUTTONUP => try_send_packet(KvmPacket::MouseButton { button: 1, is_down: false }),
+                WM_RBUTTONDOWN => try_send_packet(KvmPacket::MouseButton { button: 2, is_down: true }),
+                WM_RBUTTONUP => try_send_packet(KvmPacket::MouseButton { button: 2, is_down: false }),
+                WM_MBUTTONDOWN => try_send_packet(KvmPacket::MouseButton { button: 3, is_down: true }),
+                WM_MBUTTONUP => try_send_packet(KvmPacket::MouseButton { button: 3, is_down: false }),
                 WM_MOUSEWHEEL => {
                     let delta = (hook_struct.mouseData >> 16) as i16 as i32;
-                    let guard = packet_sender().lock().unwrap();
-                    if let Some(ref tx) = *guard {
-                        let _ = tx.try_send(KvmPacket::MouseWheel { delta });
-                    }
+                    try_send_packet(KvmPacket::MouseWheel { delta });
                 }
                 _ => {}
             }
-
-            return LRESULT(1);
-        } else {
-            // Check boundary hit against true multi-monitor virtual desktop bounds
-            let topo_guard = global_topology().lock().unwrap();
-            if let Some(ref topo) = *topo_guard {
-                if let Some(primary) = topo.computers.iter().find(|c| c.is_local) {
-                    let desk_max_x = DESKTOP_MAX_X.load(Ordering::Relaxed);
-                    let desk_min_x = DESKTOP_MIN_X.load(Ordering::Relaxed);
-                    let max_boundary_x = desk_max_x - 3;
-                    let min_boundary_x = desk_min_x + 3;
-
-                    let mut at_boundary = false;
-
-                    for link in &topo.links {
-                        if link.from_id == primary.id {
-                            let deadzone = link.deadzone_px.unwrap_or(48);
-                            let resistance_ms = link.resistance_ms.unwrap_or(120) as u64;
-                            let offset_y = link.offset_y.unwrap_or(0);
-
-                            let peer_node = topo.computers.iter().find(|c| c.id == link.to_id);
-                            let peer_h = peer_node.map(|p| p.bounds.height).unwrap_or(1080);
-
-                            let primary_top = DESKTOP_MIN_Y.load(Ordering::Relaxed);
-                            let primary_bottom = DESKTOP_MAX_Y.load(Ordering::Relaxed);
-                            let peer_top = primary_top + offset_y;
-                            let peer_bottom = peer_top + peer_h;
-
-                            let overlap_top = primary_top.max(peer_top) + deadzone;
-                            let overlap_bottom = primary_bottom.min(peer_bottom) - deadzone;
-
-                            let inside_overlap = pt.y >= overlap_top && pt.y <= overlap_bottom;
-
-                            // Right edge of virtual desktop span (far right of 2nd monitor)
-                            if link.from_edge == "right" && pt.x >= max_boundary_x {
-                                at_boundary = true;
-                                if inside_overlap {
-                                    if check_dwell_resistance(resistance_ms) {
-                                        engage_leap(link, pt, "right", desk_max_x, desk_min_x);
-                                        return LRESULT(1);
-                                    }
-                                }
-                            } else if link.from_edge == "left" && pt.x <= min_boundary_x {
-                                at_boundary = true;
-                                if inside_overlap {
-                                    if check_dwell_resistance(resistance_ms) {
-                                        engage_leap(link, pt, "left", desk_max_x, desk_min_x);
-                                        return LRESULT(1);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if !at_boundary {
-                        EDGE_DWELL_START.store(0, Ordering::Relaxed);
-                    }
-                }
-            }
         }
+        return Some(LRESULT(1));
     }
 
-    CallNextHookEx(None, n_code, w_param, l_param)
+    if msg != WM_MOUSEMOVE || !HAS_ACTIVE_LINK.load(Ordering::Acquire) {
+        return None;
+    }
+
+    if MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) != 0 {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        return None;
+    }
+
+    let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
+    let deadzone = DEADZONE_PX.load(Ordering::Relaxed);
+    let resistance_ms = RESISTANCE_MS.load(Ordering::Relaxed);
+
+    let hit = {
+        let Ok(mons) = local_monitors().try_lock() else {
+            return None;
+        };
+        detect_controller_edge((pt.x, pt.y), &mons, link_edge, deadzone).map(|(idx, rel)| {
+            let m = &mons[idx];
+            (m.x, m.y, m.width, m.height, rel)
+        })
+    };
+
+    let Some((mx, my, mw, mh, rel)) = hit else {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        return None;
+    };
+
+    // Double-check live OS monitor topology on the adjacent pixel beyond the link edge
+    let neighbor = match link_edge {
+        Edge::Right => POINT { x: mx + mw, y: pt.y },
+        Edge::Left => POINT { x: mx - 1, y: pt.y },
+        Edge::Top => POINT { x: pt.x, y: my - 1 },
+        Edge::Bottom => POINT { x: pt.x, y: my + mh },
+    };
+    if !MonitorFromPoint(neighbor, MONITOR_DEFAULTTONULL).is_invalid() {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        return None;
+    }
+
+    if check_dwell_resistance(resistance_ms) {
+        engage_leap(mx, my, mw, mh, rel);
+        return Some(LRESULT(1));
+    }
+
+    None
 }
 
 fn check_dwell_resistance(resistance_ms: u64) -> bool {
@@ -365,77 +428,50 @@ fn check_dwell_resistance(resistance_ms: u64) -> bool {
 }
 
 #[cfg(windows)]
-unsafe fn engage_leap(
-    link: &TopologyLink,
-    pt: POINT,
-    edge: &str,
-    desk_max_x: i32,
-    desk_min_x: i32,
-) {
+unsafe fn engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
     IS_TRAPPED.store(true, Ordering::SeqCst);
-    *leap_edge().lock().unwrap() = edge.to_string();
 
-    let remote_w = PEER_WIDTH.load(Ordering::Relaxed);
-    if edge == "right" {
-        VIRTUAL_REMOTE_X.store(0, Ordering::SeqCst);
-    } else {
-        VIRTUAL_REMOTE_X.store(remote_w, Ordering::SeqCst);
-    }
-    VIRTUAL_REMOTE_Y.store(pt.y, Ordering::SeqCst);
+    TRAP_MON_X.store(mx, Ordering::Relaxed);
+    TRAP_MON_Y.store(my, Ordering::Relaxed);
+    TRAP_MON_W.store(mw, Ordering::Relaxed);
+    TRAP_MON_H.store(mh, Ordering::Relaxed);
 
-    let center_x = if edge == "right" { desk_max_x - 60 } else { desk_min_x + 60 };
-    let center_y = pt.y.clamp(60, 1020);
-    let center = POINT { x: center_x, y: center_y };
-    *clamp_center().lock().unwrap() = center;
+    let center_x = mx + mw / 2;
+    let center_y = my + mh / 2;
+    CLAMP_CENTER_X.store(center_x, Ordering::Relaxed);
+    CLAMP_CENTER_Y.store(center_y, Ordering::Relaxed);
 
     let clip_rect = RECT {
-        left: center_x - 30,
-        top: center_y - 30,
-        right: center_x + 30,
-        bottom: center_y + 30,
+        left: mx,
+        top: my,
+        right: mx + mw,
+        bottom: my + mh,
     };
     let _ = ClipCursor(Some(&clip_rect));
+
     RECENTERING.store(true, Ordering::SeqCst);
     let _ = SetCursorPos(center_x, center_y);
     RECENTERING.store(false, Ordering::SeqCst);
 
-    if ShowCursor(false) >= 0 {
-        let _ = ShowCursor(false);
+    for _ in 0..16 {
+        if ShowCursor(false) < 0 {
+            break;
+        }
     }
 
-    let guard = packet_sender().lock().unwrap();
-    if let Some(ref tx) = *guard {
-        let total_h = (DESKTOP_MAX_Y.load(Ordering::Relaxed) - DESKTOP_MIN_Y.load(Ordering::Relaxed)).max(1);
-        let _ = tx.try_send(KvmPacket::CursorEnter {
-            edge: link.to_edge.clone(),
-            relative_y: (pt.y as f32) / (total_h as f32),
-        });
+    if let Ok(mut tracker) = controller_tracker().try_lock() {
+        for k in tracker.release_keys() {
+            super::injector::inject_key(k.key_code, k.scan_code, false, k.extended);
+        }
     }
-}
+    KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
+    KEY_ALT_DOWN.store(false, Ordering::Relaxed);
 
-#[cfg(windows)]
-unsafe fn untrap_and_return(return_x: i32, return_y: i32, edge: &str) {
-    IS_TRAPPED.store(false, Ordering::SeqCst);
-    EDGE_DWELL_START.store(0, Ordering::Relaxed);
-    restore_cursor_visibility();
-    let _ = SetCursorPos(return_x, return_y);
-
-    let guard = packet_sender().lock().unwrap();
-    if let Some(ref tx) = *guard {
-        let total_h = (DESKTOP_MAX_Y.load(Ordering::Relaxed) - DESKTOP_MIN_Y.load(Ordering::Relaxed)).max(1);
-        let _ = tx.try_send(KvmPacket::CursorReturn {
-            edge: edge.to_string(),
-            relative_y: (return_y as f32) / (total_h as f32),
-        });
-    }
-}
-
-#[cfg(windows)]
-fn send_button(button: u8, is_down: bool) {
-    let guard = packet_sender().lock().unwrap();
-    if let Some(ref tx) = *guard {
-        let _ = tx.try_send(KvmPacket::MouseButton { button, is_down });
-    }
+    let to_edge = Edge::from_u8(LINK_TO_EDGE.load(Ordering::Relaxed));
+    try_send_packet(KvmPacket::CursorEnter {
+        edge: to_edge.as_str().to_string(),
+        relative_y,
+    });
 }
 
 #[cfg(windows)]
@@ -444,50 +480,80 @@ unsafe extern "system" fn low_level_keyboard_proc(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
-    if n_code >= 0 && HOOK_ACTIVE.load(Ordering::Relaxed) {
-        let kbd = *(l_param.0 as *const KBDLLHOOKSTRUCT);
-        let vk_code = kbd.vkCode as u16;
-        let scan_code = kbd.scanCode as u16;
-        let is_down = w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN;
-        let extended = (kbd.flags.0 & 1) != 0;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_keyboard_event(n_code, w_param, l_param)
+    }));
 
-        if vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3 {
-            KEY_CTRL_DOWN.store(is_down, Ordering::Relaxed);
-        } else if vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5 {
-            KEY_ALT_DOWN.store(is_down, Ordering::Relaxed);
-        }
-
-        let is_scroll_lock = vk_code == 0x91;
-        let is_pause = vk_code == 0x13;
-        let is_ctrl_alt_esc = vk_code == 0x1B
-            && KEY_CTRL_DOWN.load(Ordering::Relaxed)
-            && KEY_ALT_DOWN.load(Ordering::Relaxed);
-
-        if is_scroll_lock || is_pause || is_ctrl_alt_esc {
+    match outcome {
+        Ok(Some(res)) => res,
+        Ok(None) => CallNextHookEx(None, n_code, w_param, l_param),
+        Err(_) => {
             IS_TRAPPED.store(false, Ordering::SeqCst);
             EDGE_DWELL_START.store(0, Ordering::Relaxed);
+            MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
             restore_cursor_visibility();
-
-            let guard = packet_sender().lock().unwrap();
-            if let Some(ref tx) = *guard {
-                let _ = tx.try_send(KvmPacket::EmergencyRelease);
-            }
-            return LRESULT(0);
-        }
-
-        if IS_TRAPPED.load(Ordering::Relaxed) {
-            let guard = packet_sender().lock().unwrap();
-            if let Some(ref tx) = *guard {
-                let _ = tx.try_send(KvmPacket::KeyEvent {
-                    key_code: vk_code,
-                    scan_code,
-                    is_down,
-                    extended,
-                });
-            }
-            return LRESULT(1);
+            CallNextHookEx(None, n_code, w_param, l_param)
         }
     }
+}
 
-    CallNextHookEx(None, n_code, w_param, l_param)
+#[cfg(windows)]
+unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> Option<LRESULT> {
+    if n_code < 0 || !HOOK_ACTIVE.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    let kbd = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+    if (kbd.flags.0 & LLKHF_INJECTED.0) != 0 {
+        return None;
+    }
+
+    let vk_code = kbd.vkCode as u16;
+    let scan_code = kbd.scanCode as u16;
+    let is_down = w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN;
+    let extended = (kbd.flags.0 & LLKHF_EXTENDED.0) != 0;
+
+    if vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3 {
+        KEY_CTRL_DOWN.store(is_down, Ordering::Relaxed);
+    } else if vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5 {
+        KEY_ALT_DOWN.store(is_down, Ordering::Relaxed);
+    }
+
+    let is_scroll_lock = vk_code == 0x91;
+    let is_pause = vk_code == 0x13;
+    let is_ctrl_alt_esc = vk_code == 0x1B
+        && KEY_CTRL_DOWN.load(Ordering::Relaxed)
+        && KEY_ALT_DOWN.load(Ordering::Relaxed);
+
+    if is_scroll_lock || is_pause || is_ctrl_alt_esc {
+        IS_TRAPPED.store(false, Ordering::SeqCst);
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+        KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
+        KEY_ALT_DOWN.store(false, Ordering::Relaxed);
+        if let Ok(mut tracker) = controller_tracker().try_lock() {
+            let _ = tracker.release_all();
+        }
+        restore_cursor_visibility();
+
+        try_send_packet(KvmPacket::EmergencyRelease);
+        try_send_packet(KvmPacket::ReleaseAll);
+        return Some(LRESULT(0));
+    }
+
+    if IS_TRAPPED.load(Ordering::Acquire) {
+        try_send_packet(KvmPacket::KeyEvent {
+            key_code: vk_code,
+            scan_code,
+            is_down,
+            extended,
+        });
+        return Some(LRESULT(1));
+    }
+
+    if let Ok(mut tracker) = controller_tracker().try_lock() {
+        tracker.record_key(vk_code, scan_code, is_down, extended, false);
+    }
+
+    None
 }

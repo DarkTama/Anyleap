@@ -40,7 +40,7 @@ export function DesktopHudWindow() {
   }, []);
 
   const isRemote = status?.is_input_trapped ?? false;
-  const peerName = status?.connected_peers?.[0] || "Remote PC";
+  const peerName = status?.peers?.[0]?.name || status?.connected_peers?.[0] || "Remote PC";
   const activeName = isRemote ? peerName : status?.local_name || "This PC";
 
   return (

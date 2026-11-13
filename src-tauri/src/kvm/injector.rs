@@ -1,7 +1,20 @@
 #[cfg(windows)]
+use windows::Win32::Foundation::POINT;
+#[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 #[cfg(windows)]
-use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+
+pub fn get_cursor_pos() -> Option<(i32, i32)> {
+    #[cfg(windows)]
+    unsafe {
+        let mut pt = POINT::default();
+        if GetCursorPos(&mut pt).is_ok() {
+            return Some((pt.x, pt.y));
+        }
+    }
+    None
+}
 
 pub fn inject_mouse_delta(dx: i32, dy: i32) {
     #[cfg(windows)]

@@ -6,6 +6,7 @@ pub mod files;
 pub mod hooks;
 pub mod identity;
 pub mod injector;
+pub mod input_logic;
 pub mod monitors;
 pub mod protocol;
 pub mod server;

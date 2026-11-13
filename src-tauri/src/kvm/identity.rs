@@ -45,6 +45,11 @@ impl Identity {
     pub fn key_der(&self) -> PrivatePkcs8KeyDer<'static> {
         PrivatePkcs8KeyDer::from(self.key.clone())
     }
+
+    /// Stable 16-hex-char identifier derived from the local certificate fingerprint.
+    pub fn computer_id(&self) -> String {
+        fingerprint(&self.cert).chars().take(16).collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,6 +91,10 @@ impl TrustStore {
 
     pub fn by_address(&self, addr: &str) -> Option<TrustedPeer> {
         self.peers.lock().unwrap().iter().find(|p| p.address == addr).cloned()
+    }
+
+    pub fn by_fingerprint(&self, fp: &str) -> Option<TrustedPeer> {
+        self.peers.lock().unwrap().iter().find(|p| p.fingerprint == fp).cloned()
     }
 
     /// Insert or replace (by `computer_id`).
@@ -200,4 +209,22 @@ pub fn client_config(id: &Identity) -> Result<quinn::ClientConfig, String> {
 /// Constant-time equality (lengths are public).
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computer_id_is_first_16_hex_chars_of_fingerprint() {
+        let dir = std::env::temp_dir().join(format!("anyleap-id-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let id = Identity::load_or_create(&dir).unwrap();
+        let fp = fingerprint(&id.cert);
+        let cid = id.computer_id();
+        assert_eq!(cid.len(), 16);
+        assert_eq!(cid, &fp[..16]);
+        assert!(cid.chars().all(|c| c.is_ascii_hexdigit()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

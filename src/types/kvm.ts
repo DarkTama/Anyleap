@@ -51,6 +51,7 @@ export interface KvmStatus {
   screen_width?: number;
   screen_height?: number;
   monitors?: MonitorDisplay[];
+  peers?: ComputerNode[];
 }
 
 export interface DiscoveredPeer {

@@ -123,19 +123,7 @@ export function TopologyCanvas() {
     window.addEventListener("mouseup", handleMouseUp);
   };
 
-  const localMonitors =
-    status.monitors && status.monitors.length > 0
-      ? status.monitors
-      : [
-          {
-            id: "mon-1",
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            is_primary: true,
-          },
-        ];
+  const localMonitors = status.monitors ?? [];
 
   const deadzonePx = settings.cornerDeadzonePx;
   const deadzoneVisualH = Math.min(36, Math.max(12, Math.round((deadzonePx / 1080) * 160)));
@@ -236,8 +224,13 @@ export function TopologyCanvas() {
                 <div className="relative flex h-20 w-32 flex-col items-center justify-center rounded-lg border border-sky-400/40 bg-[#16243a] shadow-inner overflow-hidden">
                   <Monitor className="h-5 w-5 text-sky-400" />
                   <span className="font-mono text-[9px] text-sky-200 mt-1">
-                    {peer.bounds.width}x{peer.bounds.height}
+                    {peer.bounds.width > 0 ? `${peer.bounds.width}x${peer.bounds.height}` : "Layout pending"}
                   </span>
+                  {peer.monitors && peer.monitors.length > 1 && (
+                    <span className="font-mono text-[8px] text-sky-400/80">
+                      {peer.monitors.length} displays
+                    </span>
+                  )}
 
                   {isCursorRemote && cursorPos && settings.indicatorCanvasDot && (
                     <div
@@ -355,8 +348,13 @@ export function TopologyCanvas() {
                 <div className="relative flex h-20 w-32 flex-col items-center justify-center rounded-lg border border-sky-400/40 bg-[#16243a] shadow-inner overflow-hidden">
                   <Monitor className="h-5 w-5 text-sky-400" />
                   <span className="font-mono text-[9px] text-sky-200 mt-1">
-                    {peer.bounds.width}x{peer.bounds.height}
+                    {peer.bounds.width > 0 ? `${peer.bounds.width}x${peer.bounds.height}` : "Layout pending"}
                   </span>
+                  {peer.monitors && peer.monitors.length > 1 && (
+                    <span className="font-mono text-[8px] text-sky-400/80">
+                      {peer.monitors.length} displays
+                    </span>
+                  )}
 
                   {isCursorRemote && cursorPos && settings.indicatorCanvasDot && (
                     <div

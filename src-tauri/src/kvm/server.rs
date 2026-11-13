@@ -1,5 +1,6 @@
 use super::files::{receive, send_image};
 use super::identity::{ct_eq, peer_fingerprint, server_config, Identity, TrustStore, TrustedPeer};
+use super::monitors::MonitorDisplay;
 use super::protocol::{decode_delta, read_frame, read_frame_capped, write_frame, KvmPacket, Outbound, TransferEvent, UdpMouseDelta};
 use rand::{rngs::OsRng, Rng};
 use std::net::SocketAddr;
@@ -29,6 +30,7 @@ struct ServerContext {
     trust: Arc<TrustStore>,
     local_id: String,
     local_name: String,
+    local_monitors: Vec<MonitorDisplay>,
     download_dir: PathBuf,
     incoming_tx: broadcast::Sender<KvmPacket>,
     outgoing_tx: broadcast::Sender<Outbound>,
@@ -84,6 +86,7 @@ pub async fn start_kvm_server(
     trust: Arc<TrustStore>,
     local_id: String,
     local_name: String,
+    local_monitors: Vec<MonitorDisplay>,
     download_dir: PathBuf,
 ) -> Result<KvmServerHandle, String> {
     let (incoming_tx, _) = broadcast::channel(512);
@@ -106,6 +109,7 @@ pub async fn start_kvm_server(
         trust,
         local_id,
         local_name,
+        local_monitors,
         download_dir,
         incoming_tx: incoming_tx.clone(),
         outgoing_tx: outgoing_tx.clone(),
@@ -161,13 +165,23 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
             return;
         }
     };
+
+    let peer_computer_id: Option<String>;
+    let mut disconnected_early = false;
+
     match first {
-        KvmPacket::Pair { computer_id, name, pin } => {
+        KvmPacket::Pair {
+            computer_id,
+            name,
+            pin,
+            monitors,
+        } => {
             let accepted = trusted || ctx.check_pin(&pin);
             let ack = KvmPacket::PairAck {
                 accepted,
                 computer_id: ctx.local_id.clone(),
                 name: ctx.local_name.clone(),
+                monitors: ctx.local_monitors.clone(),
             };
             let _ = write_frame(&mut send, &ack).await;
             if !accepted {
@@ -176,6 +190,7 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                 conn.close(2u32.into(), b"pairing rejected");
                 return;
             }
+            peer_computer_id = Some(computer_id.clone());
             if !trusted {
                 ctx.trust.add(TrustedPeer {
                     computer_id: computer_id.clone(),
@@ -184,10 +199,20 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                     address: conn.remote_address().ip().to_string(),
                 });
             }
-            let _ = ctx.incoming_tx.send(KvmPacket::Pair { computer_id, name, pin: String::new() });
+            let _ = ctx.incoming_tx.send(KvmPacket::Pair {
+                computer_id,
+                name,
+                pin: String::new(),
+                monitors,
+            });
         }
         other if trusted => {
-            let _ = ctx.incoming_tx.send(other);
+            peer_computer_id = ctx.trust.by_fingerprint(&fp).map(|p| p.computer_id);
+            if matches!(other, KvmPacket::SessionDisconnect) {
+                disconnected_early = true;
+            } else if !matches!(other, KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }) {
+                let _ = ctx.incoming_tx.send(other);
+            }
         }
         _ => {
             conn.close(3u32.into(), b"not authorised");
@@ -195,64 +220,76 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
         }
     }
 
-    // Authorised session from here on.
-    let mut tasks = Vec::new();
+    if !disconnected_early {
+        // Authorised session from here on.
+        let mut tasks = Vec::new();
 
-    let mut out_rx = ctx.outgoing_tx.subscribe();
-    let out_conn = conn.clone();
-    tasks.push(tokio::spawn(async move {
-        loop {
-            match out_rx.recv().await {
-                Ok(Outbound::Packet(p)) => {
-                    if write_frame(&mut send, &p).await.is_err() {
-                        break;
+        let mut out_rx = ctx.outgoing_tx.subscribe();
+        let out_conn = conn.clone();
+        tasks.push(tokio::spawn(async move {
+            loop {
+                match out_rx.recv().await {
+                    Ok(Outbound::Packet(p)) => {
+                        if write_frame(&mut send, &p).await.is_err() {
+                            break;
+                        }
                     }
+                    Ok(Outbound::Image { format, data }) => {
+                        let _ = send_image(&out_conn, format, data).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
                 }
-                Ok(Outbound::Image { format, data }) => {
-                    let _ = send_image(&out_conn, format, data).await;
+            }
+        }));
+
+        let (dg_conn, delta_tx) = (conn.clone(), ctx.mouse_delta_tx.clone());
+        tasks.push(tokio::spawn(async move {
+            while let Ok(dg) = dg_conn.read_datagram().await {
+                if let Some(d) = decode_delta(&dg) {
+                    let _ = delta_tx.send(d);
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(_) => break,
+            }
+        }));
+
+        let (uni_conn, transfer_tx, dir) = (conn.clone(), ctx.transfer_tx.clone(), ctx.download_dir.clone());
+        tasks.push(tokio::spawn(async move {
+            while let Ok(mut s) = uni_conn.accept_uni().await {
+                let (tx, dir) = (transfer_tx.clone(), dir.clone());
+                tokio::spawn(async move {
+                    match receive(&mut s, &dir).await {
+                        Ok(ev) => {
+                            let _ = tx.send(ev);
+                        }
+                        Err(e) => eprintln!("[KVM-Server] transfer rejected: {e}"),
+                    }
+                });
+            }
+        }));
+
+        while let Ok(Some(packet)) = read_frame::<_, KvmPacket>(&mut recv).await {
+            if matches!(packet, KvmPacket::SessionDisconnect) {
+                break;
+            }
+            if !matches!(
+                packet,
+                KvmPacket::Pair { .. } | KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }
+            ) {
+                let _ = ctx.incoming_tx.send(packet);
             }
         }
-    }));
 
-    let (dg_conn, delta_tx) = (conn.clone(), ctx.mouse_delta_tx.clone());
-    tasks.push(tokio::spawn(async move {
-        while let Ok(dg) = dg_conn.read_datagram().await {
-            if let Some(d) = decode_delta(&dg) {
-                let _ = delta_tx.send(d);
-            }
-        }
-    }));
-
-    let (uni_conn, transfer_tx, dir) = (conn.clone(), ctx.transfer_tx.clone(), ctx.download_dir.clone());
-    tasks.push(tokio::spawn(async move {
-        while let Ok(mut s) = uni_conn.accept_uni().await {
-            let (tx, dir) = (transfer_tx.clone(), dir.clone());
-            tokio::spawn(async move {
-                match receive(&mut s, &dir).await {
-                    Ok(ev) => {
-                        let _ = tx.send(ev);
-                    }
-                    Err(e) => eprintln!("[KVM-Server] transfer rejected: {e}"),
-                }
-            });
-        }
-    }));
-
-    while let Ok(Some(packet)) = read_frame::<_, KvmPacket>(&mut recv).await {
-        if !matches!(packet, KvmPacket::Pair { .. } | KvmPacket::PairAck { .. }) {
-            let _ = ctx.incoming_tx.send(packet);
+        for t in tasks {
+            t.abort();
         }
     }
 
-    // Connection closed / idle timeout: emit SessionDisconnect.
-    for t in tasks {
-        t.abort();
-    }
     conn.close(0u32.into(), b"bye");
-    let _ = ctx.incoming_tx.send(KvmPacket::SessionDisconnect);
+    if let Some(computer_id) = peer_computer_id {
+        let _ = ctx.incoming_tx.send(KvmPacket::PeerDisconnected { computer_id });
+    } else {
+        let _ = ctx.incoming_tx.send(KvmPacket::SessionDisconnect);
+    }
 }
 
 #[cfg(test)]
@@ -261,6 +298,7 @@ mod tests {
     use crate::kvm::client::{handshake, send_delta, KvmClientHandle};
     use crate::kvm::files::send_file;
     use crate::kvm::identity::client_config;
+    use crate::kvm::input_logic::{map_cursor_enter, receiver_step, Edge, ReceiverStep};
 
     struct Rig {
         srv: KvmServerHandle,
@@ -270,24 +308,65 @@ mod tests {
         dir: PathBuf,
     }
 
+    fn default_mons() -> Vec<MonitorDisplay> {
+        vec![MonitorDisplay {
+            id: "mon-1".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            is_primary: true,
+        }]
+    }
+
     async fn rig(tag: &str) -> Rig {
         let dir = std::env::temp_dir().join(format!("anyleap-quic-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let srv_id = Identity::load_or_create(&dir.join("srv")).unwrap();
         let cli_id = Identity::load_or_create(&dir.join("cli")).unwrap();
         let srv_trust = Arc::new(TrustStore::load(None));
-        let srv = start_kvm_server(0, &srv_id, srv_trust.clone(), "srv".into(), "Server".into(), dir.join("dl"))
-            .await
-            .unwrap();
-        Rig { srv, srv_trust, cli_id, cli_trust: TrustStore::load(None), dir }
+        let srv = start_kvm_server(
+            0,
+            &srv_id,
+            srv_trust.clone(),
+            "srv".into(),
+            "Server".into(),
+            default_mons(),
+            dir.join("dl"),
+        )
+        .await
+        .unwrap();
+        Rig {
+            srv,
+            srv_trust,
+            cli_id,
+            cli_trust: TrustStore::load(None),
+            dir,
+        }
     }
 
     fn key(code: u16) -> KvmPacket {
-        KvmPacket::KeyEvent { key_code: code, scan_code: 0, is_down: true, extended: false }
+        KvmPacket::KeyEvent {
+            key_code: code,
+            scan_code: 0,
+            is_down: true,
+            extended: false,
+        }
     }
 
     async fn connect(r: &Rig, pin: Option<String>) -> Result<KvmClientHandle, String> {
-        KvmClientHandle::connect("127.0.0.1", r.srv.port, "cli".into(), "Client".into(), pin, &r.cli_id, &r.cli_trust, r.dir.join("cli-dl")).await
+        KvmClientHandle::connect(
+            "127.0.0.1",
+            r.srv.port,
+            "cli".into(),
+            "Client".into(),
+            default_mons(),
+            pin,
+            &r.cli_id,
+            &r.cli_trust,
+            r.dir.join("cli-dl"),
+        )
+        .await
     }
 
     async fn next_key(rx: &mut broadcast::Receiver<KvmPacket>) -> Option<u16> {
@@ -305,6 +384,7 @@ mod tests {
         let r = rig("pair").await;
         let mut rx = r.srv.incoming_tx.subscribe();
         let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+        assert_eq!(c.peer_monitors, default_mons());
         c.send_packet(key(65)).await.unwrap();
         assert_eq!(next_key(&mut rx).await, Some(65));
         assert_eq!(r.srv_trust.by_address("127.0.0.1").unwrap().computer_id, "cli");
@@ -378,10 +458,28 @@ mod tests {
         let r = rig("changed").await;
         drop(connect(&r, Some(r.srv.pin())).await.unwrap());
         let other_id = Identity::load_or_create(&r.dir.join("other")).unwrap();
-        let other = start_kvm_server(0, &other_id, Arc::new(TrustStore::load(None)), "o".into(), "O".into(), r.dir.join("dl2"))
-            .await
-            .unwrap();
-        let res = handshake("127.0.0.1", other.port, "cli".into(), "Client".into(), None, &r.cli_id, &r.cli_trust).await;
+        let other = start_kvm_server(
+            0,
+            &other_id,
+            Arc::new(TrustStore::load(None)),
+            "o".into(),
+            "O".into(),
+            default_mons(),
+            r.dir.join("dl2"),
+        )
+        .await
+        .unwrap();
+        let res = handshake(
+            "127.0.0.1",
+            other.port,
+            "cli".into(),
+            "Client".into(),
+            default_mons(),
+            None,
+            &r.cli_id,
+            &r.cli_trust,
+        )
+        .await;
         assert!(res.err().unwrap().contains("identity changed"));
         let _ = std::fs::remove_dir_all(&r.dir);
     }
@@ -416,6 +514,131 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(std::fs::read(r.dir.join("dl").join("big.bin")).unwrap(), data);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    // Verification 4.5: Loopback QUIC input flow, CursorReturn, ReleaseAll, PeerDisconnected
+    #[tokio::test]
+    async fn loopback_cursor_enter_deltas_return_release_all_and_peer_disconnect() {
+        let r = rig("loopback-kvm").await;
+        let mut srv_in_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_delta_rx = r.srv.mouse_delta_tx.subscribe();
+        let srv_out_tx = r.srv.outgoing_tx.clone();
+        let srv_mons = default_mons();
+
+        let c1 = KvmClientHandle::connect(
+            "127.0.0.1",
+            r.srv.port,
+            "cli-1".into(),
+            "Client1".into(),
+            default_mons(),
+            Some(r.srv.pin()),
+            &r.cli_id,
+            &r.cli_trust,
+            r.dir.join("cli1-dl"),
+        )
+        .await
+        .unwrap();
+        let mut c1_in_rx = c1.incoming_tx.subscribe();
+
+        let cli2_id = Identity::load_or_create(&r.dir.join("cli2")).unwrap();
+        let cli2_trust = TrustStore::load(None);
+        let c2 = KvmClientHandle::connect(
+            "127.0.0.1",
+            r.srv.port,
+            "cli-2".into(),
+            "Client2".into(),
+            default_mons(),
+            Some(r.srv.pin()),
+            &cli2_id,
+            &cli2_trust,
+            r.dir.join("cli2-dl"),
+        )
+        .await
+        .unwrap();
+
+        // Drain the two Pair notifications
+        let mut paired_ids = Vec::new();
+        for _ in 0..2 {
+            if let Ok(KvmPacket::Pair { computer_id, .. }) = timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap() {
+                paired_ids.push(computer_id);
+            }
+        }
+        assert!(paired_ids.contains(&"cli-1".to_string()));
+        assert!(paired_ids.contains(&"cli-2".to_string()));
+
+        // Controller enters receiver from left edge
+        c1.send_packet(KvmPacket::CursorEnter {
+            edge: "left".into(),
+            relative_y: 0.5,
+        })
+        .await
+        .unwrap();
+
+        let (entry_edge, mut cursor_pos) = match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
+            KvmPacket::CursorEnter { edge, relative_y } => {
+                let e = Edge::from_str(&edge).unwrap();
+                let pos = map_cursor_enter(&srv_mons, e, relative_y);
+                (e, pos)
+            }
+            other => panic!("expected CursorEnter, got {other:?}"),
+        };
+        assert_eq!(cursor_pos, (2, 540));
+
+        // Controller sends move right, then move left past the entry edge
+        c1.send_mouse_delta(10, 0);
+        let d1 = timeout(Duration::from_secs(3), srv_delta_rx.recv()).await.unwrap().unwrap();
+        match receiver_step(cursor_pos, (d1.dx, d1.dy), &srv_mons, entry_edge) {
+            ReceiverStep::Move(p) => cursor_pos = p,
+            other => panic!("expected Move, got {other:?}"),
+        }
+        assert_eq!(cursor_pos, (12, 540));
+
+        c1.send_mouse_delta(-20, 0);
+        let d2 = timeout(Duration::from_secs(3), srv_delta_rx.recv()).await.unwrap().unwrap();
+        match receiver_step(cursor_pos, (d2.dx, d2.dy), &srv_mons, entry_edge) {
+            ReceiverStep::Return { edge, relative_y } => {
+                srv_out_tx
+                    .send(Outbound::Packet(KvmPacket::CursorReturn {
+                        edge: edge.as_str().to_string(),
+                        relative_y,
+                    }))
+                    .unwrap();
+            }
+            other => panic!("expected Return, got {other:?}"),
+        }
+
+        match timeout(Duration::from_secs(3), c1_in_rx.recv()).await.unwrap().unwrap() {
+            KvmPacket::CursorReturn { edge, relative_y } => {
+                assert_eq!(edge, "left");
+                assert!((relative_y - 0.5).abs() < 1e-4);
+            }
+            other => panic!("expected CursorReturn on client, got {other:?}"),
+        }
+
+        // ReleaseAll delivered
+        c1.send_packet(KvmPacket::ReleaseAll).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::ReleaseAll
+        );
+
+        // Disconnecting cli-1 emits PeerDisconnected { computer_id: "cli-1" } and leaves cli-2 intact
+        c1.send_packet(KvmPacket::SessionDisconnect).await.unwrap();
+        drop(c1);
+        let disc = loop {
+            match timeout(Duration::from_secs(3), srv_in_rx.recv()).await {
+                Ok(Ok(KvmPacket::PeerDisconnected { computer_id })) => break computer_id,
+                Ok(Ok(_)) => continue,
+                other => panic!("expected PeerDisconnected, got {other:?}"),
+            }
+        };
+        assert_eq!(disc, "cli-1");
+
+        // cli-2 still works
+        c2.send_packet(key(77)).await.unwrap();
+        assert_eq!(next_key(&mut srv_in_rx).await, Some(77));
+
         let _ = std::fs::remove_dir_all(&r.dir);
     }
 }

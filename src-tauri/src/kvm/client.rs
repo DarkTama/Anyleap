@@ -1,5 +1,6 @@
 use super::files::receive;
 use super::identity::{client_config, peer_fingerprint, Identity, TrustStore, TrustedPeer};
+use super::monitors::MonitorDisplay;
 use super::protocol::{encode_delta, read_frame, write_frame, KvmPacket, TransferEvent, UdpMouseDelta};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -9,8 +10,18 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
 
+#[derive(Debug, Clone)]
+pub struct PeerInfo {
+    pub computer_id: String,
+    pub name: String,
+    pub monitors: Vec<MonitorDisplay>,
+}
+
 pub struct KvmClientHandle {
     pub target_addr: String,
+    pub peer_id: String,
+    pub peer_name: String,
+    pub peer_monitors: Vec<MonitorDisplay>,
     pub is_connected: Arc<AtomicBool>,
     pub send_packet_tx: mpsc::Sender<KvmPacket>,
     pub incoming_tx: broadcast::Sender<KvmPacket>,
@@ -32,15 +43,18 @@ pub async fn handshake(
     port: u16,
     local_id: String,
     local_name: String,
+    local_monitors: Vec<MonitorDisplay>,
     pin: Option<String>,
     identity: &Identity,
     trust: &TrustStore,
-) -> Result<(quinn::Endpoint, quinn::Connection, quinn::SendStream, quinn::RecvStream), String> {
+) -> Result<(quinn::Endpoint, quinn::Connection, quinn::SendStream, quinn::RecvStream, PeerInfo), String> {
     let stored = trust.by_address(ip);
     if stored.is_none() && pin.is_none() {
         return Err("Peer not paired — enter its PIN first".into());
     }
-    let addr: SocketAddr = format!("{ip}:{port}").parse().map_err(|e| format!("Invalid peer address: {e}"))?;
+    let addr: SocketAddr = format!("{ip}:{port}")
+        .parse()
+        .map_err(|e| format!("Invalid peer address: {e}"))?;
     let mut endpoint = quinn::Endpoint::client(([0, 0, 0, 0], 0).into()).map_err(|e| e.to_string())?;
     endpoint.set_default_client_config(client_config(identity)?);
 
@@ -57,15 +71,40 @@ pub async fn handshake(
     }
 
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
-    let hello = KvmPacket::Pair { computer_id: local_id, name: local_name, pin: pin.clone().unwrap_or_default() };
+    let hello = KvmPacket::Pair {
+        computer_id: local_id,
+        name: local_name,
+        pin: pin.clone().unwrap_or_default(),
+        monitors: local_monitors,
+    };
     write_frame(&mut send, &hello).await.map_err(|e| e.to_string())?;
     let ack = timeout(Duration::from_secs(10), read_frame::<_, KvmPacket>(&mut recv)).await;
     match ack {
-        Ok(Ok(Some(KvmPacket::PairAck { accepted: true, computer_id, name }))) => {
+        Ok(Ok(Some(KvmPacket::PairAck {
+            accepted: true,
+            computer_id,
+            name,
+            monitors,
+        }))) => {
             if pin.is_some() {
-                trust.add(TrustedPeer { computer_id, name, fingerprint: fp, address: ip.to_string() });
+                trust.add(TrustedPeer {
+                    computer_id: computer_id.clone(),
+                    name: name.clone(),
+                    fingerprint: fp,
+                    address: ip.to_string(),
+                });
             }
-            Ok((endpoint, conn, send, recv))
+            Ok((
+                endpoint,
+                conn,
+                send,
+                recv,
+                PeerInfo {
+                    computer_id,
+                    name,
+                    monitors,
+                },
+            ))
         }
         Ok(Ok(Some(KvmPacket::PairAck { .. }))) => Err("Incorrect PIN".into()),
         _ => Err("Peer closed the connection during pairing".into()),
@@ -78,13 +117,14 @@ impl KvmClientHandle {
         port: u16,
         local_id: String,
         local_name: String,
+        local_monitors: Vec<MonitorDisplay>,
         pin: Option<String>,
         identity: &Identity,
         trust: &TrustStore,
         download_dir: PathBuf,
     ) -> Result<Self, String> {
-        let (endpoint, conn, mut send, mut recv) =
-            handshake(ip, port, local_id, local_name, pin, identity, trust).await?;
+        let (endpoint, conn, mut send, mut recv, peer_info) =
+            handshake(ip, port, local_id, local_name, local_monitors, pin, identity, trust).await?;
 
         let (send_packet_tx, mut send_packet_rx) = mpsc::channel::<KvmPacket>(512);
         let (incoming_tx, _) = broadcast::channel::<KvmPacket>(512);
@@ -127,6 +167,9 @@ impl KvmClientHandle {
 
         Ok(Self {
             target_addr: ip.to_string(),
+            peer_id: peer_info.computer_id,
+            peer_name: peer_info.name,
+            peer_monitors: peer_info.monitors,
             is_connected,
             send_packet_tx,
             incoming_tx,
