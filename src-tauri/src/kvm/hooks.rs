@@ -18,15 +18,18 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[cfg(windows)]
 const WM_KVM_RESTORE_CURSOR: u32 = WM_APP + 1;
+#[cfg(windows)]
+const WM_KVM_ENGAGE: u32 = WM_APP + 2;
 
 static PACKET_SENDER: OnceLock<Mutex<Option<mpsc::Sender<KvmPacket>>>> = OnceLock::new();
 static MOUSE_DELTA_SENDER: OnceLock<Mutex<Option<mpsc::Sender<(i32, i32)>>>> = OnceLock::new();
 static LOCAL_MONITORS: OnceLock<Mutex<Vec<MonitorDisplay>>> = OnceLock::new();
 static CONTROLLER_TRACKER: OnceLock<Mutex<PressedInputTracker>> = OnceLock::new();
 
-static RECENTERING: AtomicBool = AtomicBool::new(false);
 static HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static IS_TRAPPED: AtomicBool = AtomicBool::new(false);
+static ENGAGE_PENDING: AtomicBool = AtomicBool::new(false);
+static CURSOR_CENTERED: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 static CLAMP_CENTER_X: AtomicI32 = AtomicI32::new(960);
@@ -35,6 +38,7 @@ static TRAP_MON_X: AtomicI32 = AtomicI32::new(0);
 static TRAP_MON_Y: AtomicI32 = AtomicI32::new(0);
 static TRAP_MON_W: AtomicI32 = AtomicI32::new(1920);
 static TRAP_MON_H: AtomicI32 = AtomicI32::new(1080);
+static PENDING_ENGAGE_REL_Y: AtomicU32 = AtomicU32::new(0);
 
 static LINK_FROM_EDGE: AtomicU8 = AtomicU8::new(Edge::Right as u8);
 static LINK_TO_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
@@ -91,15 +95,48 @@ pub fn restore_cursor_visibility() {
     }
 }
 
+#[cfg(windows)]
+fn post_hook_thread_message(msg: u32) {
+    unsafe {
+        let tid = HOOK_THREAD_ID.load(Ordering::Acquire);
+        if tid != 0 {
+            let _ = PostThreadMessageW(tid, msg, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
 fn notify_hook_thread_restore() {
     restore_cursor_visibility();
     #[cfg(windows)]
-    unsafe {
-        let tid = HOOK_THREAD_ID.load(Ordering::Relaxed);
-        if tid != 0 {
-            let _ = PostThreadMessageW(tid, WM_KVM_RESTORE_CURSOR, WPARAM(0), LPARAM(0));
-        }
+    post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
+}
+
+#[cfg(any(windows, test))]
+fn compute_trap_center(mx: i32, my: i32, mw: i32, mh: i32) -> (i32, i32) {
+    (mx + mw / 2, my + mh / 2)
+}
+
+#[cfg(any(windows, test))]
+fn trapped_mouse_delta(
+    cursor_centered: bool,
+    pt: (i32, i32),
+    center: (i32, i32),
+) -> Option<(i32, i32)> {
+    if !cursor_centered {
+        return None;
     }
+    let dx = pt.0 - center.0;
+    let dy = pt.1 - center.1;
+    if dx == 0 && dy == 0 {
+        None
+    } else {
+        Some((dx, dy))
+    }
+}
+
+#[cfg(any(windows, test))]
+fn should_perform_engage(hook_active: bool, is_trapped: bool, engage_pending: bool) -> bool {
+    hook_active && is_trapped && engage_pending
 }
 
 pub struct HookController {
@@ -130,6 +167,8 @@ impl HookController {
     pub fn set_trapped(&self, trapped: bool) {
         IS_TRAPPED.store(trapped, Ordering::SeqCst);
         if !trapped {
+            CURSOR_CENTERED.store(false, Ordering::Release);
+            ENGAGE_PENDING.store(false, Ordering::Release);
             notify_hook_thread_restore();
         }
     }
@@ -138,6 +177,8 @@ impl HookController {
         if !IS_TRAPPED.swap(false, Ordering::SeqCst) {
             return;
         }
+        CURSOR_CENTERED.store(false, Ordering::Release);
+        ENGAGE_PENDING.store(false, Ordering::Release);
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
         notify_hook_thread_restore();
 
@@ -216,13 +257,17 @@ impl HookController {
 
         #[cfg(windows)]
         std::thread::spawn(move || unsafe {
+            let mut msg = MSG::default();
+            // Force message queue creation before publishing HOOK_THREAD_ID so
+            // PostThreadMessageW from a hook callback never races queue init.
+            let _ = PeekMessageW(&mut msg, None, WM_USER, WM_USER, PM_NOREMOVE);
+
             let tid = GetCurrentThreadId();
-            HOOK_THREAD_ID.store(tid, Ordering::SeqCst);
+            HOOK_THREAD_ID.store(tid, Ordering::Release);
 
             let h_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0);
             let h_kbd = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
 
-            let mut msg = MSG::default();
             while HOOK_ACTIVE.load(Ordering::Relaxed) {
                 let res = GetMessageW(&mut msg, None, 0, 0);
                 if res.0 <= 0 {
@@ -230,6 +275,10 @@ impl HookController {
                 }
                 if msg.message == WM_KVM_RESTORE_CURSOR {
                     restore_cursor_visibility();
+                    continue;
+                }
+                if msg.message == WM_KVM_ENGAGE {
+                    perform_engage_leap();
                     continue;
                 }
                 let _ = TranslateMessage(&msg);
@@ -265,6 +314,15 @@ impl HookController {
 }
 
 #[cfg(windows)]
+fn disarm_trapped_in_callback() {
+    IS_TRAPPED.store(false, Ordering::SeqCst);
+    CURSOR_CENTERED.store(false, Ordering::Release);
+    ENGAGE_PENDING.store(false, Ordering::Release);
+    EDGE_DWELL_START.store(0, Ordering::Relaxed);
+    MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn low_level_mouse_proc(
     n_code: i32,
     w_param: WPARAM,
@@ -278,10 +336,8 @@ unsafe extern "system" fn low_level_mouse_proc(
         Ok(Some(res)) => res,
         Ok(None) => CallNextHookEx(None, n_code, w_param, l_param),
         Err(_) => {
-            IS_TRAPPED.store(false, Ordering::SeqCst);
-            EDGE_DWELL_START.store(0, Ordering::Relaxed);
-            MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
-            restore_cursor_visibility();
+            disarm_trapped_in_callback();
+            post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
             CallNextHookEx(None, n_code, w_param, l_param)
         }
     }
@@ -331,22 +387,16 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
 
     if IS_TRAPPED.load(Ordering::Acquire) {
         if msg == WM_MOUSEMOVE {
-            if RECENTERING.load(Ordering::SeqCst) {
-                return Some(LRESULT(1));
-            }
-            let cx = CLAMP_CENTER_X.load(Ordering::Relaxed);
-            let cy = CLAMP_CENTER_Y.load(Ordering::Relaxed);
-            let dx = pt.x - cx;
-            let dy = pt.y - cy;
-
-            if dx != 0 || dy != 0 {
-                RECENTERING.store(true, Ordering::SeqCst);
-                let _ = SetCursorPos(cx, cy);
-                RECENTERING.store(false, Ordering::SeqCst);
-
+            let center = (
+                CLAMP_CENTER_X.load(Ordering::Relaxed),
+                CLAMP_CENTER_Y.load(Ordering::Relaxed),
+            );
+            if let Some(delta) =
+                trapped_mouse_delta(CURSOR_CENTERED.load(Ordering::Acquire), (pt.x, pt.y), center)
+            {
                 if let Ok(guard) = mouse_delta_sender().try_lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.try_send((dx, dy));
+                        let _ = tx.try_send(delta);
                     }
                 }
             }
@@ -410,7 +460,7 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     }
 
     if check_dwell_resistance(resistance_ms) {
-        engage_leap(mx, my, mw, mh, rel);
+        request_engage_leap(mx, my, mw, mh, rel);
         return Some(LRESULT(1));
     }
 
@@ -434,19 +484,48 @@ fn check_dwell_resistance(resistance_ms: u64) -> bool {
     }
 }
 
+/// Callback-safe leap transition: updates atomics and posts `WM_KVM_ENGAGE` to
+/// the hook thread so Win32 cursor/SendInput work runs outside hook callbacks.
 #[cfg(windows)]
-unsafe fn engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
+fn request_engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
     IS_TRAPPED.store(true, Ordering::SeqCst);
+    CURSOR_CENTERED.store(false, Ordering::Release);
 
     TRAP_MON_X.store(mx, Ordering::Relaxed);
     TRAP_MON_Y.store(my, Ordering::Relaxed);
     TRAP_MON_W.store(mw, Ordering::Relaxed);
     TRAP_MON_H.store(mh, Ordering::Relaxed);
 
-    let center_x = mx + mw / 2;
-    let center_y = my + mh / 2;
+    let (center_x, center_y) = compute_trap_center(mx, my, mw, mh);
     CLAMP_CENTER_X.store(center_x, Ordering::Relaxed);
     CLAMP_CENTER_Y.store(center_y, Ordering::Relaxed);
+    PENDING_ENGAGE_REL_Y.store(relative_y.to_bits(), Ordering::Relaxed);
+    ENGAGE_PENDING.store(true, Ordering::Release);
+
+    EDGE_DWELL_START.store(0, Ordering::Relaxed);
+    KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
+    KEY_ALT_DOWN.store(false, Ordering::Relaxed);
+
+    post_hook_thread_message(WM_KVM_ENGAGE);
+}
+
+#[cfg(windows)]
+unsafe fn perform_engage_leap() {
+    if !should_perform_engage(
+        HOOK_ACTIVE.load(Ordering::Relaxed),
+        IS_TRAPPED.load(Ordering::Acquire),
+        ENGAGE_PENDING.swap(false, Ordering::AcqRel),
+    ) {
+        return;
+    }
+
+    let mx = TRAP_MON_X.load(Ordering::Relaxed);
+    let my = TRAP_MON_Y.load(Ordering::Relaxed);
+    let mw = TRAP_MON_W.load(Ordering::Relaxed);
+    let mh = TRAP_MON_H.load(Ordering::Relaxed);
+    let center_x = CLAMP_CENTER_X.load(Ordering::Relaxed);
+    let center_y = CLAMP_CENTER_Y.load(Ordering::Relaxed);
+    let relative_y = f32::from_bits(PENDING_ENGAGE_REL_Y.load(Ordering::Relaxed));
 
     let clip_rect = RECT {
         left: mx,
@@ -455,10 +534,8 @@ unsafe fn engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
         bottom: my + mh,
     };
     let _ = ClipCursor(Some(&clip_rect));
-
-    RECENTERING.store(true, Ordering::SeqCst);
     let _ = SetCursorPos(center_x, center_y);
-    RECENTERING.store(false, Ordering::SeqCst);
+    CURSOR_CENTERED.store(true, Ordering::Release);
 
     for _ in 0..16 {
         if ShowCursor(false) < 0 {
@@ -471,8 +548,6 @@ unsafe fn engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
             super::injector::inject_key(k.key_code, k.scan_code, false, k.extended);
         }
     }
-    KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
-    KEY_ALT_DOWN.store(false, Ordering::Relaxed);
 
     let to_edge = Edge::from_u8(LINK_TO_EDGE.load(Ordering::Relaxed));
     try_send_packet(KvmPacket::CursorEnter {
@@ -495,10 +570,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
         Ok(Some(res)) => res,
         Ok(None) => CallNextHookEx(None, n_code, w_param, l_param),
         Err(_) => {
-            IS_TRAPPED.store(false, Ordering::SeqCst);
-            EDGE_DWELL_START.store(0, Ordering::Relaxed);
-            MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
-            restore_cursor_visibility();
+            disarm_trapped_in_callback();
+            post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
             CallNextHookEx(None, n_code, w_param, l_param)
         }
     }
@@ -533,15 +606,13 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
         && KEY_ALT_DOWN.load(Ordering::Relaxed);
 
     if is_scroll_lock || is_pause || is_ctrl_alt_esc {
-        IS_TRAPPED.store(false, Ordering::SeqCst);
-        EDGE_DWELL_START.store(0, Ordering::Relaxed);
-        MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+        disarm_trapped_in_callback();
         KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
         KEY_ALT_DOWN.store(false, Ordering::Relaxed);
         if let Ok(mut tracker) = controller_tracker().try_lock() {
             let _ = tracker.release_all();
         }
-        restore_cursor_visibility();
+        post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
 
         try_send_packet(KvmPacket::EmergencyRelease);
         try_send_packet(KvmPacket::ReleaseAll);
@@ -563,4 +634,33 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_trap_center_handles_origin_and_offset_monitors() {
+        assert_eq!(compute_trap_center(0, 0, 1920, 1080), (960, 540));
+        assert_eq!(compute_trap_center(-1920, 100, 1920, 1080), (-960, 640));
+    }
+
+    #[test]
+    fn trapped_mouse_delta_suppresses_until_centered_and_skips_zero() {
+        assert_eq!(trapped_mouse_delta(false, (1920, 540), (960, 540)), None);
+        assert_eq!(trapped_mouse_delta(true, (960, 540), (960, 540)), None);
+        assert_eq!(
+            trapped_mouse_delta(true, (975, 532), (960, 540)),
+            Some((15, -8))
+        );
+    }
+
+    #[test]
+    fn should_perform_engage_requires_active_trapped_and_pending() {
+        assert!(should_perform_engage(true, true, true));
+        assert!(!should_perform_engage(false, true, true));
+        assert!(!should_perform_engage(true, false, true));
+        assert!(!should_perform_engage(true, true, false));
+    }
 }
