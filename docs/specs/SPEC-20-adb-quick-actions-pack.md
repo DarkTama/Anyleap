@@ -1,6 +1,6 @@
 # SPEC-20: ADB Quick Actions Pack
 
-> **Status:** Approved (2026-11-13) | Target Version: `v1.1.0`
+> **Status:** Implemented (merged to main 2026-11-13; ships in next release) | Target Version: `v1.1.0`
 > Scope: `(deck)`, `(mirror)`. No companion app; everything runs over adb and the bundled scrcpy.
 
 ## 1. Overview

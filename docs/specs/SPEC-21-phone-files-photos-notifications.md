@@ -1,6 +1,6 @@
 # SPEC-21: Phone Files, Photos & Read-Only Notifications
 
-> **Status:** Approved (2026-11-13) | Target Version: `v1.2.0`
+> **Status:** Implemented (merged to main 2026-11-13; ships in next release) | Target Version: `v1.2.0`
 > Scope: `(deck)`. adb only; no companion app.
 
 ## 1. Overview
