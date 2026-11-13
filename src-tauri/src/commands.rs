@@ -30,6 +30,7 @@ pub struct SessionInfo {
     pub pid: u32,
     pub started_at: i64,
     pub mode: String,
+    pub recording_path: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -658,14 +659,8 @@ fn scrcpy_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, S
     Ok(cmd)
 }
 
-fn spawn_session(
-    app: &AppHandle,
-    serial: String,
-    args: Vec<String>,
-    retried: bool,
-    mode: &str,
-) -> Result<SessionInfo, String> {
-    // Terminate any stale session for this serial before spawning a new one
+async fn stop_stale_sessions_for_serial(app: &AppHandle, serial: &str) -> bool {
+    let mut stale = Vec::new();
     if let Some(st) = app.try_state::<AppState>() {
         if let Ok(mut map) = st.sessions.lock() {
             let stale_ids: Vec<String> = map
@@ -675,21 +670,62 @@ fn spawn_session(
                 .collect();
             for sid in stale_ids {
                 if let Some(old) = map.remove(&sid) {
-                    let _ = old.child.kill();
+                    stale.push(old);
                 }
             }
         }
     }
-    crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-    let mirror_label = format!(
-        "mirror-{}",
-        serial
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
-            .collect::<String>()
-    );
-    if let Some(w) = app.get_webview_window(&mirror_label) {
-        let _ = w.destroy();
+    let mut had_recording = false;
+    for old in stale {
+        if recording_path_from_args(&old.args).is_some() {
+            had_recording = true;
+            let _ = stop_child_gracefully(old.child, old.pid, serial).await;
+        } else {
+            let _ = old.child.kill();
+        }
+    }
+    had_recording
+}
+
+async fn spawn_session(
+    app: &AppHandle,
+    serial: String,
+    mut args: Vec<String>,
+    retried: bool,
+    mode: &str,
+) -> Result<SessionInfo, String> {
+    if stop_stale_sessions_for_serial(app, &serial).await {
+        args = toggle_record_args(&args, None);
+    }
+    spawn_session_inner(app, serial, args, retried, mode, true)
+}
+
+fn recording_path_from_args(args: &[String]) -> Option<String> {
+    args.iter()
+        .find_map(|a| a.strip_prefix("--record=").map(|s| s.to_string()))
+}
+
+fn spawn_session_inner(
+    app: &AppHandle,
+    serial: String,
+    args: Vec<String>,
+    retried: bool,
+    mode: &str,
+    replace_existing: bool,
+) -> Result<SessionInfo, String> {
+    if replace_existing {
+        crate::embed::remove_embedded_scrcpy_hwnd(&serial);
+        crate::embed::remove_embedded_scrcpy_hwnd(&serial);
+        let mirror_label = format!(
+            "mirror-{}",
+            serial
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .collect::<String>()
+        );
+        if let Some(w) = app.get_webview_window(&mirror_label) {
+            let _ = w.destroy();
+        }
     }
     let (mut rx, child) = scrcpy_cmd(app)?
         .args(args.clone())
@@ -705,6 +741,7 @@ fn spawn_session(
         pid,
         started_at,
         mode: mode.to_string(),
+        recording_path: recording_path_from_args(&args),
     };
 
     app.state::<AppState>().sessions.lock().map_err(poison_error)?.insert(
@@ -787,13 +824,36 @@ fn spawn_session(
                             }
                         }
                     });
-                    let is_flex = args2.iter().any(|a| a == "--flex-display");
+                    let is_flex = args2
+                        .iter()
+                        .any(|a| a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display="));
                     if is_flex {
-                        let app_flex = app2.clone();
-                        let serial_flex = serial2.clone();
-                        tauri::async_runtime::spawn(async move {
-                            cleanup_flex_display(&app_flex, &serial_flex).await;
-                        });
+                        let has_other_vd = if let Some(st) = app2.try_state::<AppState>() {
+                            st.sessions
+                                .lock()
+                                .ok()
+                                .map(|map| {
+                                    map.values().any(|s| {
+                                        s.serial == serial2
+                                            && (s.display_id.is_some()
+                                                || s.args.iter().any(|a| {
+                                                    a == "--flex-display"
+                                                        || a == "--new-display"
+                                                        || a.starts_with("--new-display=")
+                                                }))
+                                    })
+                                })
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        if !has_other_vd {
+                            let app_flex = app2.clone();
+                            let serial_flex = serial2.clone();
+                            tauri::async_runtime::spawn(async move {
+                                cleanup_flex_display(&app_flex, &serial_flex).await;
+                            });
+                        }
                     }
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
@@ -811,7 +871,7 @@ fn spawn_session(
                                 stderr: stderr_buf.clone(),
                             },
                         );
-                        let _ = spawn_session(&app2, serial2.clone(), degrade_args(&args2), true, &mode2);
+                        let _ = spawn_session_inner(&app2, serial2.clone(), toggle_record_args(&degrade_args(&args2), None), true, &mode2, true);
                         break;
                     }
                     let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
@@ -838,13 +898,13 @@ fn spawn_session(
 
 /// Launch scrcpy for a device and track the session.
 #[tauri::command]
-pub fn start_mirror(
+pub async fn start_mirror(
     app: AppHandle,
     serial: String,
     settings: CoreSettings,
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_args(&serial, &settings);
-    spawn_session(&app, serial, args, false, "display")
+    spawn_session(&app, serial, args, false, "display").await
 }
 
 /// Query cameras available on a device via scrcpy --list-cameras.
@@ -870,13 +930,13 @@ pub async fn list_device_cameras(
 
 /// Launch scrcpy camera mode for a device and track the session.
 #[tauri::command]
-pub fn start_camera_mirror(
+pub async fn start_camera_mirror(
     app: AppHandle,
     serial: String,
     settings: CameraSettings,
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_camera_args(&serial, &settings);
-    spawn_session(&app, serial, args, false, "camera")
+    spawn_session(&app, serial, args, false, "camera").await
 }
 
 #[tauri::command]
@@ -1034,10 +1094,15 @@ fn toggle_screen_off_args(args: &[String], off: bool) -> Vec<String> {
     out
 }
 
+pub(crate) fn restart_screen_off_args(args: &[String], off: bool) -> Vec<String> {
+    let toggled = toggle_screen_off_args(args, off);
+    toggle_record_args(&toggled, None)
+}
+
 /// Toggle scrcpy screen power mode dynamically via shortcut (MOD+o / MOD+Shift+o)
 /// without killing the mirror or dropping the connection.
 #[tauri::command]
-pub fn restart_with_screen_off(
+pub async fn restart_with_screen_off(
     app: AppHandle,
     serial: String,
     off: bool,
@@ -1136,6 +1201,7 @@ pub fn restart_with_screen_off(
                         pid: s.pid,
                         started_at: s.started_at,
                         mode: s.mode.clone(),
+                        recording_path: recording_path_from_args(&s.args),
                     });
                 }
             }
@@ -1153,25 +1219,121 @@ pub fn restart_with_screen_off(
         key.and_then(|k| map.remove(&k))
     };
     let old = old.ok_or_else(|| "no active mirror for this device".to_string())?;
-    let args = toggle_screen_off_args(&old.args, off);
-    let _ = old.child.kill();
-    spawn_session(&app, serial, args, false, &old.mode)
+    let args = restart_screen_off_args(&old.args, off);
+    if recording_path_from_args(&old.args).is_some() {
+        let _ = stop_child_gracefully(old.child, old.pid, &serial).await;
+    } else {
+        let _ = old.child.kill();
+    }
+    spawn_session(&app, serial, args, false, &old.mode).await
 }
 
-/// Stop a running session by killing its scrcpy child.
+/// Stop a scrcpy child gracefully on Windows (WM_CLOSE -> wait -> fallback kill)
+/// so active recordings finalize their MP4 container cleanly.
+async fn stop_child_gracefully(
+    child: tauri_plugin_shell::process::CommandChild,
+    pid: u32,
+    serial: &str,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WAIT_OBJECT_0, WPARAM};
+        use windows::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+        };
+
+        struct EnumPids {
+            target_pid: u32,
+            hwnds: Vec<isize>,
+        }
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let mut win_pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut win_pid));
+            let data = &mut *(lparam.0 as *mut EnumPids);
+            if win_pid == data.target_pid {
+                data.hwnds.push(hwnd.0 as isize);
+            }
+            BOOL(1)
+        }
+
+        let mut data = EnumPids {
+            target_pid: pid,
+            hwnds: Vec::new(),
+        };
+        let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumPids as isize)) };
+        if let Some(emb) = crate::embed::get_embedded_scrcpy_hwnd(serial) {
+            if !data.hwnds.contains(&emb) {
+                data.hwnds.push(emb);
+            }
+        }
+
+        if !data.hwnds.is_empty() {
+            for h in &data.hwnds {
+                let _ = unsafe { PostMessageW(Some(HWND(*h as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+            }
+            let exited = tokio::task::spawn_blocking(move || unsafe {
+                if let Ok(handle) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+                    let wait = WaitForSingleObject(handle, 4000);
+                    let _ = CloseHandle(handle);
+                    wait == WAIT_OBJECT_0
+                } else {
+                    false
+                }
+            })
+            .await
+            .unwrap_or(false);
+
+            if exited {
+                drop(child);
+                return Ok(());
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (pid, serial);
+
+    child.kill().map_err(|e| e.to_string())
+}
+
+/// Stop a running session by gracefully closing its scrcpy child.
 #[tauri::command]
 pub async fn stop_mirror(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
-    // Take ownership out of the map, then kill outside the lock.
+    // Take ownership out of the map, then stop outside the lock.
     let session = state.sessions.lock().map_err(poison_error)?.remove(&session_id);
     if let Some(s) = session {
         let serial = s.serial.clone();
-        let is_flex = s.display_id.is_some() || s.args.iter().any(|a| a == "--flex-display");
+        let pid = s.pid;
+        let is_flex = s.display_id.is_some()
+            || s.args
+                .iter()
+                .any(|a| a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display="));
         if is_flex {
-            cleanup_flex_display(&app, &serial).await;
+            let has_other_vd = state
+                .sessions
+                .lock()
+                .map_err(poison_error)?
+                .values()
+                .any(|other| {
+                    other.serial == serial
+                        && (other.display_id.is_some()
+                            || other.args.iter().any(|a| {
+                                a == "--flex-display"
+                                    || a == "--new-display"
+                                    || a.starts_with("--new-display=")
+                            }))
+                });
+            if !has_other_vd {
+                cleanup_flex_display(&app, &serial).await;
+            }
         }
         crate::embed::remove_embedded_scrcpy_hwnd(&serial);
         let mirror_label = format!(
@@ -1195,7 +1357,7 @@ pub async fn stop_mirror(
                 }
             }
         });
-        s.child.kill().map_err(|e| e.to_string())
+        stop_child_gracefully(s.child, pid, &serial).await
     } else {
         Err("no such session".into())
     }
@@ -1271,6 +1433,7 @@ pub fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo>, Str
             pid: s.pid,
             started_at: s.started_at,
             mode: s.mode.clone(),
+            recording_path: recording_path_from_args(&s.args),
         })
         .collect())
 }
@@ -2872,5 +3035,559 @@ mod spec18_tests {
             })),
         });
         assert_eq!(a14[6].status, "pass");
+    }
+}
+
+// ============================================================================
+// SPEC-20: ADB Quick Actions Pack
+// ============================================================================
+
+use crate::phone_files::sh_quote;
+
+pub(crate) fn validate_device_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("URL cannot be empty".into());
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("URL contains invalid control characters".into());
+    }
+    let (scheme, rest) = trimmed
+        .split_once(':')
+        .ok_or_else(|| "URL must include a scheme (http, https, geo, or mailto)".to_string())?;
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" => {
+            if !rest.starts_with("//") || rest.len() <= 2 {
+                return Err("HTTP/HTTPS URL must include a host".into());
+            }
+        }
+        "geo" | "mailto" => {
+            if rest.is_empty() {
+                return Err(format!("{} URL cannot be empty", scheme));
+            }
+        }
+        other => {
+            return Err(format!("Unsupported URL scheme: {}", other));
+        }
+    }
+    Ok(trimmed.to_string())
+}
+
+#[tauri::command]
+pub async fn open_url_on_device(
+    app: AppHandle,
+    serial: String,
+    url: String,
+) -> Result<(), String> {
+    let valid_url = validate_device_url(&url)?;
+    let quoted = sh_quote(&valid_url);
+    let output = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.VIEW",
+            "-d",
+            &quoted,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout, stderr);
+    if !output.status.success() || combined.contains("Error:") {
+        let msg = combined.trim();
+        return Err(if msg.is_empty() {
+            "Failed to open URL on device".into()
+        } else {
+            msg.to_string()
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_package_name(pkg: &str) -> Result<(), String> {
+    let mut count = 0usize;
+    for seg in pkg.split('.') {
+        count += 1;
+        let mut chars = seg.chars();
+        let Some(first) = chars.next() else {
+            return Err("Invalid Android package name".into());
+        };
+        if !first.is_ascii_alphabetic() {
+            return Err("Invalid Android package name".into());
+        }
+        if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err("Invalid Android package name".into());
+        }
+    }
+    if count < 2 {
+        return Err("Invalid Android package name".into());
+    }
+    Ok(())
+}
+
+fn default_app_window_settings() -> CoreSettings {
+    CoreSettings {
+        max_size: 1280,
+        video_bit_rate: 8_000_000,
+        max_fps: 60,
+        video_codec: "h264".into(),
+        stay_awake: true,
+        turn_screen_off: false,
+        fullscreen: false,
+        show_touches: false,
+        no_audio: false,
+        no_control: false,
+        no_keyboard_ime: false,
+        flex_display: false,
+        flex_display_size: String::new(),
+        no_window_aspect_ratio_lock: false,
+        render_fit: "letterbox".into(),
+        embedded: false,
+        hide_virtual_taskbar: false,
+    }
+}
+
+pub(crate) fn build_app_window_args(
+    serial: &str,
+    settings: &CoreSettings,
+    package: &str,
+    device_label: &str,
+) -> Vec<String> {
+    let mut args = build_scrcpy_args(serial, settings);
+    args.retain(|a| !a.starts_with("--window-title="));
+    if !args.iter().any(|a| a == "--new-display" || a.starts_with("--new-display=")) {
+        args.push("--new-display".to_string());
+    }
+    args.push(format!("--start-app={}", package));
+    let label = if device_label.trim().is_empty() {
+        serial
+    } else {
+        device_label.trim()
+    };
+    args.push(format!("--window-title={} — {}", package, label));
+    args
+}
+
+async fn query_device_model(app: &AppHandle, serial: &str) -> String {
+    if let Ok(cmd) = adb_cmd(app) {
+        if let Ok(out) = cmd
+            .args(["-s", serial, "shell", "getprop", "ro.product.model"])
+            .output()
+            .await
+        {
+            if out.status.success() {
+                let model = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !model.is_empty() {
+                    return model;
+                }
+            }
+        }
+    }
+    serial.to_string()
+}
+
+#[tauri::command]
+pub async fn launch_app_window(
+    app: AppHandle,
+    serial: String,
+    package: String,
+) -> Result<SessionInfo, String> {
+    validate_package_name(&package)?;
+    let device_label = query_device_model(&app, &serial).await;
+    let settings = default_app_window_settings();
+    let args = build_app_window_args(&serial, &settings, &package, &device_label);
+    spawn_session_inner(&app, serial, args, false, "display", false)
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct PhoneToggles {
+    pub wifi: bool,
+    pub bluetooth: bool,
+    pub dnd: bool,
+}
+
+pub(crate) fn parse_setting_bool(output: &str) -> bool {
+    output.trim().parse::<i32>().map(|v| v != 0).unwrap_or(false)
+}
+
+async fn adb_settings_get_global(app: &AppHandle, serial: &str, key: &str) -> Result<bool, String> {
+    let out = adb_cmd(app)?
+        .args(["-s", serial, "shell", "settings", "get", "global", key])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(parse_setting_bool(&String::from_utf8_lossy(&out.stdout)))
+}
+
+#[tauri::command]
+pub async fn get_phone_toggles(
+    app: AppHandle,
+    serial: String,
+) -> Result<PhoneToggles, String> {
+    let (wifi, bluetooth, dnd) = tokio::join!(
+        adb_settings_get_global(&app, &serial, "wifi_on"),
+        adb_settings_get_global(&app, &serial, "bluetooth_on"),
+        adb_settings_get_global(&app, &serial, "zen_mode"),
+    );
+    Ok(PhoneToggles {
+        wifi: wifi?,
+        bluetooth: bluetooth?,
+        dnd: dnd?,
+    })
+}
+
+#[tauri::command]
+pub async fn set_phone_toggle(
+    app: AppHandle,
+    serial: String,
+    toggle: String,
+    on: bool,
+) -> Result<(), String> {
+    if toggle == "wifi" && !on && is_wifi_serial(&serial) {
+        return Err("Turning Wi-Fi off would disconnect this wireless session".into());
+    }
+    let args: Vec<&str> = match toggle.as_str() {
+        "wifi" => vec!["-s", &serial, "shell", "svc", "wifi", if on { "enable" } else { "disable" }],
+        "bluetooth" => vec!["-s", &serial, "shell", "svc", "bluetooth", if on { "enable" } else { "disable" }],
+        "dnd" => vec!["-s", &serial, "shell", "cmd", "notification", "set_dnd", if on { "on" } else { "off" }],
+        other => return Err(format!("Unknown toggle: {}", other)),
+    };
+    let out = adb_cmd(&app)?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            format!("Failed to set {} toggle", toggle)
+        } else {
+            err
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn toggle_record_args(args: &[String], record_path: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with("--record="))
+        .cloned()
+        .collect();
+    if let Some(path) = record_path {
+        out.push(format!("--record={}", path));
+    }
+    out
+}
+
+fn format_timestamp_yyyymmdd_hhmmss(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let hour = rem / 3600;
+    let min = (rem % 3600) / 60;
+    let sec = rem % 60;
+
+    // Civil-from-days (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+
+    format!("{:04}{:02}{:02}-{:02}{:02}{:02}", y, m, d, hour, min, sec)
+}
+
+fn build_recording_path(model_or_serial: &str, now_secs: u64) -> Result<std::path::PathBuf, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "Could not determine user profile directory".to_string())?;
+    let dir = home.join("Videos").join("AnyLeap");
+    let sanitized: String = model_or_serial
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let model = sanitized.trim_matches('_');
+    let prefix = if model.is_empty() { "device" } else { model };
+    let ts = format_timestamp_yyyymmdd_hhmmss(now_secs);
+    Ok(dir.join(format!("{}-{}.mp4", prefix, ts)))
+}
+
+#[tauri::command]
+pub async fn start_recording(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    serial: String,
+) -> Result<SessionInfo, String> {
+    let existing = {
+        let mut map = state.sessions.lock().map_err(poison_error)?;
+        let target_id = map
+            .iter()
+            .find(|(_, s)| s.serial == serial && s.mode == "display")
+            .or_else(|| map.iter().find(|(_, s)| s.serial == serial))
+            .map(|(id, _)| id.clone());
+        let Some(id) = target_id else {
+            return Err("No active mirror session to record".into());
+        };
+        if let Some(s) = map.get(&id) {
+            if let Some(rec) = recording_path_from_args(&s.args) {
+                return Ok(SessionInfo {
+                    id: s.id.clone(),
+                    serial: s.serial.clone(),
+                    pid: s.pid,
+                    started_at: s.started_at,
+                    mode: s.mode.clone(),
+                    recording_path: Some(rec),
+                });
+            }
+        }
+        map.remove(&id)
+    };
+
+    let Some(old) = existing else {
+        return Err("No active mirror session to record".into());
+    };
+
+    let model = query_device_model(&app, &serial).await;
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = build_recording_path(&model, now_secs)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let path_str = path.to_string_lossy().to_string();
+    let new_args = toggle_record_args(&old.args, Some(&path_str));
+    let old_mode = old.mode.clone();
+
+    stop_child_gracefully(old.child, old.pid, &serial).await?;
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, true)
+}
+
+#[tauri::command]
+pub async fn stop_recording(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    serial: String,
+) -> Result<SessionInfo, String> {
+    let existing = {
+        let mut map = state.sessions.lock().map_err(poison_error)?;
+        let target_id = map
+            .iter()
+            .find(|(_, s)| s.serial == serial && recording_path_from_args(&s.args).is_some())
+            .map(|(id, _)| id.clone());
+        let Some(id) = target_id else {
+            return Err("No active recording session".into());
+        };
+        map.remove(&id)
+    };
+
+    let Some(old) = existing else {
+        return Err("No active recording session".into());
+    };
+
+    let new_args = toggle_record_args(&old.args, None);
+    let old_mode = old.mode.clone();
+
+    stop_child_gracefully(old.child, old.pid, &serial).await?;
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, true)
+}
+
+pub(crate) fn validate_phone_number(raw: &str) -> Result<String, String> {
+    if !(3..=20).contains(&raw.len()) {
+        return Err("Phone number must be 3–20 characters".into());
+    }
+    if !raw
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '+' | '*' | '#' | '(' | ')' | ' ' | '-'))
+    {
+        return Err("Phone number contains invalid characters".into());
+    }
+    let stripped: String = raw
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '(' | ')'))
+        .collect();
+    if stripped.is_empty() || !stripped.chars().any(|c| c.is_ascii_digit()) {
+        return Err("Phone number must contain at least one digit".into());
+    }
+    Ok(stripped)
+}
+
+#[tauri::command]
+pub async fn place_call(
+    app: AppHandle,
+    serial: String,
+    number: String,
+) -> Result<String, String> {
+    let clean = validate_phone_number(&number)?;
+    let tel_uri = format!("tel:{}", sh_quote(&clean));
+    let out = adb_cmd(&app)?
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.CALL",
+            "-d",
+            &tel_uri,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{}\n{}", stdout, stderr);
+    let lower = combined.to_ascii_lowercase();
+    let is_perm_err = lower.contains("permission denial")
+        || lower.contains("securityexception")
+        || lower.contains("permission");
+
+    if is_perm_err {
+        let dial_out = adb_cmd(&app)?
+            .args([
+                "-s",
+                &serial,
+                "shell",
+                "am",
+                "start",
+                "-a",
+                "android.intent.action.DIAL",
+                "-d",
+                &tel_uri,
+            ])
+            .output()
+            .await
+            .map_err(|e| e.to_string())?;
+        let dial_comb = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&dial_out.stdout),
+            String::from_utf8_lossy(&dial_out.stderr)
+        );
+        if !dial_out.status.success() || dial_comb.contains("Error:") {
+            return Err(dial_comb.trim().to_string());
+        }
+        return Ok("Confirm on phone".into());
+    }
+
+    if !out.status.success() || combined.contains("Error:") {
+        let msg = combined.trim();
+        return Err(if msg.is_empty() {
+            "Failed to place call".into()
+        } else {
+            msg.to_string()
+        });
+    }
+
+    Ok(String::new())
+}
+
+#[tauri::command]
+pub async fn end_call(app: AppHandle, serial: String) -> Result<(), String> {
+    send_keyevent(app, serial, 6).await
+}
+
+#[cfg(test)]
+mod spec20_tests {
+    use super::*;
+
+    #[test]
+    fn sh_quote_handles_special_chars() {
+        assert_eq!(sh_quote("plain"), "'plain'");
+        assert_eq!(sh_quote("hello world"), "'hello world'");
+        assert_eq!(sh_quote("a;rm -rf /"), "'a;rm -rf /'");
+        assert_eq!(sh_quote("$(whoami)"), "'$(whoami)'");
+        assert_eq!(sh_quote("`id`"), "'`id`'");
+        assert_eq!(sh_quote("it's"), "'it'\\''s'");
+        assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn url_scheme_allowlist() {
+        assert!(validate_device_url("https://example.com/a?b=1").is_ok());
+        assert!(validate_device_url("http://localhost:8080").is_ok());
+        assert!(validate_device_url("geo:37.7749,-122.4194").is_ok());
+        assert!(validate_device_url("mailto:user@example.com").is_ok());
+        assert!(validate_device_url("HTTPS://EXAMPLE.COM").is_ok());
+
+        assert!(validate_device_url("intent://scan/#Intent;end").is_err());
+        assert!(validate_device_url("file:///etc/passwd").is_err());
+        assert!(validate_device_url("content://settings/system").is_err());
+        assert!(validate_device_url("javascript:alert(1)").is_err());
+        assert!(validate_device_url("example.com").is_err());
+        assert!(validate_device_url("").is_err());
+    }
+
+    #[test]
+    fn package_name_validator() {
+        assert!(validate_package_name("com.example.app").is_ok());
+        assert!(validate_package_name("org.mozilla.firefox_beta").is_ok());
+
+        assert!(validate_package_name("single").is_err());
+        assert!(validate_package_name("com.123.app").is_err());
+        assert!(validate_package_name("com.example.").is_err());
+        assert!(validate_package_name("com.example.app;rm").is_err());
+        assert!(validate_package_name("").is_err());
+    }
+
+    #[test]
+    fn phone_number_validator() {
+        assert_eq!(validate_phone_number("+1 (555) 123-4567").unwrap(), "+15551234567");
+        assert_eq!(validate_phone_number("*123#").unwrap(), "*123#");
+        assert_eq!(validate_phone_number("911").unwrap(), "911");
+
+        assert!(validate_phone_number("12").is_err());
+        assert!(validate_phone_number("123456789012345678901").is_err());
+        assert!(validate_phone_number("abc123").is_err());
+        assert!(validate_phone_number("---").is_err());
+    }
+
+    #[test]
+    fn toggle_state_parser() {
+        assert!(!parse_setting_bool("0"));
+        assert!(!parse_setting_bool("0\n"));
+        assert!(parse_setting_bool("1"));
+        assert!(parse_setting_bool("1\r\n"));
+        assert!(parse_setting_bool("2"));
+        assert!(!parse_setting_bool("null"));
+        assert!(!parse_setting_bool("garbage"));
+        assert!(!parse_setting_bool(""));
+    }
+
+    #[test]
+    fn scrcpy_arg_builders_app_window_and_recording() {
+        let s = default_app_window_settings();
+        let app_args = build_app_window_args("SER123", &s, "com.example.app", "Pixel 9");
+        assert!(app_args.contains(&"--new-display".to_string()));
+        assert!(app_args.contains(&"--start-app=com.example.app".to_string()));
+        assert!(app_args.contains(&"--window-title=com.example.app — Pixel 9".to_string()));
+
+        let rec_args = toggle_record_args(&app_args, Some("C:\\Videos\\AnyLeap\\rec.mp4"));
+        assert!(rec_args.iter().any(|a| a.starts_with("--record=")));
+
+        let unrec_args = toggle_record_args(&rec_args, None);
+        assert!(!unrec_args.iter().any(|a| a.starts_with("--record=")));
+
+        let restarted_args = restart_screen_off_args(&rec_args, true);
+        assert!(restarted_args.contains(&"--turn-screen-off".to_string()));
+        assert!(!restarted_args.iter().any(|a| a.starts_with("--record=")));
     }
 }

@@ -14,10 +14,16 @@ export interface CommandPaletteContext {
   selectedSerial: string | null;
   hasOnlineDevice: boolean;
   hasActiveSession: boolean;
+  isRecording: boolean;
   kvmRunning: boolean;
   switchTab: (tab: ShellTab) => void;
   startMode: (mode: StudioMode) => void;
   stopMirroring: () => void;
+  toggleRecording: () => void;
+  openLinkOnPhone: () => void;
+  togglePhoneWifi: () => void;
+  togglePhoneBluetooth: () => void;
+  togglePhoneDnd: () => void;
   takeScreenshot: () => void;
   openPair: () => void;
   openDoctor: () => void;
@@ -104,6 +110,48 @@ export function buildCommands(ctx: CommandPaletteContext): PaletteCommand[] {
       keywords: ["end", "session", "kill", "stream"],
       disabled: ctx.hasActiveSession ? undefined : "No active session",
       run: () => ctx.stopMirroring(),
+    },
+    {
+      id: "toggle-recording",
+      label: ctx.isRecording ? "Stop recording" : "Start recording",
+      group: "Stream",
+      keywords: ["record", "screen", "video", "mp4"],
+      disabled: ctx.isRecording
+        ? undefined
+        : (noDeviceReason ?? (ctx.hasActiveSession ? undefined : "No active session")),
+      run: () => ctx.toggleRecording(),
+    },
+    {
+      id: "open-link-on-phone",
+      label: "Open link on phone",
+      group: "Device",
+      keywords: ["url", "browser", "clipboard", "link"],
+      disabled: noDeviceReason,
+      run: () => ctx.openLinkOnPhone(),
+    },
+    {
+      id: "toggle-phone-wifi",
+      label: "Toggle phone Wi-Fi",
+      group: "Device",
+      keywords: ["wifi", "wireless", "network"],
+      disabled: noDeviceReason,
+      run: () => ctx.togglePhoneWifi(),
+    },
+    {
+      id: "toggle-phone-bluetooth",
+      label: "Toggle phone Bluetooth",
+      group: "Device",
+      keywords: ["bluetooth", "bt"],
+      disabled: noDeviceReason,
+      run: () => ctx.togglePhoneBluetooth(),
+    },
+    {
+      id: "toggle-phone-dnd",
+      label: "Toggle phone Do Not Disturb",
+      group: "Device",
+      keywords: ["dnd", "mute", "silent", "notifications"],
+      disabled: noDeviceReason,
+      run: () => ctx.togglePhoneDnd(),
     },
     {
       id: "take-screenshot",

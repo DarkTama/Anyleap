@@ -1,25 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Bell,
+  BellOff,
+  Bluetooth,
   Camera,
   Circle,
+  Disc,
+  FolderOpen,
   HelpCircle,
   Monitor,
   MonitorOff,
   Moon,
   Mouse,
+  PhoneOff,
   Power,
   RotateCw,
   Square,
   Sun,
   Volume2,
   VolumeX,
+  Wifi,
   X,
   Zap,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
@@ -32,8 +39,13 @@ import {
   restartWithScreenOff,
   listSessions,
   stopMirror,
+  getPhoneToggles,
+  setPhoneToggle,
+  startRecording,
+  stopRecording,
+  endCall,
 } from "@/lib/tauri";
-import type { SessionMode } from "@/lib/types";
+import type { PhoneToggleKey, PhoneToggles, SessionMode } from "@/lib/types";
 import { KEYCODE } from "@/lib/keycodes";
 import type { ControlConfig, ControlSize } from "@/lib/controlConfig";
 
@@ -63,6 +75,8 @@ export function ControlBar({
   sessionMode?: SessionMode;
 }) {
   const setError = useAppStore((s) => s.setError);
+  const sessions = useAppStore((s) => s.sessions);
+  const upsertSession = useAppStore((s) => s.upsertSession);
   const deviceToggles = useAppStore((s) => s.deviceToggles);
   const setDeviceToggle = useAppStore((s) => s.setDeviceToggle);
   const toggles = deviceToggles[serial];
@@ -72,6 +86,58 @@ export function ControlBar({
   const sz = SIZE[config.size];
   const [torchOn, setTorchOn] = useState(false);
   const [showObsGuide, setShowObsGuide] = useState(false);
+  const [phoneToggles, setPhoneToggles] = useState<PhoneToggles | null>(null);
+  const [recBusy, setRecBusy] = useState(false);
+
+  const recordingSession = sessions.find((s) => s.serial === serial && !!s.recording_path);
+  const isRecording = !!recordingSession;
+  const recordingPath = recordingSession?.recording_path ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    getPhoneToggles(serial)
+      .then((res) => {
+        if (!cancelled) setPhoneToggles(res);
+      })
+      .catch(() => {
+        // best-effort when device is offline/unauthorized
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serial]);
+
+  const toggleRecord = () => {
+    if (recBusy) return;
+    setRecBusy(true);
+    const op = isRecording ? stopRecording(serial) : startRecording(serial);
+    op.then((next) => upsertSession(next))
+      .catch((e) => setError(String(e)))
+      .finally(() => setRecBusy(false));
+  };
+
+  const openRecordingFolder = () => {
+    if (!recordingPath) return;
+    revealItemInDir(recordingPath).catch((e) => setError(String(e)));
+  };
+
+  const handlePhoneToggle = (key: PhoneToggleKey) => () => {
+    const next = !(phoneToggles?.[key] ?? false);
+    setPhoneToggle(serial, key, next)
+      .then(() =>
+        setPhoneToggles((prev) => ({
+          wifi: prev?.wifi ?? false,
+          bluetooth: prev?.bluetooth ?? false,
+          dnd: prev?.dnd ?? false,
+          [key]: next,
+        })),
+      )
+      .catch((e) => setError(String(e)));
+  };
+
+  const handleEndCall = () => {
+    endCall(serial).catch((e) => setError(String(e)));
+  };
   const toggleTorch = () => {
     const next = !torchOn;
     sendCameraShortcut(serial, next ? "torch_on" : "torch_off")
@@ -286,6 +352,78 @@ export function ControlBar({
           >
             <Mouse className={sz.icon} />
             {swipeScroll ? "Swipe on" : "Swipe off"}
+          </Button>
+        )}
+        {b.record && (
+          <Button
+            variant={isRecording ? "default" : "outline"}
+            className={`${sz.btn} ${isRecording ? "bg-rose-600/20 text-rose-300 border-rose-500/50 hover:bg-rose-600/30" : ""}`}
+            onClick={toggleRecord}
+            disabled={recBusy}
+            title={isRecording ? "Stop recording" : "Start screen recording"}
+          >
+            <span className="relative inline-flex items-center justify-center">
+              <Disc className={sz.icon} />
+              {isRecording && (
+                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
+              )}
+            </span>
+            {isRecording ? "Stop rec" : "Record"}
+          </Button>
+        )}
+        {b.record && isRecording && recordingPath && (
+          <Button
+            variant="outline"
+            className={sz.btn}
+            onClick={openRecordingFolder}
+            title="Open recording folder"
+          >
+            <FolderOpen className={sz.icon} />
+            Folder
+          </Button>
+        )}
+        {b.wifi && (
+          <Button
+            variant={phoneToggles?.wifi ? "default" : "outline"}
+            className={sz.btn}
+            onClick={handlePhoneToggle("wifi")}
+            title="Toggle phone Wi-Fi"
+          >
+            <Wifi className={sz.icon} />
+            Wi-Fi
+          </Button>
+        )}
+        {b.bluetooth && (
+          <Button
+            variant={phoneToggles?.bluetooth ? "default" : "outline"}
+            className={sz.btn}
+            onClick={handlePhoneToggle("bluetooth")}
+            title="Toggle phone Bluetooth"
+          >
+            <Bluetooth className={sz.icon} />
+            BT
+          </Button>
+        )}
+        {b.dnd && (
+          <Button
+            variant={phoneToggles?.dnd ? "default" : "outline"}
+            className={sz.btn}
+            onClick={handlePhoneToggle("dnd")}
+            title="Toggle Do Not Disturb"
+          >
+            <BellOff className={sz.icon} />
+            DND
+          </Button>
+        )}
+        {b.endCall && (
+          <Button
+            variant="outline"
+            className={`${sz.btn} hover:bg-rose-950/50 hover:text-rose-300 hover:border-rose-800/60`}
+            onClick={handleEndCall}
+            title="End active phone call"
+          >
+            <PhoneOff className={sz.icon} />
+            End call
           </Button>
         )}
           </>

@@ -13,7 +13,12 @@ export type ButtonId =
   | "sleep"
   | "screenOff"
   | "orientToggle"
-  | "swipeScroll";
+  | "swipeScroll"
+  | "record"
+  | "wifi"
+  | "bluetooth"
+  | "dnd"
+  | "endCall";
 
 export interface ControlConfig {
   dock: DockSide;
@@ -36,6 +41,11 @@ export const BUTTON_IDS: ButtonId[] = [
   "screenOff",
   "orientToggle",
   "swipeScroll",
+  "record",
+  "wifi",
+  "bluetooth",
+  "dnd",
+  "endCall",
 ];
 
 export const BUTTON_LABELS: Record<ButtonId, string> = {
@@ -51,6 +61,11 @@ export const BUTTON_LABELS: Record<ButtonId, string> = {
   screenOff: "Screen off (scrcpy)",
   orientToggle: "Rotate device",
   swipeScroll: "Swipe scroll (Reels)",
+  record: "Record screen",
+  wifi: "Wi-Fi toggle",
+  bluetooth: "Bluetooth toggle",
+  dnd: "Do Not Disturb",
+  endCall: "End call",
 };
 
 export const DOCK_SIDES: DockSide[] = ["left", "right", "top", "bottom", "undocked"];
@@ -73,6 +88,11 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
     screenOff: true,
     orientToggle: true,
     swipeScroll: true,
+    record: true,
+    wifi: true,
+    bluetooth: true,
+    dnd: true,
+    endCall: true,
   },
 };
 

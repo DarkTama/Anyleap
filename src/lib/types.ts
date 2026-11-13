@@ -24,7 +24,16 @@ export interface SessionInfo {
   pid: number;
   started_at: number;
   mode: SessionMode;
+  recording_path?: string | null;
 }
+
+export interface PhoneToggles {
+  wifi: boolean;
+  bluetooth: boolean;
+  dnd: boolean;
+}
+
+export type PhoneToggleKey = "wifi" | "bluetooth" | "dnd";
 
 export interface SessionExited {
   id: string;

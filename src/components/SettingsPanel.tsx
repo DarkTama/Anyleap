@@ -325,6 +325,11 @@ export function SettingsPanel() {
             checked={appPrefs.desktopNotifications}
             onChange={(v) => updateAppPrefs({ ...appPrefs, desktopNotifications: v })}
           />
+          <Toggle
+            label="Battery alerts (low ≤20% & full 100%)"
+            checked={appPrefs.batteryAlerts}
+            onChange={(v) => updateAppPrefs({ ...appPrefs, batteryAlerts: v })}
+          />
 
           <div className="flex items-center justify-between pt-2">
             <div>

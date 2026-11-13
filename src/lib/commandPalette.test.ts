@@ -11,10 +11,16 @@ function makeCtx(overrides: Partial<CommandPaletteContext> = {}): CommandPalette
     selectedSerial: "ABC123",
     hasOnlineDevice: true,
     hasActiveSession: false,
+    isRecording: false,
     kvmRunning: false,
     switchTab: vi.fn(),
     startMode: vi.fn(),
     stopMirroring: vi.fn(),
+    toggleRecording: vi.fn(),
+    openLinkOnPhone: vi.fn(),
+    togglePhoneWifi: vi.fn(),
+    togglePhoneBluetooth: vi.fn(),
+    togglePhoneDnd: vi.fn(),
     takeScreenshot: vi.fn(),
     openPair: vi.fn(),
     openDoctor: vi.fn(),
@@ -48,6 +54,11 @@ describe("filterAndRankCommands", () => {
     const stop = cmds.find((c) => c.id === "stop-mirror");
     expect(flex?.disabled).toBe("No device selected");
     expect(stop?.disabled).toBe("No active session");
+    expect(cmds.find((c) => c.id === "toggle-recording")?.disabled).toBe("No device selected");
+    expect(cmds.find((c) => c.id === "open-link-on-phone")?.disabled).toBe("No device selected");
+    expect(cmds.find((c) => c.id === "toggle-phone-wifi")?.disabled).toBe("No device selected");
+    expect(cmds.find((c) => c.id === "toggle-phone-bluetooth")?.disabled).toBe("No device selected");
+    expect(cmds.find((c) => c.id === "toggle-phone-dnd")?.disabled).toBe("No device selected");
   });
 
   it("toggles KVM server label based on kvmRunning", () => {

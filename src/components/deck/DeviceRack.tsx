@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Usb,
   Wifi,
@@ -13,7 +13,15 @@ import {
   Square,
   RefreshCw,
   Stethoscope,
+  Link2,
+  Phone,
+  Send,
 } from "lucide-react";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import {
@@ -24,7 +32,10 @@ import {
   startMirror,
   stopMirror,
   getBatteryInfo,
+  openUrlOnDevice,
+  placeCall,
 } from "@/lib/tauri";
+import { nextBatteryAlert, type BatteryAlertKind } from "@/lib/batteryAlerts";
 import { forgetSaved } from "@/lib/savedDevices";
 import {
   buildRows,
@@ -33,7 +44,7 @@ import {
   getNicknameKey,
 } from "@/lib/deviceStatus";
 import { saveNickname } from "@/lib/settingsStore";
-import type { SavedDevice } from "@/lib/types";
+import type { BatteryInfo, SavedDevice } from "@/lib/types";
 
 interface DeviceRackProps {
   selectedSerial: string | null;
@@ -48,18 +59,43 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
   const settings = useAppStore((s) => s.settings);
+  const appPrefs = useAppStore((s) => s.appPrefs);
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
   const batteryMap = useAppStore((s) => s.batteryMap);
   const setBatteryInfo = useAppStore((s) => s.setBatteryInfo);
   const openDoctor = useAppStore((s) => s.openDoctor);
 
+  const prevBatteryRef = useRef<Record<string, BatteryInfo>>({});
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [busySerial, setBusySerial] = useState<string | null>(null);
   const [failedSerial, setFailedSerial] = useState<string | null>(null);
+  const [quickAction, setQuickAction] = useState<{ serial: string; kind: "url" | "call" } | null>(null);
+  const [quickInput, setQuickInput] = useState("");
+  const [quickNote, setQuickNote] = useState<{ serial: string; text: string } | null>(null);
 
   const { savedRows, otherDevices } = buildRows(devices, savedDevices, sessions);
+
+  const notifyBattery = async (deviceName: string, kind: BatteryAlertKind, level: number) => {
+    try {
+      let granted = await isPermissionGranted();
+      if (!granted) {
+        const perm = await requestPermission();
+        granted = perm === "granted";
+      }
+      if (!granted) return;
+      sendNotification({
+        title: kind === "low" ? `${deviceName}: Battery low (${level}%)` : `${deviceName}: Battery full (100%)`,
+        body:
+          kind === "low"
+            ? "Plug in your device to avoid disconnecting."
+            : "Device is fully charged.",
+      });
+    } catch {
+      // best-effort notification
+    }
+  };
 
   // Poll battery telemetry for connected devices
   useEffect(() => {
@@ -70,6 +106,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
           try {
             const info = await getBatteryInfo(dev.serial);
             if (!cancelled) {
+              const prev = prevBatteryRef.current[dev.serial];
+              prevBatteryRef.current[dev.serial] = info;
+              if (appPrefs.batteryAlerts) {
+                const alert = nextBatteryAlert(prev, info);
+                if (alert) {
+                  void notifyBattery(dev.model || dev.product || dev.serial, alert, info.level ?? 0);
+                }
+              }
               setBatteryInfo(dev.serial, info);
             }
           } catch {
@@ -85,7 +129,59 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
       cancelled = true;
       clearInterval(timer);
     };
-  }, [devices, setBatteryInfo]);
+  }, [devices, setBatteryInfo, appPrefs.batteryAlerts]);
+
+  const openQuickInput = async (serial: string, kind: "url" | "call") => {
+    if (quickAction?.serial === serial && quickAction.kind === kind) {
+      setQuickAction(null);
+      return;
+    }
+    setQuickNote(null);
+    setQuickInput("");
+    setQuickAction({ serial, kind });
+    if (kind === "url") {
+      try {
+        const clip = (await navigator.clipboard.readText()).trim();
+        if (/^(https?:\/\/|geo:|mailto:)/i.test(clip)) {
+          setQuickInput(clip);
+        }
+      } catch {
+        // clipboard may be unavailable
+      }
+    }
+  };
+
+  const submitQuickInput = async (serial: string) => {
+    if (!quickAction || quickAction.serial !== serial) return;
+    setBusySerial(serial);
+    setError(null);
+    try {
+      if (quickAction.kind === "url") {
+        await openUrlOnDevice(serial, quickInput);
+        logActivity({
+          kind: "device",
+          title: "Opened link on phone",
+          detail: quickInput.trim(),
+        });
+        setQuickAction(null);
+      } else {
+        const note = await placeCall(serial, quickInput);
+        logActivity({
+          kind: "device",
+          title: "Call placed",
+          detail: note ? `${quickInput.trim()} (${note})` : quickInput.trim(),
+        });
+        setQuickAction(null);
+        if (note) {
+          setQuickNote({ serial, text: note });
+        }
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusySerial(null);
+    }
+  };
 
   // If no device is selected yet and devices exist, pick the first available
   useEffect(() => {
@@ -396,7 +492,66 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     <Unplug className="h-3.5 w-3.5" />
                   </button>
                 )}
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => void openQuickInput(dev.serial, "url")}
+                  className={`btn-tactile rounded-md p-1 border ${
+                    quickAction?.serial === dev.serial && quickAction.kind === "url"
+                      ? "bg-[#282830] text-zinc-100 border-zinc-500"
+                      : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                  }`}
+                  title="Open link on phone"
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => void openQuickInput(dev.serial, "call")}
+                  className={`btn-tactile rounded-md p-1 border ${
+                    quickAction?.serial === dev.serial && quickAction.kind === "call"
+                      ? "bg-[#282830] text-zinc-100 border-zinc-500"
+                      : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                  }`}
+                  title="Call…"
+                >
+                  <Phone className="h-3.5 w-3.5" />
+                </button>
               </div>
+              {quickAction?.serial === dev.serial && (
+                <div
+                  className="mt-2 flex items-center gap-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type={quickAction.kind === "call" ? "tel" : "url"}
+                    value={quickInput}
+                    autoFocus
+                    onChange={(e) => setQuickInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitQuickInput(dev.serial);
+                      if (e.key === "Escape") setQuickAction(null);
+                    }}
+                    placeholder={quickAction.kind === "url" ? "https://…" : "+1 555 123 4567"}
+                    className="h-7 min-w-0 flex-1 rounded-md border border-[#2e2e36] bg-[#18181c] px-2 text-[11px] text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={isBusy || !quickInput.trim()}
+                    onClick={() => void submitQuickInput(dev.serial)}
+                    className="btn-tactile rounded-md border border-[#2e2e36] bg-[#222228] p-1.5 text-zinc-200 hover:bg-[#282830] disabled:opacity-40"
+                    title={quickAction.kind === "url" ? "Open on phone" : "Place call"}
+                  >
+                    <Send className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+              {quickNote?.serial === dev.serial && (
+                <div className="mt-1.5 text-[10px] text-amber-300">
+                  {quickNote.text}
+                </div>
+              )}
             </div>
           );
         })}
@@ -567,15 +722,43 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 )}
 
                 {status !== "offline" && serial && (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => handleDisconnect(serial)}
-                    className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-400 border border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
-                    title="Disconnect wireless"
-                  >
-                    <Unplug className="h-3.5 w-3.5" />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => handleDisconnect(serial)}
+                      className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-400 border border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                      title="Disconnect wireless"
+                    >
+                      <Unplug className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => void openQuickInput(serial, "url")}
+                      className={`btn-tactile rounded-md p-1 border ${
+                        quickAction?.serial === serial && quickAction.kind === "url"
+                          ? "bg-[#282830] text-zinc-100 border-zinc-500"
+                          : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                      }`}
+                      title="Open link on phone"
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => void openQuickInput(serial, "call")}
+                      className={`btn-tactile rounded-md p-1 border ${
+                        quickAction?.serial === serial && quickAction.kind === "call"
+                          ? "bg-[#282830] text-zinc-100 border-zinc-500"
+                          : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                      }`}
+                      title="Call…"
+                    >
+                      <Phone className="h-3.5 w-3.5" />
+                    </button>
+                  </>
                 )}
 
                 <button
@@ -588,6 +771,39 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
+              {serial && quickAction?.serial === serial && (
+                <div
+                  className="mt-2 flex items-center gap-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type={quickAction.kind === "call" ? "tel" : "url"}
+                    value={quickInput}
+                    autoFocus
+                    onChange={(e) => setQuickInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitQuickInput(serial);
+                      if (e.key === "Escape") setQuickAction(null);
+                    }}
+                    placeholder={quickAction.kind === "url" ? "https://…" : "+1 555 123 4567"}
+                    className="h-7 min-w-0 flex-1 rounded-md border border-[#2e2e36] bg-[#18181c] px-2 text-[11px] text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={isBusy || !quickInput.trim()}
+                    onClick={() => void submitQuickInput(serial)}
+                    className="btn-tactile rounded-md border border-[#2e2e36] bg-[#222228] p-1.5 text-zinc-200 hover:bg-[#282830] disabled:opacity-40"
+                    title={quickAction.kind === "url" ? "Open on phone" : "Place call"}
+                  >
+                    <Send className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+              {serial && quickNote?.serial === serial && (
+                <div className="mt-1.5 text-[10px] text-amber-300">
+                  {quickNote.text}
+                </div>
+              )}
             </div>
           );
         })}

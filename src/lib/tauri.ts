@@ -11,6 +11,8 @@ import type {
   MdnsService,
   MirrorRect,
   PhoneNotification,
+  PhoneToggleKey,
+  PhoneToggles,
   SessionExited,
   SessionInfo,
 } from "./types";
@@ -163,3 +165,29 @@ export const cacheDevicePhoto = (serial: string, devicePath: string, modifiedUni
 
 export const getDeviceNotifications = (serial: string) =>
   invoke<PhoneNotification[]>("get_device_notifications", { serial });
+
+// --- ADB Quick Actions Pack (SPEC-20) ---
+
+export const openUrlOnDevice = (serial: string, url: string) =>
+  invoke<void>("open_url_on_device", { serial, url });
+
+export const launchAppWindow = (serial: string, packageName: string) =>
+  invoke<SessionInfo>("launch_app_window", { serial, package: packageName });
+
+export const getPhoneToggles = (serial: string) =>
+  invoke<PhoneToggles>("get_phone_toggles", { serial });
+
+export const setPhoneToggle = (serial: string, toggle: PhoneToggleKey, on: boolean) =>
+  invoke<void>("set_phone_toggle", { serial, toggle, on });
+
+export const startRecording = (serial: string) =>
+  invoke<SessionInfo>("start_recording", { serial });
+
+export const stopRecording = (serial: string) =>
+  invoke<SessionInfo>("stop_recording", { serial });
+
+export const placeCall = (serial: string, number: string) =>
+  invoke<string>("place_call", { serial, number });
+
+export const endCall = (serial: string) =>
+  invoke<void>("end_call", { serial });

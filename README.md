@@ -22,6 +22,7 @@ Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experi
 - **Effortless Wireless & USB** — One-tap pairing via **QR code** (scan with phone) or **6-digit mDNS auto-discovery**, persistent device storage, live battery telemetry, and automatic reconnects.
 - **Power & Productivity Controls** — Seamless screen power toggling (keep mirroring while phone display stays dark), wheel-to-swipe scrolling for Reels/Shorts, clipboard image sharing, drag-and-drop file transfer, and app launcher drawer.
 - **Adaptive Control Bar** — Context-aware floating or embedded controls for navigation, volume, sleep/wake, torch, and camera zoom.
+- **ADB Quick Actions Pack** — Open PC clipboard URLs directly on your phone, launch individual Android apps in their own virtual display windows, toggle Wi-Fi/Bluetooth/Do Not Disturb, record mirroring sessions to MP4 (`Videos\AnyLeap`), receive Windows battery low/full toast alerts, and place or end phone calls.
 
 ## Download
 

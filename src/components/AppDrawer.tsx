@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
-import { Loader2, Play, RefreshCw, Rocket, Search, X } from "lucide-react";
+import { AppWindow, Loader2, Play, RefreshCw, Rocket, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { listInstalledApps, launchApp } from "@/lib/tauri";
+import { listInstalledApps, launchApp, launchAppWindow } from "@/lib/tauri";
 import { logActivity } from "@/stores/activityStore";
 
 function formatAppName(pkg: string): string {
@@ -72,6 +72,23 @@ export function AppDrawer({
         kind: "app",
         title: `Launched ${formatAppName(pkg)}`,
         detail: serial,
+      });
+      onClose();
+    } catch (e) {
+      setError(String(e));
+      setLaunching(null);
+    }
+  };
+
+  const handleLaunchWindow = async (pkg: string) => {
+    setLaunching(pkg);
+    setError(null);
+    try {
+      await launchAppWindow(serial, pkg);
+      logActivity({
+        kind: "app",
+        title: `Opened ${formatAppName(pkg)} in window`,
+        detail: pkg,
       });
       onClose();
     } catch (e) {
@@ -172,28 +189,52 @@ export function AppDrawer({
               {filtered.map((pkg) => {
                 const isLaunching = launching === pkg;
                 return (
-                  <button
+                  <div
                     key={pkg}
-                    onClick={() => handleLaunch(pkg)}
-                    disabled={!!launching}
-                    className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition hover:bg-zinc-800/80 active:bg-zinc-800 disabled:opacity-50"
+                    className="group flex w-full items-center justify-between rounded-lg px-2.5 py-2 transition hover:bg-zinc-800/80"
                   >
-                    <div className="min-w-0 flex-1 pr-2">
+                    <button
+                      type="button"
+                      onClick={() => handleLaunch(pkg)}
+                      disabled={!!launching}
+                      className="min-w-0 flex-1 pr-2 text-left disabled:opacity-50"
+                      title="Launch on phone"
+                    >
                       <div className="truncate text-xs font-medium text-zinc-200">
                         {formatAppName(pkg)}
                       </div>
                       <div className="truncate font-mono text-[10px] text-zinc-500">
                         {pkg}
                       </div>
-                    </div>
-                    <div className="shrink-0 text-zinc-400">
+                    </button>
+                    <div className="flex shrink-0 items-center gap-1.5 text-zinc-400">
                       {isLaunching ? (
                         <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
                       ) : (
-                        <Play className="h-3.5 w-3.5 text-zinc-500 opacity-0 group-hover:opacity-100 hover:text-sky-400" />
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleLaunch(pkg)}
+                            disabled={!!launching}
+                            className="rounded p-1 text-zinc-400 hover:bg-zinc-700/60 hover:text-sky-400"
+                            title="Launch on phone"
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleLaunchWindow(pkg)}
+                            disabled={!!launching}
+                            className="flex items-center gap-1 rounded border border-zinc-700/80 bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 hover:border-zinc-500 hover:bg-zinc-700 hover:text-white"
+                            title="Open in its own window"
+                          >
+                            <AppWindow className="h-3 w-3" />
+                            <span>Open in window</span>
+                          </button>
+                        </>
                       )}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>

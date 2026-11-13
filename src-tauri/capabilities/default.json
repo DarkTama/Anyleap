@@ -40,6 +40,7 @@
     "dialog:default",
     "updater:default",
     "process:allow-restart",
-    "notification:default"
+    "notification:default",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

@@ -42,3 +42,6 @@ The ADB-only companion view for a selected `AdbDevice` (requiring no companion a
 - **Device Storage Browser (`FilesView`)**: Sandboxed file operations scoped to `/storage/emulated/0` via `stat`, `adb pull`, `adb push`, and `rm -r`.
 - **Photo Gallery (`PhotosView`)**: Paginated, lazy-loaded grid of `DCIM/Camera` and `Pictures/Screenshots` images backed by a 500 MB LRU/atime local disk cache.
 - **Read-Only Notifications (`NotificationsView`)**: In-memory view of active notifications parsed from `dumpsys notification --noredact` (never persisted or logged), with optional desktop pop-ups.
+
+### ADB Quick Actions
+Direct device-control and session utilities executed over `adb` and `scrcpy`: URL handoff (`VIEW` intent), per-app virtual display windows (`--new-display --start-app`), system toggles (`svc`/`cmd notification`), MP4 screen recording (`--record`), Windows battery threshold notifications, and telephony intents (`CALL`/`DIAL`, `KEYCODE_ENDCALL`).

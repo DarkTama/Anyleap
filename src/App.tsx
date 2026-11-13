@@ -20,6 +20,11 @@ import {
   startMirror,
   stopMirror,
   takeScreenshot,
+  startRecording,
+  stopRecording,
+  openUrlOnDevice,
+  getPhoneToggles,
+  setPhoneToggle,
 } from "@/lib/tauri";
 import type { PhoneNotification } from "@/lib/types";
 import {
@@ -162,6 +167,14 @@ function App() {
             detail: e.payload.last_error || undefined,
             durationMs,
           });
+          if (endedSession.recording_path) {
+            logActivity({
+              kind: "mirror",
+              title: `Recording saved (${label})`,
+              detail: endedSession.recording_path,
+              durationMs,
+            });
+          }
         }
         if (targetSerial) {
           const mirrorLabel = `mirror-${targetSerial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
@@ -422,11 +435,22 @@ function App() {
     const activeSession = selectedSerial
       ? sessions.find((s) => s.serial === selectedSerial) ?? sessions[0]
       : sessions[0];
+    const isRecording = Boolean(
+      selectedSerial && sessions.some((s) => s.serial === selectedSerial && !!s.recording_path),
+    );
+
+    const togglePhone = (key: "wifi" | "bluetooth" | "dnd") => {
+      if (!selectedSerial) return;
+      void getPhoneToggles(selectedSerial)
+        .then((t) => setPhoneToggle(selectedSerial, key, !t[key]))
+        .catch((err) => setError(String(err)));
+    };
 
     return buildCommands({
       selectedSerial,
       hasOnlineDevice,
       hasActiveSession: Boolean(activeSession),
+      isRecording,
       kvmRunning,
       switchTab: setActiveTab,
       startMode: (mode: StudioMode) => {
@@ -456,6 +480,30 @@ function App() {
         if (!activeSession) return;
         void stopMirror(activeSession.id).catch((err) => setError(String(err)));
       },
+      toggleRecording: () => {
+        if (!selectedSerial) return;
+        const op = isRecording ? stopRecording(selectedSerial) : startRecording(selectedSerial);
+        void op.then(upsertSession).catch((err) => setError(String(err)));
+      },
+      openLinkOnPhone: () => {
+        if (!selectedSerial) return;
+        void (async () => {
+          let initial = "";
+          try {
+            const clip = (await navigator.clipboard.readText()).trim();
+            if (/^(https?:\/\/|geo:|mailto:)/i.test(clip)) initial = clip;
+          } catch {
+            // clipboard unavailable
+          }
+          const url = initial || window.prompt("Enter URL to open on phone:")?.trim() || "";
+          if (!url) return;
+          await openUrlOnDevice(selectedSerial, url);
+          logActivity({ kind: "device", title: "Opened link on phone", detail: url });
+        })().catch((err) => setError(String(err)));
+      },
+      togglePhoneWifi: () => togglePhone("wifi"),
+      togglePhoneBluetooth: () => togglePhone("bluetooth"),
+      togglePhoneDnd: () => togglePhone("dnd"),
       takeScreenshot: () => {
         if (!selectedSerial) return;
         void takeScreenshot(selectedSerial)

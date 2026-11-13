@@ -7,12 +7,14 @@ export interface AppPrefs {
   minimizeToTrayOnClose: boolean;
   checkUpdates: boolean;
   desktopNotifications: boolean;
+  batteryAlerts: boolean;
 }
 
 export const DEFAULT_APP_PREFS: AppPrefs = {
   minimizeToTrayOnClose: true,
   checkUpdates: true,
   desktopNotifications: false,
+  batteryAlerts: true,
 };
 
 export interface Quality {
@@ -121,6 +123,7 @@ export async function loadAppPrefs(): Promise<AppPrefs> {
     checkUpdates: saved?.checkUpdates ?? DEFAULT_APP_PREFS.checkUpdates,
     desktopNotifications:
       saved?.desktopNotifications ?? DEFAULT_APP_PREFS.desktopNotifications,
+    batteryAlerts: saved?.batteryAlerts ?? DEFAULT_APP_PREFS.batteryAlerts,
   };
 }
 
