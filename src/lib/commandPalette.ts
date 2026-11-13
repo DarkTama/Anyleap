@@ -43,6 +43,13 @@ export function buildCommands(ctx: CommandPaletteContext): PaletteCommand[] {
       run: () => ctx.switchTab("devices"),
     },
     {
+      id: "tab-phone",
+      label: "Switch to Phone tab",
+      group: "Navigation",
+      keywords: ["files", "photos", "notifications", "storage", "phone"],
+      run: () => ctx.switchTab("phone"),
+    },
+    {
       id: "tab-computers",
       label: "Switch to Computers tab",
       group: "Navigation",

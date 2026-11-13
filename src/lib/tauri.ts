@@ -5,10 +5,12 @@ import type {
   CameraSettings,
   CoreSettings,
   DeviceDetails,
+  DeviceEntry,
   DeviceInfo,
   DoctorCheck,
   MdnsService,
   MirrorRect,
+  PhoneNotification,
   SessionExited,
   SessionInfo,
 } from "./types";
@@ -138,3 +140,26 @@ export const getDeviceDetails = (serial: string) =>
 
 export const runConnectionDoctor = (serial?: string | null) =>
   invoke<DoctorCheck[]>("run_connection_doctor", { serial: serial ?? null });
+
+// --- Phone Tab (SPEC-21) ---
+
+export const listDeviceDir = (serial: string, path: string) =>
+  invoke<DeviceEntry[]>("list_device_dir", { serial, path });
+
+export const pullDeviceFile = (serial: string, devicePath: string, destDir: string) =>
+  invoke<string>("pull_device_file", { serial, devicePath, destDir });
+
+export const pushToDevice = (serial: string, localPaths: string[], deviceDir: string) =>
+  invoke<void>("push_to_device", { serial, localPaths, deviceDir });
+
+export const deleteDevicePath = (serial: string, devicePath: string) =>
+  invoke<void>("delete_device_path", { serial, devicePath });
+
+export const listDevicePhotos = (serial: string, offset: number, limit: number) =>
+  invoke<DeviceEntry[]>("list_device_photos", { serial, offset, limit });
+
+export const cacheDevicePhoto = (serial: string, devicePath: string, modifiedUnix?: number) =>
+  invoke<string>("cache_device_photo", { serial, devicePath, modifiedUnix });
+
+export const getDeviceNotifications = (serial: string) =>
+  invoke<PhoneNotification[]>("get_device_notifications", { serial });

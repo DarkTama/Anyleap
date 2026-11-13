@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StudioDeck } from "@/components/deck/StudioDeck";
+import { PhoneView, type PhoneSubTab } from "@/components/phone/PhoneView";
 import { ComputersView } from "@/components/computers/ComputersView";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { AppHeader, type ShellTab } from "@/components/shell/AppHeader";
@@ -11,6 +12,7 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   connectDevice,
   discoverWireless,
+  getDeviceNotifications,
   listDevices,
   listSessions,
   onSessionExited,
@@ -19,6 +21,12 @@ import {
   stopMirror,
   takeScreenshot,
 } from "@/lib/tauri";
+import type { PhoneNotification } from "@/lib/types";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
 import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
@@ -48,6 +56,13 @@ function App() {
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [activeTab, setActiveTab] = useState<ShellTab>("devices");
+  const [phoneSubTab, setPhoneSubTab] = useState<PhoneSubTab>("files");
+  const [selectedPhoneSerial, setSelectedPhoneSerial] = useState<string | null>(null);
+  const [phoneNotifications, setPhoneNotifications] = useState<PhoneNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const seenNotifKeysRef = useRef<Set<string>>(new Set());
+  const seededNotifSerialRef = useRef<string | null>(null);
   const [pairOpen, setPairOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -56,6 +71,70 @@ function App() {
   const openDoctor = useAppStore((s) => s.openDoctor);
   const setTimelineOpen = useAppStore((s) => s.setTimelineOpen);
   const kvmRunning = useKvmStore((s) => s.status.is_host_running);
+
+  const desktopNotifications = useAppStore((s) => s.appPrefs.desktopNotifications);
+  const onlineDevices = devices.filter((d) => d.state === "device");
+  const activePhoneSerial =
+    selectedPhoneSerial && onlineDevices.some((d) => d.serial === selectedPhoneSerial)
+      ? selectedPhoneSerial
+      : onlineDevices[0]?.serial ?? null;
+
+  const fetchPhoneNotifications = useCallback(async () => {
+    if (!activePhoneSerial) return;
+    setNotificationsLoading(true);
+    setNotificationsError(null);
+    try {
+      const list = await getDeviceNotifications(activePhoneSerial);
+      setPhoneNotifications(list);
+
+      const isInitialSeed = seededNotifSerialRef.current !== activePhoneSerial;
+      if (isInitialSeed) {
+        seenNotifKeysRef.current = new Set(list.map((n) => n.key));
+        seededNotifSerialRef.current = activePhoneSerial;
+      } else if (desktopNotifications) {
+        const fresh = list.filter((n) => !seenNotifKeysRef.current.has(n.key));
+        for (const n of fresh) {
+          seenNotifKeysRef.current.add(n.key);
+        }
+        if (fresh.length > 0) {
+          let granted = await isPermissionGranted().catch(() => false);
+          if (!granted) {
+            const perm = await requestPermission().catch(() => "denied");
+            granted = perm === "granted";
+          }
+          if (granted) {
+            for (const n of fresh) {
+              sendNotification({
+                title: n.title || n.app_label || n.package,
+                body: n.text || undefined,
+              });
+            }
+          }
+        }
+      } else {
+        for (const n of list) {
+          seenNotifKeysRef.current.add(n.key);
+        }
+      }
+    } catch (e) {
+      setNotificationsError(String(e));
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, [activePhoneSerial, desktopNotifications]);
+
+  const shouldPollNotifications =
+    !!activePhoneSerial &&
+    ((activeTab === "phone" && phoneSubTab === "notifications") || desktopNotifications);
+
+  useEffect(() => {
+    if (!shouldPollNotifications) return;
+    void fetchPhoneNotifications();
+    const id = setInterval(() => {
+      void fetchPhoneNotifications();
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [shouldPollNotifications, fetchPhoneNotifications]);
 
   // Event listeners + initial hydrate.
   useEffect(() => {
@@ -457,6 +536,18 @@ function App() {
 
       <main className="relative flex flex-1 overflow-hidden">
         {activeTab === "devices" && <StudioDeck onOpenPair={() => setPairOpen(true)} />}
+        {activeTab === "phone" && (
+          <PhoneView
+            subTab={phoneSubTab}
+            onSubTabChange={setPhoneSubTab}
+            selectedSerial={activePhoneSerial}
+            onSelectSerial={setSelectedPhoneSerial}
+            notifications={phoneNotifications}
+            notificationsLoading={notificationsLoading}
+            notificationsError={notificationsError}
+            onRefreshNotifications={() => void fetchPhoneNotifications()}
+          />
+        )}
         {activeTab === "computers" && <ComputersView />}
         {activeTab === "settings" && (
           <div className="flex flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-6 max-w-4xl mx-auto w-full">

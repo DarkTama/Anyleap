@@ -1,6 +1,7 @@
 mod commands;
 mod embed;
 pub mod kvm;
+mod phone_files;
 mod state;
 mod wheel_swipe;
 use state::AppState;
@@ -27,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_devices,
@@ -69,6 +71,13 @@ pub fn run() {
             kvm::commands::kvm_send_file,
             kvm::commands::kvm_update_topology,
             kvm::commands::kvm_emergency_release,
+            phone_files::list_device_dir,
+            phone_files::pull_device_file,
+            phone_files::push_to_device,
+            phone_files::delete_device_path,
+            phone_files::list_device_photos,
+            phone_files::cache_device_photo,
+            phone_files::get_device_notifications,
         ])
         .setup(|app| {
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).

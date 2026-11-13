@@ -1,0 +1,50 @@
+NOTIFICATION MANAGER (dumpsys notification)
+  Notification List:
+    NotificationRecord(0x0a1b2c3d: pkg=com.example.messaging user=UserHandle{0} id=101 tag=null key=0|com.example.messaging|101|null|10201):
+      uid=10201 userId=0
+      opPkg=com.example.messaging
+      icon=Icon(typ=RESOURCE pkg=com.example.messaging id=0x7f080012)
+      flags=0x10
+      pri=0
+      key=0|com.example.messaging|101|null|10201
+      groupKey=0|com.example.messaging|101|null|10201
+      notification=Notification(channel=messages shortcut=null contentView=null vibrate=null sound=default defaults=0x0 flags=0x10 color=0xff123456 vis=PRIVATE)
+        extras={
+          android.title=String (Alex)
+          android.text=String (Hey, are we still on for lunch?)
+          android.subText=null
+          android.showWhen=Boolean (true)
+        }
+      when=1700000120000
+      mCreationTimeMs=1700000120100
+      mUpdateTimeMs=1700000120100
+    NotificationRecord(0x0b2c3d4e: pkg=com.example.messaging user=UserHandle{0} id=100 tag=summary key=0|com.example.messaging|100|summary|10201):
+      uid=10201 userId=0
+      flags=0x210
+      key=0|com.example.messaging|100|summary|10201
+      notification=Notification(channel=messages flags=0x210)
+        extras={
+          android.title=String (2 new messages)
+          android.text=String (Summary)
+        }
+      when=1700000120000
+    NotificationRecord(0x0c3d4e5f: pkg=com.android.systemui user=UserHandle{0} id=1 tag=charging key=0|com.android.systemui|1|charging|1000):
+      uid=1000 userId=0
+      flags=0x2
+      key=0|com.android.systemui|1|charging|1000
+      notification=Notification(channel=BAT flags=0x2)
+        extras={
+          android.title=String (Charging via USB)
+          android.text=String (85%)
+        }
+      when=1699999000000
+    NotificationRecord(0x0d4e5f60: pkg=com.example.auth user=UserHandle{0} id=42 tag=otp key=0|com.example.auth|42|otp|10255):
+      uid=10255 userId=0
+      flags=0x10
+      key=0|com.example.auth|42|otp|10255
+      notification=Notification(channel=alerts flags=0x10)
+        extras={
+          android.title=SpannableString (Verification Code)
+          android.text=SpannableString (Your code is 482910)
+        }
+      when=1700000500000

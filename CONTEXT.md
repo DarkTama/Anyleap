@@ -36,3 +36,9 @@ The capture, encoding, and transmission pipeline:
 - **Activity Timeline**: Persistent local ring buffer (max 200 entries) recording mirroring sessions, screenshots, file/clipboard transfers, app launches, KVM peer events, and device connections.
 - **Command Palette**: Keyboard-driven (`Ctrl+K`) action launcher across tabs, streaming profiles, diagnostics, and KVM controls.
 - **Connection Doctor**: Sequenced diagnostic pipeline (`adb_binary` → `adb_server` → `scrcpy_binary` → `device_present` → `wireless_tcp` → `device_shell` → `android_version`) with actionable fix hints and plain-text report export.
+
+### Phone Workspace (`PhoneView`)
+The ADB-only companion view for a selected `AdbDevice` (requiring no companion app on the phone):
+- **Device Storage Browser (`FilesView`)**: Sandboxed file operations scoped to `/storage/emulated/0` via `stat`, `adb pull`, `adb push`, and `rm -r`.
+- **Photo Gallery (`PhotosView`)**: Paginated, lazy-loaded grid of `DCIM/Camera` and `Pictures/Screenshots` images backed by a 500 MB LRU/atime local disk cache.
+- **Read-Only Notifications (`NotificationsView`)**: In-memory view of active notifications parsed from `dumpsys notification --noredact` (never persisted or logged), with optional desktop pop-ups.

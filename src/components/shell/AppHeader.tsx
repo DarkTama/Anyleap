@@ -1,10 +1,10 @@
-import { Smartphone, Monitor, Sliders, Wifi, Command } from "lucide-react";
+import { Smartphone, TabletSmartphone, Monitor, Sliders, Wifi, Command } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { UpdateBadge } from "./UpdateBadge";
 import { AppLogo } from "./AppLogo";
 
-export type ShellTab = "devices" | "computers" | "settings";
+export type ShellTab = "devices" | "phone" | "computers" | "settings";
 
 interface AppHeaderProps {
   activeTab: ShellTab;
@@ -45,6 +45,19 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
         >
           <Smartphone className="h-3.5 w-3.5" />
           <span>Devices</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onTabChange("phone")}
+          className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium cursor-pointer ${
+            activeTab === "phone"
+              ? "bg-[#222228] text-zinc-100 shadow-sm"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <TabletSmartphone className="h-3.5 w-3.5" />
+          <span>Phone</span>
         </button>
 
         <button

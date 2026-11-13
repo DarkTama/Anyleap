@@ -320,6 +320,11 @@ export function SettingsPanel() {
             checked={appPrefs.checkUpdates}
             onChange={(v) => updateAppPrefs({ ...appPrefs, checkUpdates: v })}
           />
+          <Toggle
+            label="Desktop pop-ups for phone notifications"
+            checked={appPrefs.desktopNotifications}
+            onChange={(v) => updateAppPrefs({ ...appPrefs, desktopNotifications: v })}
+          />
 
           <div className="flex items-center justify-between pt-2">
             <div>

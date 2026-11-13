@@ -1,0 +1,35 @@
+NOTIFICATION MANAGER (dumpsys notification)
+  Notification List:
+    NotificationRecord(0x11223344: pkg=com.example.mail user=UserHandle{0} id=7 tag=inbox key=0|com.example.mail|7|inbox|10310):
+      uid=10310 userId=0
+      opPkg=com.example.mail
+      appName=MailBox
+      flags=0x11
+      key=0|com.example.mail|7|inbox|10310
+      postTime=1715000300000
+      notification=Notification(channel=primary shortcut=null flags=0x11 vis=PRIVATE)
+        extras={
+          android.title=String (Build Passed #412)
+          android.text=CharSequence (main branch checks succeeded in 2m 14s)
+          android.appInfo=ApplicationInfo{com.example.mail}
+        }
+    NotificationRecord(0x22334455: pkg=com.example.music user=UserHandle{0} id=9 tag=player key=0|com.example.music|9|player|10320):
+      uid=10320 userId=0
+      flags=0x62
+      key=0|com.example.music|9|player|10320
+      postTime=1715000100000
+      notification=Notification(channel=playback flags=0x62)
+        extras={
+          android.title=String (Now Playing)
+          android.text=String (Track 01 - Artist)
+        }
+    NotificationRecord(0x33445566: pkg=com.example.calendar user=UserHandle{0} id=3 tag=reminder key=0|com.example.calendar|3|reminder|10330):
+      uid=10330 userId=0
+      flags=0x10
+      key=0|com.example.calendar|3|reminder|10330
+      postTime=1715000600000
+      notification=Notification(channel=events flags=0x10)
+        extras={
+          android.title=Team Standup
+          android.text=In 10 minutes - Room B
+        }

@@ -187,3 +187,22 @@ export interface DoctorCheck {
   detail: string;
   fixHint: string | null;
 }
+
+// --- Phone Tab (SPEC-21) ---
+
+export interface DeviceEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified_unix: number;
+}
+
+export interface PhoneNotification {
+  key: string;
+  package: string;
+  app_label?: string | null;
+  title: string;
+  text: string;
+  posted_unix: number;
+}

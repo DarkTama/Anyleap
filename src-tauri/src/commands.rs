@@ -148,7 +148,7 @@ pub(crate) fn adb_path() -> Option<std::path::PathBuf> {
 /// nothing on Windows; the legacy backend (`ADB_MDNS_OPENSCREEN=0`) works. The
 /// backend is fixed when the adb *server* starts, so we set it on every adb call
 /// — whichever invocation starts the server configures it correctly.
-fn adb_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+pub(crate) fn adb_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
     app.shell()
         .sidecar("adb")
         .map(|cmd| {

@@ -8,6 +8,7 @@ Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experi
 
 ## Features
 
+- **Phone Tab (Files, Photos & Notifications)** — Browse shared Android storage (`/storage/emulated/0`) with upload/download/delete, view Camera and Screenshot photos in a lazy-loaded grid with a 500 MB local cache, and read active phone notifications (with optional desktop pop-ups, read-only).
 - **Computer Link (Virtual KVM)** — Roam your physical mouse cursor and keyboard across multiple computers seamlessly over local Wi-Fi or USB. A single encrypted QUIC connection (UDP 4177) with one-time PIN pairing and certificate-fingerprint trust, unreliable-datagram mouse deltas that never queue behind file transfers, automatic keystroke forwarding, interactive 2D monitor topology arranger, bidirectional clipboard text synchronization, and emergency unhook failsafe (`ScrollLock`).
 - **Minimalist Graphite Console** — Clean, high-contrast graphite workstation with tactile physics, quick segmented navigation (Devices, Computers KVM, Settings), and persistent hardware rack.
 - **Silent In-App Auto-Updater** — Seamless updates verified with Minisign Ed25519 cryptographic signatures, background download progress, zero-wizard silent installation, one-click app relaunch, and rich commit changelog viewer.

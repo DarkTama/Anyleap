@@ -6,11 +6,13 @@ import { DEFAULT_CONTROL_CONFIG, type ControlConfig } from "./controlConfig";
 export interface AppPrefs {
   minimizeToTrayOnClose: boolean;
   checkUpdates: boolean;
+  desktopNotifications: boolean;
 }
 
 export const DEFAULT_APP_PREFS: AppPrefs = {
   minimizeToTrayOnClose: true,
   checkUpdates: true,
+  desktopNotifications: false,
 };
 
 export interface Quality {
@@ -117,6 +119,8 @@ export async function loadAppPrefs(): Promise<AppPrefs> {
     minimizeToTrayOnClose:
       saved?.minimizeToTrayOnClose ?? DEFAULT_APP_PREFS.minimizeToTrayOnClose,
     checkUpdates: saved?.checkUpdates ?? DEFAULT_APP_PREFS.checkUpdates,
+    desktopNotifications:
+      saved?.desktopNotifications ?? DEFAULT_APP_PREFS.desktopNotifications,
   };
 }
 
