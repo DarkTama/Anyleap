@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { X, KeyRound, Copy, Check, ShieldCheck, ArrowRight } from "lucide-react";
 import { useKvmStore } from "@/stores/kvmStore";
+import { kvmForgetPeer, kvmPairPeer } from "@/services/kvmService";
 
 export function PairingPinModal() {
   const isModalOpen = useKvmStore((s) => s.isPairingModalOpen);
@@ -26,25 +27,13 @@ export function PairingPinModal() {
     if (!targetPin.trim() || !selectedPeer) return;
     setIsVerifying(true);
     try {
-      const res = await fetch(`http://${selectedPeer.ip}:${selectedPeer.tcp_port}/pair/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          computer_id: status.local_id || "local-client",
-          pin: targetPin.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setVerifiedSuccess(true);
-        setTimeout(() => {
-          closeModal();
-        }, 1200);
-      } else {
-        alert("Incorrect PIN entered");
-      }
+      await kvmPairPeer(selectedPeer.ip, selectedPeer.port, targetPin.trim());
+      setVerifiedSuccess(true);
+      setTimeout(() => {
+        closeModal();
+      }, 1200);
     } catch (e) {
-      alert(`Connection failed: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Pairing failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setIsVerifying(false);
     }
@@ -117,16 +106,23 @@ export function PairingPinModal() {
                 {verifiedSuccess ? <Check className="h-3.5 w-3.5" /> : <ArrowRight className="h-3.5 w-3.5" />}
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() => void kvmForgetPeer(selectedPeer.id).then(closeModal)}
+              className="text-[11px] text-rose-300 hover:text-rose-200 cursor-pointer"
+            >
+              Forget this peer
+            </button>
           </div>
         )}
 
         <div className="rounded-xl border border-[#222226] bg-[#0c0c0e] p-3 text-xs text-zinc-400 space-y-1.5">
           <div className="flex items-center gap-1.5 font-medium text-zinc-300">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Encrypted Direct LAN Connection</span>
+            <span>Encrypted Direct LAN Connection (QUIC)</span>
           </div>
           <p className="text-[11px] text-zinc-500 leading-relaxed">
-            Traffic stays strictly on your local network (ports 4177/4178). Zero cloud relay.
+            Traffic stays strictly on your local network (UDP port 4177). Zero cloud relay.
           </p>
         </div>
 

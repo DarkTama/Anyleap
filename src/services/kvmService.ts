@@ -5,14 +5,8 @@ export async function kvmGetStatus(): Promise<KvmStatus> {
   return await invoke<KvmStatus>("kvm_get_status");
 }
 
-export async function kvmStartServer(
-  tcpPort = 4177,
-  udpPort = 4178
-): Promise<KvmStatus> {
-  return await invoke<KvmStatus>("kvm_start_server", {
-    tcpPort,
-    udpPort,
-  });
+export async function kvmStartServer(port = 4177): Promise<KvmStatus> {
+  return await invoke<KvmStatus>("kvm_start_server", { port });
 }
 
 export async function kvmStopServer(): Promise<void> {
@@ -23,16 +17,20 @@ export async function kvmGetDiscoveredPeers(): Promise<DiscoveredPeer[]> {
   return await invoke<DiscoveredPeer[]>("kvm_get_discovered_peers");
 }
 
-export async function kvmConnectPeer(
+export async function kvmConnectPeer(ip: string, port = 4177): Promise<void> {
+  return await invoke<void>("kvm_connect_peer", { ip, port });
+}
+
+export async function kvmPairPeer(
   ip: string,
-  tcpPort = 4177,
-  udpPort = 4178
+  port: number,
+  pin: string
 ): Promise<void> {
-  return await invoke<void>("kvm_connect_peer", {
-    ip,
-    tcpPort,
-    udpPort,
-  });
+  return await invoke<void>("kvm_pair_peer", { ip, port, pin });
+}
+
+export async function kvmForgetPeer(computerId: string): Promise<void> {
+  return await invoke<void>("kvm_forget_peer", { computerId });
 }
 
 export async function kvmDisconnectPeer(): Promise<void> {

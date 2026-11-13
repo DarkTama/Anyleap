@@ -19,8 +19,7 @@ describe("kvmStore", () => {
   it("handles startServer success", async () => {
     vi.spyOn(kvmService, "kvmStartServer").mockResolvedValue({
       is_host_running: true,
-      tcp_port: 4177,
-      udp_port: 4178,
+      port: 4177,
       security_pin: "123456",
       connected_peers: [],
       is_input_trapped: false,
@@ -40,8 +39,7 @@ describe("kvmStore", () => {
       id: "laptop-1",
       name: "Office Laptop",
       ip: "192.168.1.50",
-      tcp_port: 4177,
-      udp_port: 4178,
+      port: 4177,
     };
 
     await useKvmStore.getState().connectPeer(peer);

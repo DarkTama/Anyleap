@@ -60,6 +60,8 @@ pub fn run() {
             kvm::commands::kvm_start_server,
             kvm::commands::kvm_stop_server,
             kvm::commands::kvm_get_discovered_peers,
+            kvm::commands::kvm_pair_peer,
+            kvm::commands::kvm_forget_peer,
             kvm::commands::kvm_connect_peer,
             kvm::commands::kvm_disconnect_peer,
             kvm::commands::kvm_send_file,

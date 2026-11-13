@@ -8,10 +8,16 @@ The desktop application container (Tauri 2 + React) managing connected external 
 ### Device Connection (`DeviceSource`)
 An abstract polymorphic handle representing an attached client device:
 - **`AdbDevice`**: An Android device connected via USB or Wi-Fi (ADB pairing / QR code) running `scrcpy` subprocesses for mirroring, camera studio, and audio forwarding.
-- **`NetworkPcDevice`**: A secondary PC or laptop connected over local network (mDNS / direct IP) running native Axum/WebSocket streams for virtual KVM, remote desktop, and deck control.
+- **`NetworkPcDevice`**: A secondary PC or laptop connected over local network (mDNS / direct IP) running a native QUIC link for virtual KVM, remote desktop, and deck control.
 
 ### Virtual KVM (Computer Link)
 A software-defined keyboard, video, and mouse multiplexer that allows a single physical mouse and keyboard to control multiple independent PCs by roaming across spatial screen boundaries.
+
+### Trust Store
+`kvm_trusted_peers.json` in the app data dir: the peers (`computer_id`, `name`, `fingerprint`) a PC has paired with. A connection from an unknown fingerprint may only send `Pair`; everything else closes it.
+
+### Peer Fingerprint
+SHA-256 (hex) of a peer's self-signed certificate DER. Pinned at PIN pairing and checked on every later connection; a changed fingerprint means "peer identity changed — re-pair".
 
 ### Edge Leap
 The event trigger when a mouse pointer reaches the physical or logical perimeter of a display monitor, causing the local host to capture input and forward coordinates/events to an adjacent linked device.

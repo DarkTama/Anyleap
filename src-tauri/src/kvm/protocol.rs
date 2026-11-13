@@ -43,18 +43,17 @@ pub struct TopologyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "payload")]
 pub enum KvmPacket {
-    Handshake {
+    /// First message of every session. Unpaired peers must supply the PIN;
+    /// trusted peers (known certificate fingerprint) send an empty PIN.
+    Pair {
         computer_id: String,
         name: String,
         pin: String,
     },
-    HandshakeAck {
+    PairAck {
         accepted: bool,
-        session_token: String,
-        reason: Option<String>,
-    },
-    Heartbeat {
-        timestamp: u64,
+        computer_id: String,
+        name: String,
     },
     MouseButton {
         button: u8, // 1 = Left, 2 = Right, 3 = Middle
@@ -80,18 +79,6 @@ pub enum KvmPacket {
     ClipboardText {
         text: String,
     },
-    ClipboardImage {
-        format: String, // "png" or "jpeg"
-        data: Vec<u8>,
-    },
-    FileChunk {
-        file_id: String,
-        name: String,
-        size: u64,
-        offset: u64,
-        data: Vec<u8>,
-        is_last: bool,
-    },
     CursorPosition {
         norm_x: f32,
         norm_y: f32,
@@ -110,8 +97,7 @@ pub struct UdpMouseDelta {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct KvmStatus {
     pub is_host_running: bool,
-    pub tcp_port: u16,
-    pub udp_port: u16,
+    pub port: u16,
     pub security_pin: String,
     pub connected_peers: Vec<String>,
     pub is_input_trapped: bool,
@@ -121,6 +107,96 @@ pub struct KvmStatus {
     pub screen_width: i32,
     pub screen_height: i32,
     pub monitors: Vec<MonitorDisplay>,
+}
+
+/// Outbound traffic: control packets or a clipboard image (own uni stream).
+#[derive(Debug, Clone)]
+pub enum Outbound {
+    Packet(KvmPacket),
+    Image { format: String, data: Vec<u8> },
+}
+
+/// Bulk transfers completed on a unidirectional stream.
+#[derive(Debug, Clone)]
+pub enum TransferEvent {
+    File { name: String, size: u64 },
+    ClipboardImage { data: Vec<u8> },
+}
+
+/// Header at the start of every unidirectional stream (raw bytes follow).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamHeader {
+    File { name: String, size: u64 },
+    ClipboardImage { format: String },
+}
+
+pub const MAX_FRAME: usize = 16 * 1024 * 1024;
+
+/// `u32` big-endian length prefix + JSON.
+pub async fn write_frame<W, T>(w: &mut W, msg: &T) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    T: Serialize,
+{
+    use tokio::io::AsyncWriteExt;
+    let body = serde_json::to_vec(msg).map_err(std::io::Error::other)?;
+    if body.len() > MAX_FRAME {
+        return Err(std::io::Error::other("frame too large"));
+    }
+    w.write_all(&(body.len() as u32).to_be_bytes()).await?;
+    w.write_all(&body).await
+}
+
+/// Returns `Ok(None)` on clean EOF before a frame starts.
+pub async fn read_frame<R, T>(r: &mut R) -> std::io::Result<Option<T>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: serde::de::DeserializeOwned,
+{
+    read_frame_capped(r, MAX_FRAME).await
+}
+
+/// Like `read_frame` but rejects frames over `max` bytes before allocating.
+pub async fn read_frame_capped<R, T>(r: &mut R, max: usize) -> std::io::Result<Option<T>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: serde::de::DeserializeOwned,
+{
+    use tokio::io::AsyncReadExt;
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(len) as usize;
+    if len > max {
+        return Err(std::io::Error::other("frame too large"));
+    }
+    let mut body = vec![0u8; len];
+    r.read_exact(&mut body).await?;
+    serde_json::from_slice(&body).map(Some).map_err(std::io::Error::other)
+}
+
+/// Mouse delta datagram: `dx: i32, dy: i32, seq: u32`, little-endian.
+pub fn encode_delta(d: &UdpMouseDelta) -> [u8; 12] {
+    let mut b = [0u8; 12];
+    b[0..4].copy_from_slice(&d.dx.to_le_bytes());
+    b[4..8].copy_from_slice(&d.dy.to_le_bytes());
+    b[8..12].copy_from_slice(&d.seq.to_le_bytes());
+    b
+}
+
+pub fn decode_delta(b: &[u8]) -> Option<UdpMouseDelta> {
+    if b.len() != 12 {
+        return None;
+    }
+    Some(UdpMouseDelta {
+        dx: i32::from_le_bytes(b[0..4].try_into().ok()?),
+        dy: i32::from_le_bytes(b[4..8].try_into().ok()?),
+        seq: u32::from_le_bytes(b[8..12].try_into().ok()?),
+    })
 }
 
 #[cfg(test)]
@@ -138,21 +214,36 @@ mod tests {
         let json = serde_json::to_string(&packet).expect("serialize");
         let decoded: KvmPacket = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(packet, decoded);
-
-        let img_pkt = KvmPacket::ClipboardImage {
-            format: "png".to_string(),
-            data: vec![137, 80, 78, 71],
-        };
-        let img_json = serde_json::to_string(&img_pkt).expect("serialize");
-        let img_decoded: KvmPacket = serde_json::from_str(&img_json).expect("deserialize");
-        assert_eq!(img_pkt, img_decoded);
     }
 
     #[test]
-    fn test_udp_mouse_delta_serialization() {
+    fn test_delta_datagram_roundtrip() {
         let delta = UdpMouseDelta { dx: 14, dy: -8, seq: 102 };
-        let json = serde_json::to_string(&delta).expect("serialize");
-        let decoded: UdpMouseDelta = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(delta, decoded);
+        let bytes = encode_delta(&delta);
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(decode_delta(&bytes), Some(delta));
+        assert_eq!(decode_delta(&bytes[..11]), None);
+    }
+
+    #[tokio::test]
+    async fn test_frame_roundtrip() {
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        let pkt = KvmPacket::ClipboardText { text: "héllo".into() };
+        write_frame(&mut a, &pkt).await.unwrap();
+        write_frame(&mut a, &StreamHeader::File { name: "x.txt".into(), size: 3 }).await.unwrap();
+        drop(a);
+        assert_eq!(read_frame::<_, KvmPacket>(&mut b).await.unwrap(), Some(pkt));
+        assert_eq!(
+            read_frame::<_, StreamHeader>(&mut b).await.unwrap(),
+            Some(StreamHeader::File { name: "x.txt".into(), size: 3 })
+        );
+        assert!(read_frame::<_, KvmPacket>(&mut b).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_oversized_frame_rejected() {
+        let (mut a, mut b) = tokio::io::duplex(64);
+        tokio::io::AsyncWriteExt::write_all(&mut a, &u32::MAX.to_be_bytes()).await.unwrap();
+        assert!(read_frame::<_, KvmPacket>(&mut b).await.is_err());
     }
 }

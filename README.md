@@ -8,7 +8,7 @@ Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experi
 
 ## Features
 
-- **Computer Link (Virtual KVM)** — Roam your physical mouse cursor and keyboard across multiple computers seamlessly over local Wi-Fi or USB. Sub-millisecond UDP mouse acceleration, automatic keystroke forwarding, interactive 2D monitor topology arranger, bidirectional clipboard text synchronization, and emergency unhook failsafe (`ScrollLock`).
+- **Computer Link (Virtual KVM)** — Roam your physical mouse cursor and keyboard across multiple computers seamlessly over local Wi-Fi or USB. A single encrypted QUIC connection (UDP 4177) with one-time PIN pairing and certificate-fingerprint trust, unreliable-datagram mouse deltas that never queue behind file transfers, automatic keystroke forwarding, interactive 2D monitor topology arranger, bidirectional clipboard text synchronization, and emergency unhook failsafe (`ScrollLock`).
 - **Minimalist Graphite Console** — Clean, high-contrast graphite workstation with tactile physics, quick segmented navigation (Devices, Computers KVM, Settings), and persistent hardware rack.
 - **Silent In-App Auto-Updater** — Seamless updates verified with Minisign Ed25519 cryptographic signatures, background download progress, zero-wizard silent installation, one-click app relaunch, and rich commit changelog viewer.
 - **Camera Studio (PC Webcam)** — Stream your phone's front or back camera sensors directly to your PC with custom resolutions (1080p, 720p, 4K), configurable frame rates, microphone audio capture, and in-session controls (torch toggle, zoom in/out, lens flip).
@@ -39,8 +39,8 @@ Builds are currently **unsigned**, so Windows SmartScreen may warn on first run 
    - **Auto-discover / Manual** — use the *Pair device with pairing code* screen and enter the 6-digit code.
 4. **Computer Link (Virtual KVM)**:
    - Navigate to the **Computers** tab.
-   - Click **Start KVM Host** to begin listening on local network (port 4177 TCP / 4178 UDP).
-   - Nearby AnyLeap computers automatically appear via LAN discovery beacon. Click **Link PC** or enter direct IP address.
+   - Click **Start KVM Host** to begin listening on local network (UDP port 4177, QUIC).
+   - Nearby AnyLeap computers automatically appear via LAN discovery beacon. Click **Link PC** or enter direct IP address. The first link asks for the 6-digit PIN shown on the other PC; after that the peers recognise each other by certificate fingerprint (use **Forget this peer** to revoke).
    - Arrange your screens in the interactive 2D layout canvas. Move your mouse across the monitor boundary to seamlessly control the adjacent PC. Press `ScrollLock` anytime to instantly release the cursor.
 
 ### Using Phone Camera for Google Meet, Zoom, or Discord (OBS Virtual Camera Workaround)

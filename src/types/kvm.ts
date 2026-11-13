@@ -41,8 +41,7 @@ export interface TopologyConfig {
 
 export interface KvmStatus {
   is_host_running: boolean;
-  tcp_port: number;
-  udp_port: number;
+  port: number;
   security_pin: string;
   connected_peers: string[];
   is_input_trapped: boolean;
@@ -58,8 +57,7 @@ export interface DiscoveredPeer {
   id: string;
   name: string;
   ip: string;
-  tcp_port: number;
-  udp_port: number;
+  port: number;
   screen_w?: number;
   screen_h?: number;
   last_seen_secs?: number;

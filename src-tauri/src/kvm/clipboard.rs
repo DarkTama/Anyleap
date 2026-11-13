@@ -1,4 +1,4 @@
-use super::protocol::KvmPacket;
+use super::protocol::{KvmPacket, Outbound};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -175,7 +175,7 @@ pub fn should_suppress_echo() -> bool {
 }
 
 pub fn start_clipboard_sync(
-    tx: mpsc::Sender<KvmPacket>,
+    tx: mpsc::Sender<Outbound>,
     is_running: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
@@ -197,13 +197,13 @@ pub fn start_clipboard_sync(
                         let tx_clone = tx.clone();
                         tokio::task::spawn_blocking(move || {
                             if let Some(img_data) = get_clipboard_image() {
-                                let _ = tx_clone.blocking_send(KvmPacket::ClipboardImage {
+                                let _ = tx_clone.blocking_send(Outbound::Image {
                                     format: "dib".to_string(),
                                     data: img_data,
                                 });
                             } else if let Some(text) = get_clipboard_text() {
                                 if !text.is_empty() {
-                                    let _ = tx_clone.blocking_send(KvmPacket::ClipboardText { text });
+                                    let _ = tx_clone.blocking_send(Outbound::Packet(KvmPacket::ClipboardText { text }));
                                 }
                             }
                         });

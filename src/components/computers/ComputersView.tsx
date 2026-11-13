@@ -50,31 +50,17 @@ export function ComputersView() {
     const ip = manualIp.trim();
     if (!ip) return;
 
-    let peerName = `PC (${ip})`;
-    try {
-      const res = await fetch(`http://${ip}:4177/pair`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          computer_id: status.local_id || "local",
-          name: status.local_name || "PC",
-        }),
-      });
-      if (res.ok) {
-        peerName = `Remote Workstation (${ip})`;
-      }
-    } catch {
-      // fallback
-    }
-
     const peer: DiscoveredPeer = {
       id: `peer-${ip.replace(/[^a-zA-Z0-9]/g, "-")}`,
-      name: peerName,
+      name: `PC (${ip})`,
       ip: ip,
-      tcp_port: 4177,
-      udp_port: 4178,
+      port: 4177,
     };
-    void connectPeer(peer);
+    await connectPeer(peer);
+    // Not paired yet: ask for the PIN shown on the other PC.
+    if (useKvmStore.getState().error?.includes("not paired")) {
+      openPairingModal(peer);
+    }
   };
 
   return (
@@ -228,7 +214,7 @@ export function ComputersView() {
                     <div>
                       <div className="text-xs font-semibold text-zinc-200">{peer.name}</div>
                       <div className="font-mono text-[10px] text-zinc-500">
-                        {peer.ip}:{peer.tcp_port}
+                        {peer.ip}:{peer.port}
                       </div>
                     </div>
                   </div>
@@ -340,7 +326,7 @@ export function ComputersView() {
           <div>
             <div className="text-xs font-semibold text-zinc-200">UDP Mouse Acceleration</div>
             <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
-              Relative mouse deltas bypass TCP buffering on UDP port 4178 for sub-millisecond physical glide.
+              Relative mouse deltas travel as unreliable QUIC datagrams so bulk transfers never delay the cursor.
             </p>
           </div>
         </div>

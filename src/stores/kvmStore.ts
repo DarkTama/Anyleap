@@ -58,8 +58,7 @@ export interface KvmState {
 
 const defaultStatus: KvmStatus = {
   is_host_running: false,
-  tcp_port: 4177,
-  udp_port: 4178,
+  port: 4177,
   security_pin: "------",
   connected_peers: [],
   is_input_trapped: false,
@@ -277,7 +276,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const peerIp = peer.ip;
-      await kvmConnectPeer(peerIp, peer.tcp_port, peer.udp_port);
+      await kvmConnectPeer(peerIp, peer.port);
 
       const status = get().status;
       const currentTopology = get().topology;

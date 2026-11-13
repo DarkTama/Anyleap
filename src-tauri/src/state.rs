@@ -3,8 +3,9 @@ use crate::kvm::discovery::DiscoveryManager;
 use crate::kvm::hooks::HookController;
 use crate::kvm::protocol::TopologyConfig;
 use crate::kvm::server::KvmServerHandle;
+use crate::kvm::identity::{Identity, TrustStore};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri_plugin_shell::process::CommandChild;
 
@@ -15,6 +16,8 @@ pub struct KvmState {
     pub hooks: HookController,
     pub topology: TopologyConfig,
     pub connected_peers: Vec<String>,
+    /// Lazily created on first KVM use (needs the app data dir).
+    pub security: Option<(Arc<Identity>, Arc<TrustStore>)>,
 }
 
 impl Default for KvmState {
@@ -26,6 +29,7 @@ impl Default for KvmState {
             hooks: HookController::new(),
             topology: TopologyConfig::default(),
             connected_peers: Vec::new(),
+            security: None,
         }
     }
 }

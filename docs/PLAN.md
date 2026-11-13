@@ -30,7 +30,7 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 | App framework | **Tauri** (Rust core + web UI) | Small native binary, modern UI, cross-platform; our backend is thin (just process orchestration). |
 | Frontend | **React + shadcn/ui** | Best accessible form-control ecosystem for a settings-heavy app + a pairing wizard. |
 | Wireless pairing | **Delegate to adb CLI** (adb-qr model) | No need to implement SPAKE2/mDNS ourselves; works reliably incl. on Windows. |
-| Multi-PC Link (KVM) | **Axum WSS (4177) + UDP deltas (4178)** | Ultra-low latency cursor glide over UDP with reliable TCP/WSS key and clipboard sync (ADR 0001, 0002). |
+| Multi-PC Link (KVM) | **QUIC (UDP 4177)** | One encrypted, fingerprint-pinned connection: control stream, datagram mouse deltas, per-file uni streams (ADR 0002, 0003, SPEC-19). |
 
 ## Scope
 

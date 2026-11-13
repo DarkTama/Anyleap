@@ -11,8 +11,7 @@ pub const DISCOVERY_PORT: u16 = 4179;
 pub struct PeerBeacon {
     pub id: String,
     pub name: String,
-    pub tcp_port: u16,
-    pub udp_port: u16,
+    pub port: u16,
     pub screen_w: i32,
     pub screen_h: i32,
 }
@@ -22,8 +21,7 @@ pub struct DiscoveredNode {
     pub id: String,
     pub name: String,
     pub ip: String,
-    pub tcp_port: u16,
-    pub udp_port: u16,
+    pub port: u16,
     pub screen_w: i32,
     pub screen_h: i32,
     pub last_seen_secs: u64,
@@ -46,7 +44,7 @@ impl DiscoveryManager {
         self.running.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn start(&self, my_id: String, my_name: String, tcp_port: u16, udp_port: u16, screen_w: i32, screen_h: i32) {
+    pub fn start(&self, my_id: String, my_name: String, port: u16, screen_w: i32, screen_h: i32) {
         if self.running.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
@@ -73,8 +71,7 @@ impl DiscoveryManager {
                 let beacon = PeerBeacon {
                     id: bcast_id.clone(),
                     name: bcast_name.clone(),
-                    tcp_port,
-                    udp_port,
+                    port,
                     screen_w,
                     screen_h,
                 };
@@ -130,8 +127,7 @@ impl DiscoveryManager {
                 id: beacon.id.clone(),
                 name: beacon.name.clone(),
                 ip: ip.clone(),
-                tcp_port: beacon.tcp_port,
-                udp_port: beacon.udp_port,
+                port: beacon.port,
                 screen_w: beacon.screen_w,
                 screen_h: beacon.screen_h,
                 last_seen_secs: now.duration_since(*last_seen).as_secs(),
