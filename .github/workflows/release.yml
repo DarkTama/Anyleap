@@ -18,8 +18,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Tag pushes release under the pushed tag; manual dispatch derives the
-      # tag from tauri.conf.json (v<version>) and creates it at HEAD.
+      # Tag pushes publish a Release under the pushed tag. Manual dispatch is a
+      # test build only: it never creates or modifies a Release (no tagName is
+      # passed to tauri-action) and uploads the installers as a run artifact.
       - name: Resolve release tag
         id: tag
         shell: pwsh
@@ -134,8 +135,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_CLI_NO_VERSION_CHECK: "true"
         with:
-          tagName: ${{ steps.tag.outputs.tag }}
-          releaseName: 'AnyLeap ${{ steps.tag.outputs.tag }}'
+          # Empty on manual dispatch → build only, no Release, no updater JSON upload.
+          tagName: ${{ github.ref_type == 'tag' && steps.tag.outputs.tag || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('AnyLeap {0}', steps.tag.outputs.tag) || '' }}
           releaseDraft: false
           prerelease: false
           releaseBody: ${{ steps.changelog.outputs.body }}
@@ -168,7 +170,18 @@ jobs:
           "PORTABLE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload portable ZIP to the release
+        if: github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload ${{ steps.tag.outputs.tag }} "$env:PORTABLE_ZIP" --clobber
+
+      - name: Upload test build artifact (manual dispatch)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: anyleap-test-${{ github.sha }}
+          retention-days: 7
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            ${{ env.PORTABLE_ZIP }}
