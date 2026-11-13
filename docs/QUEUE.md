@@ -12,6 +12,7 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | 2 | Quick adb wins pack: link handoff, per-app windows, phone toggles (Wi-Fi/BT/DND), battery alerts, screen recording, place/end call | SPEC-20 | merged | All adb/scrcpy one-liners; no companion app. Owns `sh_quote`. |
 | 3 | Dashboard patterns: device hero card, activity timeline, command palette (Ctrl+K), connection doctor | SPEC-18 | merged | Layout patterns only; keep the Graphite identity (SPEC-17). Owns `logActivity()`. |
 | 4 | Phone files browser + photo gallery + read-only notifications over adb | SPEC-21 | merged | New "Phone" tab. Notifications are read-only. |
+| 0 | **Computer Link input fidelity & reliability fixes** (16 audit findings) | SPEC-22 | in-progress | **Priority.** Part A (input core) and Part B (clipboard/discovery/settings/UI) run as parallel workers. |
 | 5 | Native virtual webcam (Media Foundation) | SPEC-15 | queued | Windows 11 only. Existing spec. |
 | 6 | PC display streaming | SPEC-13 | queued | Reuse the QUIC connection from #1. |
 
