@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { DiscoveredPeer } from "@/types/kvm";
 import { useKvmStore } from "@/stores/kvmStore";
+import { kvmSetSyncSettings } from "@/services/kvmService";
 import { TopologyCanvas } from "./TopologyCanvas";
 import { PairingPinModal } from "./PairingPinModal";
 import { DesktopHudPill } from "./DesktopHudPill";
@@ -35,9 +36,16 @@ export function ComputersView() {
   const emergencyRelease = useKvmStore((s) => s.emergencyRelease);
   const openPairingModal = useKvmStore((s) => s.openPairingModal);
 
-  const [manualIp, setManualIp] = useState("192.168.0.202");
+  const [manualIp, setManualIp] = useState("");
 
   useEffect(() => {
+    const { syncClipboardText, syncClipboardImage, syncFileTransfer } =
+      useKvmStore.getState().settings;
+    void kvmSetSyncSettings(
+      syncClipboardText,
+      syncClipboardImage,
+      syncFileTransfer
+    ).catch(() => {});
     void init();
     void refreshDiscovered();
     const timer = setInterval(() => {
@@ -45,6 +53,14 @@ export function ComputersView() {
     }, 2500);
     return () => clearInterval(timer);
   }, [init, refreshDiscovered]);
+
+  const handleConnectPeer = async (peer: DiscoveredPeer) => {
+    await connectPeer(peer);
+    // Not paired yet: ask for the PIN shown on the other PC.
+    if (useKvmStore.getState().error?.includes("not paired")) {
+      openPairingModal(peer);
+    }
+  };
 
   const handleManualConnect = async () => {
     const ip = manualIp.trim();
@@ -56,11 +72,7 @@ export function ComputersView() {
       ip: ip,
       port: 4177,
     };
-    await connectPeer(peer);
-    // Not paired yet: ask for the PIN shown on the other PC.
-    if (useKvmStore.getState().error?.includes("not paired")) {
-      openPairingModal(peer);
-    }
+    await handleConnectPeer(peer);
   };
 
   return (
@@ -72,9 +84,6 @@ export function ComputersView() {
         <div>
           <h1 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
             Computer Link (Virtual KVM)
-            <span className="rounded bg-cyan-500/10 px-2 py-0.5 font-mono text-[9px] font-bold text-cyan-400 border border-cyan-500/20">
-              PHASE 1
-            </span>
             {status.local_name && (
               <span className="rounded bg-zinc-800 px-2 py-0.5 font-mono text-[10px] text-zinc-300">
                 {status.local_name}
@@ -132,7 +141,7 @@ export function ComputersView() {
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
           <span className="font-medium text-zinc-300">
-            Cursor edge-leap active. Move mouse past edge to jump to adjacent screen; move back to return. Emergency escape: press <kbd className="rounded bg-[#202026] px-1.5 py-0.5 font-mono text-zinc-100 border border-[#27272a]">{useKvmStore.getState().settings.emergencyKeyCombo}</kbd> anytime.
+            Cursor edge-leap active. Move mouse past edge to jump to adjacent screen; move back to return. Emergency escape: press <kbd className="rounded bg-[#202026] px-1.5 py-0.5 font-mono text-zinc-100 border border-[#27272a]">Scroll Lock, Pause, or Ctrl+Alt+Esc</kbd> anytime.
           </span>
         </div>
 
@@ -178,7 +187,7 @@ export function ComputersView() {
             <div className="flex items-center justify-center gap-2 pt-2 max-w-sm mx-auto">
               <input
                 type="text"
-                placeholder="192.168.0.xxx"
+                placeholder="192.168.x.x"
                 value={manualIp}
                 onChange={(e) => setManualIp(e.target.value)}
                 className="h-8 flex-1 rounded-lg border border-[#27272a] bg-[#16161a] px-3 font-mono text-xs text-zinc-200 outline-none focus:border-zinc-500"
@@ -230,7 +239,7 @@ export function ComputersView() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => void connectPeer(peer)}
+                      onClick={() => void handleConnectPeer(peer)}
                       className="btn-tactile rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer"
                     >
                       Link PC
@@ -324,7 +333,7 @@ export function ComputersView() {
         <div className="flex items-start gap-3 rounded-xl border border-[#222226] bg-[#141417] p-3.5">
           <Zap className="h-4 w-4 shrink-0 text-cyan-400 mt-0.5" />
           <div>
-            <div className="text-xs font-semibold text-zinc-200">UDP Mouse Acceleration</div>
+            <div className="text-xs font-semibold text-zinc-200">Low-latency pointer (QUIC datagrams)</div>
             <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
               Relative mouse deltas travel as unreliable QUIC datagrams so bulk transfers never delay the cursor.
             </p>

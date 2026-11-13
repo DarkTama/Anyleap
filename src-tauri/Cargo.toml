@@ -37,6 +37,7 @@ rcgen = "0.13"
 bytes = "1"
 rand = "0.8"
 sha2 = "0.10"
+if-addrs = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

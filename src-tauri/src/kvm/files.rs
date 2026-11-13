@@ -61,9 +61,20 @@ async fn write_part<R: AsyncRead + Unpin>(r: &mut R, part: &Path, size: u64) -> 
 
 /// Handle one incoming uni stream: header, then raw bytes.
 pub async fn receive<R: AsyncRead + Unpin>(r: &mut R, dir: &Path) -> Result<TransferEvent, String> {
+    receive_with_policy(r, dir, super::clipboard::sync_files_enabled()).await
+}
+
+pub async fn receive_with_policy<R: AsyncRead + Unpin>(
+    r: &mut R,
+    dir: &Path,
+    allow_files: bool,
+) -> Result<TransferEvent, String> {
     let header: StreamHeader = read_frame(r).await.map_err(|e| e.to_string())?.ok_or("empty stream")?;
     match header {
         StreamHeader::File { name, size } => {
+            if !allow_files {
+                return Err("file transfer sync disabled".into());
+            }
             let safe = sanitize_name(&name).ok_or_else(|| format!("rejected file name {name:?}"))?;
             tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
             let target = unique_path(dir, &safe);
@@ -145,8 +156,20 @@ mod tests {
         write_frame(&mut w, &StreamHeader::File { name: "f.bin".into(), size: 10 }).await.unwrap();
         w.write_all(b"abc").await.unwrap();
         drop(w);
-        assert!(receive(&mut r, &d).await.is_err());
+        assert!(receive_with_policy(&mut r, &d, true).await.is_err());
         assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn rejected_file_stream_leaves_no_files() {
+        let d = std::env::temp_dir().join(format!("anyleap-rej-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (mut w, mut r) = tokio::io::duplex(4096);
+        write_frame(&mut w, &StreamHeader::File { name: "f.bin".into(), size: 4 }).await.unwrap();
+        w.write_all(b"abcd").await.unwrap();
+        drop(w);
+        assert!(receive_with_policy(&mut r, &d, false).await.is_err());
+        assert!(!d.exists());
     }
 }

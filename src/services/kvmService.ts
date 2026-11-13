@@ -52,3 +52,11 @@ export async function kvmEmergencyRelease(): Promise<void> {
 export async function kvmSendFile(filePath: string): Promise<void> {
   return await invoke<void>("kvm_send_file", { filePath });
 }
+
+export async function kvmSetSyncSettings(
+  text: boolean,
+  image: boolean,
+  files: boolean
+): Promise<void> {
+  return await invoke<void>("kvm_set_sync_settings", { text, image, files });
+}

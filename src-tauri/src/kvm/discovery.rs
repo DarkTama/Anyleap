@@ -1,11 +1,37 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
 pub const DISCOVERY_PORT: u16 = 4179;
+
+/// Compute the directed IPv4 broadcast address for `(ip, netmask)`.
+pub fn broadcast_addr(ip: Ipv4Addr, netmask: Ipv4Addr) -> Ipv4Addr {
+    Ipv4Addr::from(u32::from(ip) | !u32::from(netmask))
+}
+
+fn broadcast_targets() -> Vec<SocketAddr> {
+    let mut targets = vec![SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT))];
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            if let if_addrs::IfAddr::V4(v4) = iface.addr {
+                if v4.ip.is_loopback() || v4.ip.is_unspecified() {
+                    continue;
+                }
+                let addr = SocketAddr::from((broadcast_addr(v4.ip, v4.netmask), DISCOVERY_PORT));
+                if !targets.contains(&addr) {
+                    targets.push(addr);
+                }
+            }
+        }
+    }
+    targets
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerBeacon {
@@ -65,7 +91,6 @@ impl DiscoveryManager {
                 }
             };
             let _ = socket.set_broadcast(true);
-            let target: SocketAddr = format!("255.255.255.255:{DISCOVERY_PORT}").parse().unwrap();
 
             while bcast_running.load(std::sync::atomic::Ordering::Relaxed) {
                 let beacon = PeerBeacon {
@@ -76,7 +101,9 @@ impl DiscoveryManager {
                     screen_h,
                 };
                 if let Ok(bytes) = serde_json::to_vec(&beacon) {
-                    let _ = socket.send_to(&bytes, target).await;
+                    for target in broadcast_targets() {
+                        let _ = socket.send_to(&bytes, target).await;
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(2000)).await;
             }
@@ -133,5 +160,30 @@ impl DiscoveryManager {
                 last_seen_secs: now.duration_since(*last_seen).as_secs(),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broadcast_addr_computes_directed_broadcast() {
+        assert_eq!(
+            broadcast_addr(Ipv4Addr::new(192, 168, 1, 42), Ipv4Addr::new(255, 255, 255, 0)),
+            Ipv4Addr::new(192, 168, 1, 255)
+        );
+        assert_eq!(
+            broadcast_addr(Ipv4Addr::new(10, 0, 5, 12), Ipv4Addr::new(255, 255, 0, 0)),
+            Ipv4Addr::new(10, 0, 255, 255)
+        );
+        assert_eq!(
+            broadcast_addr(Ipv4Addr::new(172, 16, 10, 5), Ipv4Addr::new(255, 255, 240, 0)),
+            Ipv4Addr::new(172, 16, 15, 255)
+        );
+        assert_eq!(
+            broadcast_addr(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(255, 255, 255, 255)),
+            Ipv4Addr::new(192, 168, 1, 1)
+        );
     }
 }

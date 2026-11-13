@@ -4,6 +4,72 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 static SUPPRESS_ECHO: AtomicBool = AtomicBool::new(false);
+static SYNC_TEXT: AtomicBool = AtomicBool::new(true);
+static SYNC_IMAGE: AtomicBool = AtomicBool::new(true);
+static SYNC_FILES: AtomicBool = AtomicBool::new(true);
+
+pub fn sync_text_enabled() -> bool {
+    SYNC_TEXT.load(Ordering::Relaxed)
+}
+
+pub fn sync_image_enabled() -> bool {
+    SYNC_IMAGE.load(Ordering::Relaxed)
+}
+
+pub fn sync_files_enabled() -> bool {
+    SYNC_FILES.load(Ordering::Relaxed)
+}
+
+pub fn set_sync_settings(text: bool, image: bool, files: bool) {
+    SYNC_TEXT.store(text, Ordering::SeqCst);
+    SYNC_IMAGE.store(image, Ordering::SeqCst);
+    SYNC_FILES.store(files, Ordering::SeqCst);
+}
+
+#[tauri::command]
+pub fn kvm_set_sync_settings(text: bool, image: bool, files: bool) {
+    set_sync_settings(text, image, files);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardSyncAction {
+    SendText,
+    SendImage,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundClipboardKind {
+    Text,
+    Image,
+}
+
+pub fn should_apply_inbound(kind: InboundClipboardKind, sync_text: bool, sync_image: bool) -> bool {
+    match kind {
+        InboundClipboardKind::Text => sync_text,
+        InboundClipboardKind::Image => sync_image,
+    }
+}
+
+/// Prefer `CF_UNICODETEXT` over images when both formats are on the clipboard.
+pub fn choose_clipboard_action(
+    has_text: bool,
+    has_image: bool,
+    sync_text: bool,
+    sync_image: bool,
+) -> ClipboardSyncAction {
+    if has_text {
+        if sync_text {
+            ClipboardSyncAction::SendText
+        } else {
+            ClipboardSyncAction::None
+        }
+    } else if has_image && sync_image {
+        ClipboardSyncAction::SendImage
+    } else {
+        ClipboardSyncAction::None
+    }
+}
 
 #[cfg(windows)]
 unsafe fn with_clipboard_retry<F, R>(f: F) -> Option<R>
@@ -24,6 +90,9 @@ where
 }
 
 pub fn set_clipboard_text(text: &str) -> Result<(), String> {
+    if !should_apply_inbound(InboundClipboardKind::Text, sync_text_enabled(), sync_image_enabled()) {
+        return Ok(());
+    }
     SUPPRESS_ECHO.store(true, Ordering::SeqCst);
 
     #[cfg(windows)]
@@ -64,6 +133,9 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
 }
 
 pub fn set_clipboard_image(data: &[u8]) -> Result<(), String> {
+    if !should_apply_inbound(InboundClipboardKind::Image, sync_text_enabled(), sync_image_enabled()) {
+        return Ok(());
+    }
     if data.len() > 15_000_000 {
         return Err("Image too large".to_string());
     }
@@ -174,6 +246,16 @@ pub fn should_suppress_echo() -> bool {
     SUPPRESS_ECHO.load(Ordering::Relaxed)
 }
 
+#[cfg(windows)]
+fn has_clipboard_text() -> bool {
+    unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(13).is_ok() }
+}
+
+#[cfg(windows)]
+fn has_clipboard_image() -> bool {
+    unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(8).is_ok() }
+}
+
 pub fn start_clipboard_sync(
     tx: mpsc::Sender<Outbound>,
     is_running: Arc<AtomicBool>,
@@ -193,18 +275,32 @@ pub fn start_clipboard_sync(
                     last_seq = cur_seq;
 
                     if !should_suppress_echo() {
-                        // Offload heavy image extraction to blocking thread pool so Tokio runtime is not stalled
                         let tx_clone = tx.clone();
                         tokio::task::spawn_blocking(move || {
-                            if let Some(img_data) = get_clipboard_image() {
-                                let _ = tx_clone.blocking_send(Outbound::Image {
-                                    format: "dib".to_string(),
-                                    data: img_data,
-                                });
-                            } else if let Some(text) = get_clipboard_text() {
-                                if !text.is_empty() {
-                                    let _ = tx_clone.blocking_send(Outbound::Packet(KvmPacket::ClipboardText { text }));
+                            match choose_clipboard_action(
+                                has_clipboard_text(),
+                                has_clipboard_image(),
+                                sync_text_enabled(),
+                                sync_image_enabled(),
+                            ) {
+                                ClipboardSyncAction::SendText => {
+                                    if let Some(text) = get_clipboard_text() {
+                                        if !text.is_empty() {
+                                            let _ = tx_clone.blocking_send(Outbound::Packet(
+                                                KvmPacket::ClipboardText { text },
+                                            ));
+                                        }
+                                    }
                                 }
+                                ClipboardSyncAction::SendImage => {
+                                    if let Some(img_data) = get_clipboard_image() {
+                                        let _ = tx_clone.blocking_send(Outbound::Image {
+                                            format: "dib".to_string(),
+                                            data: img_data,
+                                        });
+                                    }
+                                }
+                                ClipboardSyncAction::None => {}
                             }
                         });
                     }
@@ -212,4 +308,48 @@ pub fn start_clipboard_sync(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_priority_prefers_text_over_image() {
+        assert_eq!(
+            choose_clipboard_action(true, true, true, true),
+            ClipboardSyncAction::SendText
+        );
+        assert_eq!(
+            choose_clipboard_action(true, false, true, true),
+            ClipboardSyncAction::SendText
+        );
+        assert_eq!(
+            choose_clipboard_action(false, true, true, true),
+            ClipboardSyncAction::SendImage
+        );
+        assert_eq!(
+            choose_clipboard_action(false, false, true, true),
+            ClipboardSyncAction::None
+        );
+    }
+
+    #[test]
+    fn sync_settings_gate_outbound_and_inbound_clipboard() {
+        // Outbound gating via choose_clipboard_action
+        assert_eq!(
+            choose_clipboard_action(true, true, false, true),
+            ClipboardSyncAction::None
+        );
+        assert_eq!(
+            choose_clipboard_action(false, true, true, false),
+            ClipboardSyncAction::None
+        );
+
+        // Inbound gating via should_apply_inbound (pure, no global state mutation)
+        assert!(should_apply_inbound(InboundClipboardKind::Text, true, false));
+        assert!(!should_apply_inbound(InboundClipboardKind::Text, false, true));
+        assert!(should_apply_inbound(InboundClipboardKind::Image, false, true));
+        assert!(!should_apply_inbound(InboundClipboardKind::Image, true, false));
+    }
 }

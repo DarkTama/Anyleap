@@ -79,6 +79,7 @@ pub fn run() {
             kvm::commands::kvm_send_file,
             kvm::commands::kvm_update_topology,
             kvm::commands::kvm_emergency_release,
+            kvm::clipboard::kvm_set_sync_settings,
             phone_files::list_device_dir,
             phone_files::pull_device_file,
             phone_files::push_to_device,

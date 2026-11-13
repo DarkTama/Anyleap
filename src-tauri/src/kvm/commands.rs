@@ -93,6 +93,9 @@ fn now_ms() -> u64 {
 }
 
 fn emit_clipboard_text(app: &AppHandle, text: &str) {
+    if !super::clipboard::sync_text_enabled() {
+        return;
+    }
     let _ = set_clipboard_text(text);
     let preview = if text.len() > 32 {
         format!("{}...", text.chars().take(32).collect::<String>())
@@ -116,6 +119,9 @@ fn emit_clipboard_text(app: &AppHandle, text: &str) {
 fn emit_transfer(app: &AppHandle, ev: TransferEvent) {
     let item = match ev {
         TransferEvent::ClipboardImage { data } => {
+            if !super::clipboard::sync_image_enabled() {
+                return;
+            }
             let _ = set_clipboard_image(&data);
             serde_json::json!({
                 "id": uuid::Uuid::new_v4().to_string(),

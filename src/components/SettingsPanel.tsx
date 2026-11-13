@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
 import { getSystemResolution } from "@/lib/tauri";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/controlConfig";
 import { saveAppPrefs, saveQuality, type AppPrefs } from "@/lib/persist";
 import { useKvmStore } from "@/stores/kvmStore";
+import { kvmSetSyncSettings } from "@/services/kvmService";
 
 const CODECS: Codec[] = ["h264", "h265", "av1"];
 const SIZE_LABELS: Record<ControlConfig["size"], string> = {
@@ -450,6 +452,18 @@ function KvmSettingsCard() {
   const kvmSettings = useKvmStore((s) => s.settings);
   const updateKvmSettings = useKvmStore((s) => s.updateSettings);
 
+  useEffect(() => {
+    void kvmSetSyncSettings(
+      kvmSettings.syncClipboardText,
+      kvmSettings.syncClipboardImage,
+      kvmSettings.syncFileTransfer
+    ).catch(() => {});
+  }, [
+    kvmSettings.syncClipboardText,
+    kvmSettings.syncClipboardImage,
+    kvmSettings.syncFileTransfer,
+  ]);
+
   return (
     <Card className="rounded-xl border border-[#222226] bg-[#141417]">
       <CardHeader>
@@ -564,35 +578,15 @@ function KvmSettingsCard() {
           )}
         </div>
 
-        {/* Emergency Escape Shortcut Customization */}
+        {/* Emergency Escape Shortcuts (Fixed) */}
         <div className="space-y-2 pt-2 border-t border-[#222226]">
           <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
             Emergency Unhook Shortcut
           </span>
-          <div className="space-y-1 max-w-sm">
-            <label className="text-xs font-medium text-zinc-300">
-              Trigger Combination
-            </label>
-            <select
-              className={selectClass}
-              value={kvmSettings.emergencyKeyCombo}
-              onChange={(e) =>
-                updateKvmSettings({ emergencyKeyCombo: e.target.value })
-              }
-            >
-              <option value="Ctrl + Alt + Escape" className={optionClass}>
-                Ctrl + Alt + Escape (Default)
-              </option>
-              <option value="ScrollLock" className={optionClass}>
-                ScrollLock
-              </option>
-              <option value="Pause / Break" className={optionClass}>
-                Pause / Break
-              </option>
-              <option value="All Keys (ScrollLock, Pause, Ctrl+Alt+Esc)" className={optionClass}>
-                Any of (ScrollLock, Pause, Ctrl+Alt+Esc)
-              </option>
-            </select>
+          <div className="space-y-1">
+            <div className="rounded-lg border border-[#27272a] bg-[#101013] px-3 py-2 text-xs text-zinc-200 font-mono">
+              Scroll Lock, Pause, or Ctrl+Alt+Esc
+            </div>
             <p className="text-[11px] text-zinc-400">
               Immediately breaks cursor trap, unclips boundary lock, and returns pointer to host.
             </p>
