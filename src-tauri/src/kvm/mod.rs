@@ -1,6 +1,7 @@
 pub mod client;
 pub mod clipboard;
 pub mod commands;
+pub mod debug_log;
 pub mod discovery;
 pub mod files;
 pub mod hooks;

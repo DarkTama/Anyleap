@@ -82,3 +82,21 @@ Equipment: 2 Windows PCs on the same LAN (ideally one with 2 monitors of differe
 - [ ] Standard mirror, Desktop Flex, Camera Studio, High Fidelity modes still start and stop
 - [ ] QR / mDNS wireless pairing still works
 - [ ] In-app updater still detects updates (after the next version bump)
+
+---
+
+## Automated receiver harness
+
+Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on the local AnyLeap receiver without physical input.
+
+1. Start AnyLeap locally with **Allow other PCs to control this PC** enabled and copy the 6-digit **Pairing code**.
+2. First run (pairs and caches its certificate/trust store under `%LOCALAPPDATA%\anyleap-kvm-harness`):
+   ```powershell
+   cargo run --example kvm_harness --manifest-path src-tauri/Cargo.toml -- --addr 127.0.0.1:4177 --pin <CODE> --scenario all --repeat 3
+   ```
+3. Subsequent runs reuse the cached pairing without `--pin`:
+   ```powershell
+   cargo run --example kvm_harness --manifest-path src-tauri/Cargo.toml -- --scenario hud --repeat 5
+   ```
+4. Options: `--scenario` (`basic`, `hud` [<=50 ms while HUD toast appears], `reenter`, `after-click`, or `all`), `--repeat <N>`, `--delay-ms <MS>`, `--addr <IP:PORT>`. Prints per-step foreground HWND/process and a summary table; exits non-zero on any `FAIL`.
+

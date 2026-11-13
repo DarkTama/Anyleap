@@ -116,4 +116,73 @@ describe("kvmStore", () => {
     expect(remote?.id).toBe("aaaa1111bbbb2222");
     expect(remote?.bounds).toEqual({ x: 0, y: 0, width: 1600, height: 900 });
   });
+
+  it("refreshStatus prunes remote peers and links absent from status.peers (M1)", async () => {
+    vi.spyOn(kvmService, "kvmConnectPeer").mockResolvedValue(undefined);
+    vi.spyOn(kvmService, "kvmUpdateTopology").mockResolvedValue(undefined);
+
+    await useKvmStore.getState().connectPeer({
+      id: "stale-peer",
+      name: "Old Laptop",
+      ip: "192.168.1.99",
+      port: 4177,
+    });
+    expect(useKvmStore.getState().topology.computers).toHaveLength(2);
+    expect(useKvmStore.getState().topology.links).toHaveLength(1);
+
+    vi.spyOn(kvmService, "kvmGetStatus").mockResolvedValue({
+      is_host_running: true,
+      allow_control: true,
+      port: 4177,
+      security_pin: "123456",
+      connected_peers: [],
+      is_input_trapped: false,
+      linked_peer: null,
+      peers: [],
+    });
+
+    await useKvmStore.getState().refreshStatus();
+    const state = useKvmStore.getState();
+    expect(state.topology.computers).toHaveLength(1);
+    expect(state.topology.computers[0].is_local).toBe(true);
+    expect(state.topology.links).toHaveLength(0);
+    expect(state.selectedPeer).toBeNull();
+  });
+
+  it("disconnectPeer (Unlink) refreshes status from backend (H3)", async () => {
+    vi.spyOn(kvmService, "kvmDisconnectPeer").mockResolvedValue(undefined);
+    vi.spyOn(kvmService, "kvmUpdateTopology").mockResolvedValue(undefined);
+    const getStatusSpy = vi.spyOn(kvmService, "kvmGetStatus").mockResolvedValue({
+      is_host_running: true,
+      allow_control: true,
+      port: 4177,
+      security_pin: "123456",
+      connected_peers: [],
+      is_input_trapped: false,
+      controller_edge: null,
+      linked_peer: null,
+      peers: [],
+    });
+
+    await useKvmStore.getState().disconnectPeer();
+    expect(getStatusSpy).toHaveBeenCalled();
+    expect(useKvmStore.getState().status.linked_peer).toBeNull();
+    expect(useKvmStore.getState().status.controller_edge).toBeNull();
+  });
+
+  it("updateSettings immediately calls kvmSetSyncSettings when sync toggles change (L1)", () => {
+    const syncSpy = vi.spyOn(kvmService, "kvmSetSyncSettings").mockResolvedValue(undefined);
+    useKvmStore.getState().updateSettings({ syncClipboardText: false });
+    expect(syncSpy).toHaveBeenCalledWith(false, true, true);
+  });
+
+  it("debugLog defaults to false and updateSettings calls kvmSetDebugLog", () => {
+    expect(useKvmStore.getState().settings.debugLog).toBe(false);
+    const dbgSpy = vi
+      .spyOn(kvmService, "kvmSetDebugLog")
+      .mockResolvedValue("C:\\logs\\kvm-debug.log");
+    useKvmStore.getState().updateSettings({ debugLog: true });
+    expect(useKvmStore.getState().settings.debugLog).toBe(true);
+    expect(dbgSpy).toHaveBeenCalledWith(true);
+  });
 });

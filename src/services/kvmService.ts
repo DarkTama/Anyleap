@@ -1,8 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DiscoveredPeer, KvmStatus, TopologyConfig } from "@/types/kvm";
+import type {
+  DiscoveredPeer,
+  KvmStatus,
+  TopologyConfig,
+  TrustedPeerInfo,
+} from "@/types/kvm";
 
 export async function kvmGetStatus(): Promise<KvmStatus> {
   return await invoke<KvmStatus>("kvm_get_status");
+}
+
+export async function kvmSetAllowControl(enabled: boolean): Promise<KvmStatus> {
+  return await invoke<KvmStatus>("kvm_set_allow_control", { enabled });
+}
+
+export async function kvmListTrusted(): Promise<TrustedPeerInfo[]> {
+  return await invoke<TrustedPeerInfo[]>("kvm_list_trusted");
 }
 
 export async function kvmStartServer(port = 4177): Promise<KvmStatus> {
@@ -59,4 +72,20 @@ export async function kvmSetSyncSettings(
   files: boolean
 ): Promise<void> {
   return await invoke<void>("kvm_set_sync_settings", { text, image, files });
+}
+
+export async function kvmSetDebugLog(enabled: boolean): Promise<string> {
+  return await invoke<string>("kvm_set_debug_log", { enabled });
+}
+
+export async function kvmGetDebugLogPath(): Promise<string> {
+  return await invoke<string>("kvm_get_debug_log_path");
+}
+
+export async function kvmOpenDebugLogFolder(): Promise<void> {
+  return await invoke<void>("kvm_open_debug_log_folder");
+}
+
+export async function kvmDebugNote(text: string): Promise<void> {
+  return await invoke<void>("kvm_debug_note", { text });
 }

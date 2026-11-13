@@ -15,6 +15,11 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | 0 | **Computer Link input fidelity & reliability fixes** (16 audit findings) | SPEC-22 | merged | **Priority.** Part A (input core) and Part B (clipboard/discovery/settings/UI) run as parallel workers. |
 | 5 | Native virtual webcam (Media Foundation) | SPEC-15 | queued | Windows 11 only. Existing spec. |
 | 6 | PC display streaming | SPEC-13 | queued | Reuse the QUIC connection from #1. |
+| 7 | Shared Mouse & Keyboard UX, role-aware links, fingerprint reconnect & offset-aware layout | SPEC-23 | review | This PR. |
+| 8 | Per-monitor layout mapping | SPEC-24 | queued | Next. |
+| — | **Release** | — | queued | Version bump + release after SPEC-23/24 manual tests pass. |
+| 9 | Pointer scheme sync | SPEC-25 | queued | Optional toggle; uses `SetSystemCursor` + `SPI_SETCURSORS` restore, registry untouched. |
+| 10 | Cross-platform Linux/macOS input adapters | — | queued | Blocked on testers; Windows first. |
 
 **Merge order:** #1 → #2 → #3 → #4. Later branches rebase onto earlier ones; after #3 lands, #2 and #4 get a follow-up to call `logActivity()`.
 

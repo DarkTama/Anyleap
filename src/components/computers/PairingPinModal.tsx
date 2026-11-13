@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { X, KeyRound, Copy, Check, ShieldCheck, ArrowRight, Power } from "lucide-react";
 import { useKvmStore } from "@/stores/kvmStore";
-import { kvmForgetPeer, kvmPairPeer } from "@/services/kvmService";
+import { kvmPairPeer } from "@/services/kvmService";
 
 export function PairingPinModal() {
   const isModalOpen = useKvmStore((s) => s.isPairingModalOpen);
   const closeModal = useKvmStore((s) => s.closePairingModal);
   const status = useKvmStore((s) => s.status);
   const selectedPeer = useKvmStore((s) => s.selectedPeer);
-  const startServer = useKvmStore((s) => s.startServer);
+  const setAllowControl = useKvmStore((s) => s.setAllowControl);
+  const forgetPeer = useKvmStore((s) => s.forgetPeer);
   const refreshStatus = useKvmStore((s) => s.refreshStatus);
   const isLoading = useKvmStore((s) => s.isLoading);
   const [copied, setCopied] = useState(false);
@@ -16,7 +17,7 @@ export function PairingPinModal() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifiedSuccess, setVerifiedSuccess] = useState(false);
 
-  // The PIN rotates after repeated wrong attempts; keep it fresh while visible.
+  // The pairing code rotates after repeated wrong attempts; keep it fresh while visible.
   const showOwnPin = isModalOpen && !selectedPeer;
   useEffect(() => {
     if (!showOwnPin) return;
@@ -27,7 +28,8 @@ export function PairingPinModal() {
 
   if (!isModalOpen) return null;
 
-  const pin = status.is_host_running ? status.security_pin : "";
+  const allowControl = status.allow_control ?? status.is_host_running;
+  const pin = allowControl ? status.security_pin : "";
 
   const handleCopy = async () => {
     if (!pin) return;
@@ -36,7 +38,7 @@ export function PairingPinModal() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard unavailable: the PIN stays visible for manual entry.
+      // Clipboard unavailable: the pairing code stays visible for manual entry.
     }
   };
 
@@ -65,9 +67,11 @@ export function PairingPinModal() {
               <KeyRound className="h-4 w-4" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-zinc-100">KVM Security PIN</h2>
+              <h2 className="text-sm font-semibold text-zinc-100">Pairing code</h2>
               <p className="text-[11px] text-zinc-400">
-                {selectedPeer ? `Pairing with ${selectedPeer.name}` : "Local-first mutual device verification"}
+                {selectedPeer
+                  ? `Pairing with ${selectedPeer.name}`
+                  : "One-time pairing code for first-time link"}
               </p>
             </div>
           </div>
@@ -86,7 +90,7 @@ export function PairingPinModal() {
             {pin ? (
               <>
                 <span className="text-[11px] text-zinc-400">
-                  Enter this PIN on the computer that will control this PC:
+                  Enter this pairing code on the Main PC:
                 </span>
                 <div className="flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-[#161a24] px-4 py-2">
                   <span className="font-mono text-xl font-black tracking-widest text-cyan-300 select-text">
@@ -96,7 +100,7 @@ export function PairingPinModal() {
                     type="button"
                     onClick={() => void handleCopy()}
                     className="btn-tactile rounded p-1 text-zinc-400 hover:text-white cursor-pointer"
-                    title="Copy PIN"
+                    title="Copy pairing code"
                   >
                     {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
                   </button>
@@ -105,32 +109,32 @@ export function PairingPinModal() {
             ) : (
               <>
                 <span className="text-[11px] text-zinc-400">
-                  A PIN is generated when this PC accepts control. Start the receiver to get one.
+                  Enable &ldquo;Allow other PCs to control this PC&rdquo; to generate a pairing code.
                 </span>
                 <button
                   type="button"
                   disabled={isLoading}
-                  onClick={() => void startServer()}
+                  onClick={() => void setAllowControl(true)}
                   className="btn-tactile flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/20 cursor-pointer disabled:opacity-40"
                 >
                   <Power className="h-3.5 w-3.5" />
-                  <span>Start KVM Receiver</span>
+                  <span>Allow other PCs to control this PC</span>
                 </button>
               </>
             )}
           </div>
         )}
 
-        {/* Enter Target PIN (if linking peer) */}
+        {/* Enter Target Pairing Code (if linking peer) */}
         {selectedPeer && (
           <div className="space-y-2 rounded-xl border border-[#27272a] bg-[#101013] p-4">
             <span className="text-[11px] text-zinc-300 font-medium">
-              Enter PIN shown on {selectedPeer.name}:
+              Enter pairing code shown on {selectedPeer.name}:
             </span>
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                placeholder="6-digit PIN"
+                placeholder="6-digit code"
                 maxLength={6}
                 value={targetPin}
                 onChange={(e) => setTargetPin(e.target.value)}
@@ -142,16 +146,16 @@ export function PairingPinModal() {
                 onClick={() => void handleVerifyRemote()}
                 className="btn-tactile flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-zinc-950 hover:bg-cyan-400 disabled:opacity-40 cursor-pointer"
               >
-                <span>{verifiedSuccess ? "Verified" : "Authorize"}</span>
+                <span>{verifiedSuccess ? "Verified" : "Pair"}</span>
                 {verifiedSuccess ? <Check className="h-3.5 w-3.5" /> : <ArrowRight className="h-3.5 w-3.5" />}
               </button>
             </div>
             <button
               type="button"
-              onClick={() => void kvmForgetPeer(selectedPeer.id).then(closeModal)}
+              onClick={() => void forgetPeer(selectedPeer.id).then(closeModal)}
               className="text-[11px] text-rose-300 hover:text-rose-200 cursor-pointer"
             >
-              Forget this peer
+              Forget
             </button>
           </div>
         )}
