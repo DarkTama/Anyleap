@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { X, KeyRound, Copy, Check, ShieldCheck, ArrowRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, KeyRound, Copy, Check, ShieldCheck, ArrowRight, Power } from "lucide-react";
 import { useKvmStore } from "@/stores/kvmStore";
 import { kvmForgetPeer, kvmPairPeer } from "@/services/kvmService";
 
@@ -8,18 +8,35 @@ export function PairingPinModal() {
   const closeModal = useKvmStore((s) => s.closePairingModal);
   const status = useKvmStore((s) => s.status);
   const selectedPeer = useKvmStore((s) => s.selectedPeer);
+  const startServer = useKvmStore((s) => s.startServer);
+  const refreshStatus = useKvmStore((s) => s.refreshStatus);
+  const isLoading = useKvmStore((s) => s.isLoading);
   const [copied, setCopied] = useState(false);
   const [targetPin, setTargetPin] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifiedSuccess, setVerifiedSuccess] = useState(false);
 
+  // The PIN rotates after repeated wrong attempts; keep it fresh while visible.
+  const showOwnPin = isModalOpen && !selectedPeer;
+  useEffect(() => {
+    if (!showOwnPin) return;
+    void refreshStatus();
+    const t = setInterval(() => void refreshStatus(), 3000);
+    return () => clearInterval(t);
+  }, [showOwnPin, refreshStatus]);
+
   if (!isModalOpen) return null;
 
-  const handleCopy = () => {
-    if (status.security_pin) {
-      navigator.clipboard.writeText(status.security_pin);
+  const pin = status.is_host_running ? status.security_pin : "";
+
+  const handleCopy = async () => {
+    if (!pin) return;
+    try {
+      await navigator.clipboard.writeText(pin);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable: the PIN stays visible for manual entry.
     }
   };
 
@@ -63,23 +80,46 @@ export function PairingPinModal() {
           </button>
         </div>
 
-        {/* This Computer's PIN */}
-        <div className="flex flex-col items-center justify-center space-y-2 rounded-xl border border-[#27272a] bg-[#101013] p-4">
-          <span className="text-[11px] text-zinc-400">This PC PIN (Share with other computer):</span>
-          <div className="flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-[#161a24] px-4 py-2">
-            <span className="font-mono text-xl font-black tracking-widest text-cyan-300">
-              {status.security_pin || "------"}
-            </span>
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="btn-tactile rounded p-1 text-zinc-400 hover:text-white cursor-pointer"
-              title="Copy PIN"
-            >
-              {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-            </button>
+        {/* This Computer's PIN — only relevant when THIS PC is the one being controlled */}
+        {showOwnPin && (
+          <div className="flex flex-col items-center justify-center space-y-2 rounded-xl border border-[#27272a] bg-[#101013] p-4 text-center">
+            {pin ? (
+              <>
+                <span className="text-[11px] text-zinc-400">
+                  Enter this PIN on the computer that will control this PC:
+                </span>
+                <div className="flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-[#161a24] px-4 py-2">
+                  <span className="font-mono text-xl font-black tracking-widest text-cyan-300 select-text">
+                    {pin}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopy()}
+                    className="btn-tactile rounded p-1 text-zinc-400 hover:text-white cursor-pointer"
+                    title="Copy PIN"
+                  >
+                    {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="text-[11px] text-zinc-400">
+                  A PIN is generated when this PC accepts control. Start the receiver to get one.
+                </span>
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => void startServer()}
+                  className="btn-tactile flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/20 cursor-pointer disabled:opacity-40"
+                >
+                  <Power className="h-3.5 w-3.5" />
+                  <span>Start KVM Receiver</span>
+                </button>
+              </>
+            )}
           </div>
-        </div>
+        )}
 
         {/* Enter Target PIN (if linking peer) */}
         {selectedPeer && (

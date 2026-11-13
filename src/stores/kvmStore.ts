@@ -85,7 +85,7 @@ export interface KvmState {
 const defaultStatus: KvmStatus = {
   is_host_running: false,
   port: 4177,
-  security_pin: "------",
+  security_pin: "",
   connected_peers: [],
   is_input_trapped: false,
   active_target_id: undefined,

@@ -23,7 +23,7 @@ import { DesktopHudPill } from "./DesktopHudPill";
 export function ComputersView() {
   const status = useKvmStore((s) => s.status);
   const discoveredPeers = useKvmStore((s) => s.discoveredPeers);
-  const selectedPeer = useKvmStore((s) => s.selectedPeer);
+  const topology = useKvmStore((s) => s.topology);
   const activityFeed = useKvmStore((s) => s.activityFeed);
   const isLoading = useKvmStore((s) => s.isLoading);
   const error = useKvmStore((s) => s.error);
@@ -124,7 +124,11 @@ export function ComputersView() {
             className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer"
           >
             <KeyRound className="h-3.5 w-3.5 text-zinc-400" />
-            <span>PIN: {status.security_pin || "------"}</span>
+            <span>
+              {status.is_host_running && status.security_pin
+                ? `PIN: ${status.security_pin}`
+                : "PIN: start receiver"}
+            </span>
           </button>
         </div>
       </div>
@@ -206,7 +210,11 @@ export function ComputersView() {
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {discoveredPeers.map((peer) => {
-              const isLinked = selectedPeer?.id === peer.id;
+              // Linked only once the peer is actually in the live topology —
+              // opening the PIN dialog for a peer must not mark it as linked.
+              const isLinked = topology.computers.some(
+                (c) => !c.is_local && (c.id === peer.id || c.address === peer.ip)
+              );
               return (
                 <div
                   key={peer.id}
