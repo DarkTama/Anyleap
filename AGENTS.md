@@ -44,6 +44,17 @@ Whenever a new feature, specification, or architectural capability is completed,
 - **`docs/adr/`**: Author an Architectural Decision Record (ADR) whenever introducing hard-to-reverse architectural patterns or new subsystems (format: `docs/adr/NNNN-<topic>.md`).
 - **`docs/specs/`**: Mark completed specifications with updated status (`Status: Implemented / Shipped in vX.X.X`).
 
+### 1.5 Pull Request Workflow (`main` is protected)
+- **Never push directly to `main`**, even when the account is allowed to bypass branch protection.
+- **Every change lands through a pull request:**
+  1. Branch from the latest `origin/main`, named `<type>/<short-topic>` (e.g. `fix/kvm-input-fidelity`, `docs/pr-workflow`).
+  2. Keep one atomic, squashed commit per feature (§1.1); a spec may ship in the same PR as its implementation or in its own `docs` PR.
+  3. Push the branch and open the PR with `gh pr create`. The PR body states: summary, spec ID, results of the three quality gates (§2), and what still needs manual testing.
+  4. Merge with **squash merge** only after the gates pass **and the user explicitly approves**; delete the branch afterwards.
+- **Agents never merge a PR on their own** — they open it and report the link.
+- **Parallel workers:** each worker gets its own branch/worktree based on `origin/main` (so specs a worker needs must already be on `origin/main` or be passed in its brief). The coordinator verifies each branch, rebases it onto the latest `origin/main`, and opens one PR per feature.
+- **Releases:** publish only by pushing a `v*` tag from `main` after the version bump PR is merged. A manual run of the `release` workflow is a test build: it uploads run artifacts and never creates or modifies a GitHub Release.
+
 ---
 
 ## 2. Quality Gates Before Committing
