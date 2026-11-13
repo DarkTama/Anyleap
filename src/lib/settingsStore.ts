@@ -199,3 +199,14 @@ export async function saveNickname(
   await store.save();
   return next;
 }
+
+export async function loadActivities<T>(): Promise<T[]> {
+  const store = await getStore();
+  return (await store.get<T[]>("activities")) ?? [];
+}
+
+export async function saveActivities<T>(items: T[]): Promise<void> {
+  const store = await getStore();
+  await store.set("activities", items);
+  await store.save();
+}

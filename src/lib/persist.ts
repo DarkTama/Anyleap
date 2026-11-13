@@ -10,4 +10,6 @@ export {
   saveSettings,
   getNicknames,
   saveNickname,
+  loadActivities,
+  saveActivities,
 } from "./settingsStore";

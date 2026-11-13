@@ -18,6 +18,7 @@ import {
   kvmSendFile,
 } from "@/services/kvmService";
 import { listen } from "@tauri-apps/api/event";
+import { logActivity } from "./activityStore";
 
 export interface KvmState {
   status: KvmStatus;
@@ -325,6 +326,11 @@ export const useKvmStore = create<KvmState>((set, get) => ({
 
       await kvmUpdateTopology(nextTopology);
       set({ topology: nextTopology, selectedPeer: peer, isLoading: false });
+      logActivity({
+        kind: "kvm",
+        title: `Connected KVM peer ${peer.name}`,
+        detail: peerIp,
+      });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e), isLoading: false });
     }
@@ -333,6 +339,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
   disconnectPeer: async () => {
     set({ isLoading: true });
     try {
+      const prevPeer = get().selectedPeer;
       await kvmDisconnectPeer();
       const currentTopology = get().topology;
       const primary = currentTopology.computers.find((c) => c.is_local) || currentTopology.computers[0];
@@ -343,6 +350,10 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       };
       await kvmUpdateTopology(resetTopology);
       set({ selectedPeer: null, topology: resetTopology, isLoading: false });
+      logActivity({
+        kind: "kvm",
+        title: prevPeer ? `Disconnected KVM peer ${prevPeer.name}` : "Disconnected KVM peer",
+      });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e), isLoading: false });
     }

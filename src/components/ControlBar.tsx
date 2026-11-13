@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
+import { logActivity } from "@/stores/activityStore";
 import {
   openNotifications,
   sendKeyevent,
@@ -236,7 +237,18 @@ export function ControlBar({
           </Button>
         )}
         {b.screenshot && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.SCREENSHOT)}>
+          <Button
+            variant="outline"
+            className={sz.btn}
+            onClick={() => {
+              key(KEYCODE.SCREENSHOT)();
+              logActivity({
+                kind: "screenshot",
+                title: "Screenshot taken",
+                detail: serial,
+              });
+            }}
+          >
             <Camera className={sz.icon} />
             Shot
           </Button>

@@ -2138,3 +2138,739 @@ pub async fn get_battery_info(
 
     Ok(parse_battery_info(&String::from_utf8_lossy(&output.stdout)))
 }
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceDetails {
+    pub manufacturer: String,
+    pub model: String,
+    pub android_version: String,
+    pub sdk: u32,
+    pub connection: String,
+}
+
+pub(crate) fn is_wifi_serial(serial: &str) -> bool {
+    if let Some((host, port)) = serial.rsplit_once(':') {
+        !host.is_empty() && port.parse::<u16>().is_ok()
+    } else {
+        false
+    }
+}
+
+pub(crate) fn parse_getprop(output: &str, serial: &str) -> DeviceDetails {
+    let mut manufacturer = String::new();
+    let mut model = String::new();
+    let mut android_version = String::new();
+    let mut sdk = 0u32;
+
+    for raw_line in output.lines() {
+        let line = raw_line.trim();
+        if let Some(rest) = line.strip_prefix('[') {
+            if let Some((key, val_part)) = rest.split_once("]: [") {
+                if let Some(val) = val_part.strip_suffix(']') {
+                    let v = val.trim();
+                    match key {
+                        "ro.product.manufacturer" => manufacturer = v.to_string(),
+                        "ro.product.model" => model = v.to_string(),
+                        "ro.build.version.release" => android_version = v.to_string(),
+                        "ro.build.version.sdk" => {
+                            if let Ok(parsed) = v.parse::<u32>() {
+                                sdk = parsed;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    DeviceDetails {
+        manufacturer,
+        model,
+        android_version,
+        sdk,
+        connection: if is_wifi_serial(serial) {
+            "wifi".to_string()
+        } else {
+            "usb".to_string()
+        },
+    }
+}
+
+fn validate_serial(serial: &str) -> Result<(), String> {
+    if serial.is_empty() || serial.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("Invalid device serial".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_device_details(
+    app: AppHandle,
+    serial: String,
+) -> Result<DeviceDetails, String> {
+    validate_serial(&serial)?;
+    let output = adb_cmd(&app)?
+        .args(["-s", &serial, "shell", "getprop"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("adb getprop failed: {}", err.trim()));
+    }
+
+    Ok(parse_getprop(&String::from_utf8_lossy(&output.stdout), &serial))
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorCheck {
+    pub id: String,
+    pub label: String,
+    pub status: String,
+    pub detail: String,
+    pub fix_hint: Option<String>,
+}
+
+pub(crate) struct DoctorCheckInput {
+    pub adb_version: Result<String, String>,
+    pub adb_devices: Option<Result<Vec<DeviceInfo>, String>>,
+    pub scrcpy_version: Result<String, String>,
+    pub serial: Option<String>,
+    pub wireless_tcp: Option<Result<(), String>>,
+    pub shell_echo: Option<Result<String, String>>,
+    pub device_details: Option<Result<DeviceDetails, String>>,
+}
+
+pub(crate) fn sequence_doctor_checks(input: &DoctorCheckInput) -> Vec<DoctorCheck> {
+    let mut checks = Vec::with_capacity(7);
+
+    // 1. adb binary resolvable + adb version
+    let adb_ok = match &input.adb_version {
+        Ok(ver) => {
+            checks.push(DoctorCheck {
+                id: "adb_binary".into(),
+                label: "ADB binary".into(),
+                status: "pass".into(),
+                detail: ver.clone(),
+                fix_hint: None,
+            });
+            true
+        }
+        Err(err) => {
+            checks.push(DoctorCheck {
+                id: "adb_binary".into(),
+                label: "ADB binary".into(),
+                status: "fail".into(),
+                detail: err.clone(),
+                fix_hint: Some("Run npm run fetch-binaries or reinstall AnyLeap.".into()),
+            });
+            false
+        }
+    };
+
+    // 2. adb server responds
+    let mut devices_list: Option<&Vec<DeviceInfo>> = None;
+    let server_ok = if !adb_ok {
+        checks.push(DoctorCheck {
+            id: "adb_server".into(),
+            label: "ADB server".into(),
+            status: "skip".into(),
+            detail: "Skipped because ADB binary check failed.".into(),
+            fix_hint: None,
+        });
+        false
+    } else {
+        match &input.adb_devices {
+            Some(Ok(devs)) => {
+                devices_list = Some(devs);
+                checks.push(DoctorCheck {
+                    id: "adb_server".into(),
+                    label: "ADB server".into(),
+                    status: "pass".into(),
+                    detail: format!("ADB daemon responded ({} device(s) listed)", devs.len()),
+                    fix_hint: None,
+                });
+                true
+            }
+            Some(Err(err)) => {
+                checks.push(DoctorCheck {
+                    id: "adb_server".into(),
+                    label: "ADB server".into(),
+                    status: "fail".into(),
+                    detail: err.clone(),
+                    fix_hint: Some("Restart the ADB server or check if port 5037 is blocked.".into()),
+                });
+                false
+            }
+            None => {
+                checks.push(DoctorCheck {
+                    id: "adb_server".into(),
+                    label: "ADB server".into(),
+                    status: "skip".into(),
+                    detail: "No ADB server check output.".into(),
+                    fix_hint: None,
+                });
+                false
+            }
+        }
+    };
+
+    // 3. scrcpy binary and scrcpy-server resource present
+    match &input.scrcpy_version {
+        Ok(ver) => {
+            checks.push(DoctorCheck {
+                id: "scrcpy_binary".into(),
+                label: "scrcpy binary & server".into(),
+                status: "pass".into(),
+                detail: ver.clone(),
+                fix_hint: None,
+            });
+        }
+        Err(err) => {
+            checks.push(DoctorCheck {
+                id: "scrcpy_binary".into(),
+                label: "scrcpy binary & server".into(),
+                status: "fail".into(),
+                detail: err.clone(),
+                fix_hint: Some("Run npm run fetch-binaries to restore scrcpy and scrcpy-server.".into()),
+            });
+        }
+    }
+
+    // 4. Device present in adb devices -l
+    let target_serial = input.serial.as_deref().filter(|s| !s.is_empty());
+    let device_ok = if !server_ok {
+        checks.push(DoctorCheck {
+            id: "device_present".into(),
+            label: "Target device".into(),
+            status: "skip".into(),
+            detail: "Skipped because ADB server check did not pass.".into(),
+            fix_hint: None,
+        });
+        false
+    } else if let Some(serial) = target_serial {
+        if let Some(devs) = devices_list {
+            if let Some(dev) = devs.iter().find(|d| d.serial == serial) {
+                match dev.state.as_str() {
+                    "device" => {
+                        checks.push(DoctorCheck {
+                            id: "device_present".into(),
+                            label: "Target device".into(),
+                            status: "pass".into(),
+                            detail: format!("{} is connected and authorized", serial),
+                            fix_hint: None,
+                        });
+                        true
+                    }
+                    "unauthorized" => {
+                        checks.push(DoctorCheck {
+                            id: "device_present".into(),
+                            label: "Target device".into(),
+                            status: "fail".into(),
+                            detail: format!("{} is unauthorized", serial),
+                            fix_hint: Some("Accept the USB debugging prompt on the phone".into()),
+                        });
+                        false
+                    }
+                    "offline" => {
+                        checks.push(DoctorCheck {
+                            id: "device_present".into(),
+                            label: "Target device".into(),
+                            status: "fail".into(),
+                            detail: format!("{} is offline", serial),
+                            fix_hint: Some("Reconnect cable or re-pair".into()),
+                        });
+                        false
+                    }
+                    other => {
+                        checks.push(DoctorCheck {
+                            id: "device_present".into(),
+                            label: "Target device".into(),
+                            status: "fail".into(),
+                            detail: format!("{} is in state: {}", serial, other),
+                            fix_hint: Some("Check USB debugging settings on the device.".into()),
+                        });
+                        false
+                    }
+                }
+            } else {
+                checks.push(DoctorCheck {
+                    id: "device_present".into(),
+                    label: "Target device".into(),
+                    status: "fail".into(),
+                    detail: format!("Device {} not found in adb devices", serial),
+                    fix_hint: Some("Check USB cable or wireless ADB connection, then refresh.".into()),
+                });
+                false
+            }
+        } else {
+            checks.push(DoctorCheck {
+                id: "device_present".into(),
+                label: "Target device".into(),
+                status: "skip".into(),
+                detail: "Skipped because device list is unavailable.".into(),
+                fix_hint: None,
+            });
+            false
+        }
+    } else {
+        checks.push(DoctorCheck {
+            id: "device_present".into(),
+            label: "Target device".into(),
+            status: "skip".into(),
+            detail: "No target device selected.".into(),
+            fix_hint: None,
+        });
+        false
+    };
+
+    // 5. Wireless only: TCP connect to host:port within 2 s
+    match target_serial {
+        Some(serial) if is_wifi_serial(serial) => match &input.wireless_tcp {
+            Some(Ok(())) => {
+                checks.push(DoctorCheck {
+                    id: "wireless_tcp".into(),
+                    label: "Wireless TCP reachability".into(),
+                    status: "pass".into(),
+                    detail: format!("TCP connection to {} succeeded", serial),
+                    fix_hint: None,
+                });
+            }
+            Some(Err(err)) => {
+                checks.push(DoctorCheck {
+                    id: "wireless_tcp".into(),
+                    label: "Wireless TCP reachability".into(),
+                    status: "fail".into(),
+                    detail: err.clone(),
+                    fix_hint: Some("Ensure phone and PC are on the same Wi-Fi network and Wireless Debugging is enabled.".into()),
+                });
+            }
+            None => {
+                checks.push(DoctorCheck {
+                    id: "wireless_tcp".into(),
+                    label: "Wireless TCP reachability".into(),
+                    status: "skip".into(),
+                    detail: "TCP check not run.".into(),
+                    fix_hint: None,
+                });
+            }
+        },
+        _ => {
+            checks.push(DoctorCheck {
+                id: "wireless_tcp".into(),
+                label: "Wireless TCP reachability".into(),
+                status: "skip".into(),
+                detail: "Skipped (not a wireless host:port device).".into(),
+                fix_hint: None,
+            });
+        }
+    }
+
+    // 6. Device shell responds
+    let shell_ok = if !device_ok {
+        checks.push(DoctorCheck {
+            id: "device_shell".into(),
+            label: "Device shell".into(),
+            status: "skip".into(),
+            detail: "Skipped because target device is not ready.".into(),
+            fix_hint: None,
+        });
+        false
+    } else {
+        match &input.shell_echo {
+            Some(Ok(out)) if out.trim().contains("ok") => {
+                checks.push(DoctorCheck {
+                    id: "device_shell".into(),
+                    label: "Device shell".into(),
+                    status: "pass".into(),
+                    detail: "Device shell responded (ok)".into(),
+                    fix_hint: None,
+                });
+                true
+            }
+            Some(Ok(out)) => {
+                checks.push(DoctorCheck {
+                    id: "device_shell".into(),
+                    label: "Device shell".into(),
+                    status: "fail".into(),
+                    detail: format!("Unexpected shell output: {}", out.trim()),
+                    fix_hint: Some("Reconnect the device or toggle USB debugging.".into()),
+                });
+                false
+            }
+            Some(Err(err)) => {
+                checks.push(DoctorCheck {
+                    id: "device_shell".into(),
+                    label: "Device shell".into(),
+                    status: "fail".into(),
+                    detail: err.clone(),
+                    fix_hint: Some("Reconnect the device or toggle USB debugging.".into()),
+                });
+                false
+            }
+            None => {
+                checks.push(DoctorCheck {
+                    id: "device_shell".into(),
+                    label: "Device shell".into(),
+                    status: "skip".into(),
+                    detail: "Skipped.".into(),
+                    fix_hint: None,
+                });
+                false
+            }
+        }
+    };
+
+    // 7. Android version >= 11 for wireless pairing / >= 10 for audio
+    if !shell_ok {
+        checks.push(DoctorCheck {
+            id: "android_version".into(),
+            label: "Android version compatibility".into(),
+            status: "skip".into(),
+            detail: "Skipped because device shell did not respond.".into(),
+            fix_hint: None,
+        });
+    } else {
+        match &input.device_details {
+            Some(Ok(details)) => {
+                if details.sdk >= 30 {
+                    checks.push(DoctorCheck {
+                        id: "android_version".into(),
+                        label: "Android version compatibility".into(),
+                        status: "pass".into(),
+                        detail: format!(
+                            "Android {} (SDK {}) — supports wireless pairing and audio",
+                            details.android_version, details.sdk
+                        ),
+                        fix_hint: None,
+                    });
+                } else if details.sdk == 29 {
+                    checks.push(DoctorCheck {
+                        id: "android_version".into(),
+                        label: "Android version compatibility".into(),
+                        status: "warn".into(),
+                        detail: format!(
+                            "Android {} (SDK 29) — audio supported, wireless pairing requires Android 11+",
+                            details.android_version
+                        ),
+                        fix_hint: Some("Use USB or legacy adb tcpip for wireless on Android 10.".into()),
+                    });
+                } else if details.sdk > 0 {
+                    checks.push(DoctorCheck {
+                        id: "android_version".into(),
+                        label: "Android version compatibility".into(),
+                        status: "warn".into(),
+                        detail: format!(
+                            "Android {} (SDK {}) — audio requires Android 10+ and wireless pairing requires Android 11+",
+                            details.android_version, details.sdk
+                        ),
+                        fix_hint: Some("Audio forwarding and QR wireless pairing are unavailable on Android < 10.".into()),
+                    });
+                } else {
+                    checks.push(DoctorCheck {
+                        id: "android_version".into(),
+                        label: "Android version compatibility".into(),
+                        status: "warn".into(),
+                        detail: "Could not determine Android SDK version.".into(),
+                        fix_hint: None,
+                    });
+                }
+            }
+            Some(Err(err)) => {
+                checks.push(DoctorCheck {
+                    id: "android_version".into(),
+                    label: "Android version compatibility".into(),
+                    status: "warn".into(),
+                    detail: err.clone(),
+                    fix_hint: None,
+                });
+            }
+            None => {
+                checks.push(DoctorCheck {
+                    id: "android_version".into(),
+                    label: "Android version compatibility".into(),
+                    status: "skip".into(),
+                    detail: "Skipped.".into(),
+                    fix_hint: None,
+                });
+            }
+        }
+    }
+
+    checks
+}
+
+#[tauri::command]
+pub async fn run_connection_doctor(
+    app: AppHandle,
+    serial: Option<String>,
+) -> Result<Vec<DoctorCheck>, String> {
+    if let Some(ref s) = serial {
+        if !s.is_empty() {
+            validate_serial(s)?;
+        }
+    }
+
+    // 1. adb binary + version
+    let adb_version = match adb_path() {
+        None => Err("Bundled adb binary not found".to_string()),
+        Some(_) => match adb_cmd(&app) {
+            Err(e) => Err(e),
+            Ok(cmd) => match cmd.args(["version"]).output().await {
+                Ok(out) if out.status.success() => {
+                    let line = String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .next()
+                        .unwrap_or("adb ready")
+                        .trim()
+                        .to_string();
+                    Ok(line)
+                }
+                Ok(out) => Err(format!(
+                    "adb version exited with error: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )),
+                Err(e) => Err(e.to_string()),
+            },
+        },
+    };
+
+    // 2. adb server responds
+    let adb_devices = if adb_version.is_ok() {
+        Some(match adb_cmd(&app) {
+            Err(e) => Err(e),
+            Ok(cmd) => match cmd.args(["devices", "-l"]).output().await {
+                Ok(out) if out.status.success() => {
+                    Ok(parse_adb_devices(&String::from_utf8_lossy(&out.stdout)))
+                }
+                Ok(out) => Err(format!(
+                    "adb devices failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )),
+                Err(e) => Err(e.to_string()),
+            },
+        })
+    } else {
+        None
+    };
+
+    // 3. scrcpy binary + scrcpy-server
+    let scrcpy_version = match resolve_server_path(&app) {
+        None => Err("scrcpy-server resource not found".to_string()),
+        Some(_) => match scrcpy_cmd(&app) {
+            Err(e) => Err(e),
+            Ok(cmd) => match cmd.args(["--version"]).output().await {
+                Ok(out) if out.status.success() => {
+                    let line = String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .next()
+                        .unwrap_or("scrcpy ready")
+                        .trim()
+                        .to_string();
+                    Ok(line)
+                }
+                Ok(out) => Err(format!(
+                    "scrcpy --version failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )),
+                Err(e) => Err(e.to_string()),
+            },
+        },
+    };
+
+    // 5. Wireless TCP connect within 2s
+    let target_serial = serial.as_deref().filter(|s| !s.is_empty());
+    let wireless_tcp = match target_serial {
+        Some(s) if is_wifi_serial(s) => {
+            let addr = s.to_string();
+            let res = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                tokio::net::TcpStream::connect(&addr),
+            )
+            .await;
+            Some(match res {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(e)) => Err(format!("TCP connect failed: {}", e)),
+                Err(_) => Err("TCP connect timed out after 2 s".to_string()),
+            })
+        }
+        _ => None,
+    };
+
+    // Check if device is ready before running shell commands
+    let device_ready = target_serial.is_some()
+        && adb_devices
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map(|devs| {
+                devs.iter()
+                    .any(|d| d.serial == target_serial.unwrap() && d.state == "device")
+            })
+            .unwrap_or(false);
+
+    // 6. Device shell responds
+    let shell_echo = if device_ready {
+        let s = target_serial.unwrap();
+        Some(match adb_cmd(&app) {
+            Err(e) => Err(e),
+            Ok(cmd) => match cmd.args(["-s", s, "shell", "echo", "ok"]).output().await {
+                Ok(out) if out.status.success() => {
+                    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+                }
+                Ok(out) => Err(format!(
+                    "adb shell failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )),
+                Err(e) => Err(e.to_string()),
+            },
+        })
+    } else {
+        None
+    };
+
+    // 7. Android version via getprop
+    let shell_ok = shell_echo
+        .as_ref()
+        .and_then(|r| r.as_ref().ok())
+        .map(|s| s.trim().contains("ok"))
+        .unwrap_or(false);
+
+    let device_details = if shell_ok {
+        let s = target_serial.unwrap().to_string();
+        Some(get_device_details(app, s).await)
+    } else {
+        None
+    };
+
+    Ok(sequence_doctor_checks(&DoctorCheckInput {
+        adb_version,
+        adb_devices,
+        scrcpy_version,
+        serial,
+        wireless_tcp,
+        shell_echo,
+        device_details,
+    }))
+}
+
+#[cfg(test)]
+mod spec18_tests {
+    use super::*;
+
+    #[test]
+    fn parses_getprop_usb_and_wifi() {
+        let fixture = "\
+[ro.product.manufacturer]: [TECNO]\r
+[ro.product.model]: [TECNO CM7]\r
+[ro.build.version.release]: [14]\r
+[ro.build.version.sdk]: [34]\r
+[ro.build.display.id]: [CM7-H6941-U-240812V123]\r
+";
+        let usb = parse_getprop(fixture, "1029384756");
+        assert_eq!(usb.manufacturer, "TECNO");
+        assert_eq!(usb.model, "TECNO CM7");
+        assert_eq!(usb.android_version, "14");
+        assert_eq!(usb.sdk, 34);
+        assert_eq!(usb.connection, "usb");
+
+        let wifi = parse_getprop(fixture, "192.168.1.42:5555");
+        assert_eq!(wifi.connection, "wifi");
+    }
+
+    #[test]
+    fn doctor_skips_dependents_when_adb_fails() {
+        let checks = sequence_doctor_checks(&DoctorCheckInput {
+            adb_version: Err("adb not found".into()),
+            adb_devices: None,
+            scrcpy_version: Ok("scrcpy 3.1".into()),
+            serial: Some("ABC123".into()),
+            wireless_tcp: None,
+            shell_echo: None,
+            device_details: None,
+        });
+        assert_eq!(checks.len(), 7);
+        assert_eq!(checks[0].status, "fail");
+        assert_eq!(checks[1].status, "skip"); // adb_server
+        assert_eq!(checks[2].status, "pass"); // scrcpy_binary (independent)
+        assert_eq!(checks[3].status, "skip"); // device_present
+        assert_eq!(checks[4].status, "skip"); // wireless_tcp (usb)
+        assert_eq!(checks[5].status, "skip"); // device_shell
+        assert_eq!(checks[6].status, "skip"); // android_version
+    }
+
+    #[test]
+    fn doctor_reports_unauthorized_and_skips_shell() {
+        let checks = sequence_doctor_checks(&DoctorCheckInput {
+            adb_version: Ok("Android Debug Bridge version 1.0.41".into()),
+            adb_devices: Some(Ok(vec![DeviceInfo {
+                serial: "ABC123".into(),
+                state: "unauthorized".into(),
+                model: None,
+                product: None,
+            }])),
+            scrcpy_version: Ok("scrcpy 3.1".into()),
+            serial: Some("ABC123".into()),
+            wireless_tcp: None,
+            shell_echo: Some(Ok("ok".into())), // even if provided, must skip
+            device_details: None,
+        });
+        assert_eq!(checks[3].id, "device_present");
+        assert_eq!(checks[3].status, "fail");
+        assert!(checks[3]
+            .fix_hint
+            .as_deref()
+            .unwrap()
+            .contains("USB debugging prompt"));
+        assert_eq!(checks[5].status, "skip");
+        assert_eq!(checks[6].status, "skip");
+    }
+
+    #[test]
+    fn doctor_warns_on_android_10_and_passes_on_11_plus() {
+        let base_dev = vec![DeviceInfo {
+            serial: "192.168.1.10:5555".into(),
+            state: "device".into(),
+            model: Some("Pixel".into()),
+            product: None,
+        }];
+        let a10 = sequence_doctor_checks(&DoctorCheckInput {
+            adb_version: Ok("1.0.41".into()),
+            adb_devices: Some(Ok(base_dev.clone())),
+            scrcpy_version: Ok("3.1".into()),
+            serial: Some("192.168.1.10:5555".into()),
+            wireless_tcp: Some(Ok(())),
+            shell_echo: Some(Ok("ok\n".into())),
+            device_details: Some(Ok(DeviceDetails {
+                manufacturer: "Google".into(),
+                model: "Pixel".into(),
+                android_version: "10".into(),
+                sdk: 29,
+                connection: "wifi".into(),
+            })),
+        });
+        assert_eq!(a10[4].status, "pass"); // wireless_tcp
+        assert_eq!(a10[5].status, "pass"); // device_shell
+        assert_eq!(a10[6].status, "warn"); // android_version
+
+        let a14 = sequence_doctor_checks(&DoctorCheckInput {
+            adb_version: Ok("1.0.41".into()),
+            adb_devices: Some(Ok(base_dev)),
+            scrcpy_version: Ok("3.1".into()),
+            serial: Some("192.168.1.10:5555".into()),
+            wireless_tcp: Some(Ok(())),
+            shell_echo: Some(Ok("ok\n".into())),
+            device_details: Some(Ok(DeviceDetails {
+                manufacturer: "Google".into(),
+                model: "Pixel".into(),
+                android_version: "14".into(),
+                sdk: 34,
+                connection: "wifi".into(),
+            })),
+        });
+        assert_eq!(a14[6].status, "pass");
+    }
+}

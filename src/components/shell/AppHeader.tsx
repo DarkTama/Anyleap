@@ -1,4 +1,4 @@
-import { Smartphone, Monitor, Sliders, Wifi } from "lucide-react";
+import { Smartphone, Monitor, Sliders, Wifi, Command } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { UpdateBadge } from "./UpdateBadge";
@@ -10,9 +10,10 @@ interface AppHeaderProps {
   activeTab: ShellTab;
   onTabChange: (tab: ShellTab) => void;
   onOpenPair: () => void;
+  onOpenCommands: () => void;
 }
 
-export function AppHeader({ activeTab, onTabChange, onOpenPair }: AppHeaderProps) {
+export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }: AppHeaderProps) {
   const sessions = useAppStore((s) => s.sessions);
   const currentVersion = useAppUpdateStore((s) => s.currentVersion);
 
@@ -76,6 +77,19 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair }: AppHeaderProps
       {/* Status, Update Badge & Actions */}
       <div className="flex items-center gap-2.5">
         <UpdateBadge />
+
+        <button
+          type="button"
+          onClick={onOpenCommands}
+          className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer"
+          title="Open command palette (Ctrl+K)"
+        >
+          <Command className="h-3.5 w-3.5 text-zinc-400" />
+          <span className="hidden sm:inline">Commands</span>
+          <kbd className="hidden md:inline rounded border border-[#27272a] bg-[#111114] px-1 py-0.2 font-mono text-[10px] text-zinc-400">
+            Ctrl+K
+          </kbd>
+        </button>
 
         <button
           type="button"

@@ -10,6 +10,7 @@ import {
   onSessionExited,
 } from "@/lib/tauri";
 import { ControlBar } from "./ControlBar";
+import { logActivity } from "@/stores/activityStore";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
 import type { SessionInfo, SessionMode } from "@/lib/types";
 
@@ -143,6 +144,11 @@ export function EmbeddedMirrorWindow({
             const buf = await file.arrayBuffer();
             const bytes = Array.from(new Uint8Array(buf));
             const dest = await pushClipboardImage(serial, bytes);
+            logActivity({
+              kind: "clipboard",
+              title: "Pushed clipboard image",
+              detail: dest,
+            });
             setToast(`Image pushed to ${dest}`);
             setTimeout(() => setToast(null), 3000);
           } catch (err) {

@@ -12,7 +12,7 @@ Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experi
 - **Minimalist Graphite Console** — Clean, high-contrast graphite workstation with tactile physics, quick segmented navigation (Devices, Computers KVM, Settings), and persistent hardware rack.
 - **Silent In-App Auto-Updater** — Seamless updates verified with Minisign Ed25519 cryptographic signatures, background download progress, zero-wizard silent installation, one-click app relaunch, and rich commit changelog viewer.
 - **Camera Studio (PC Webcam)** — Stream your phone's front or back camera sensors directly to your PC with custom resolutions (1080p, 720p, 4K), configurable frame rates, microphone audio capture, and in-session controls (torch toggle, zoom in/out, lens flip).
-- **Studio Deck Workstation** — Integrated control dashboard with the **Launch Matrix** supporting 4 distinct profiles:
+- **Studio Deck Workstation** — Integrated control dashboard with the **Device Hero Card** (at-a-glance Android version, connection type, battery, and primary actions), **Activity Timeline** (local session & event history), **Command Palette** (`Ctrl+K` quick launcher), **Connection Doctor** (one-click ADB/scrcpy/wireless diagnostics), and the **Launch Matrix** supporting 4 distinct profiles:
   - *Desktop Flex Mode* — Dynamic virtual display container with live DPI presets and visualizer.
   - *Standard Mirror* — Low-latency native display replication.
   - *Camera Studio* — Dedicated raw camera sensor streaming for calls and content creation.

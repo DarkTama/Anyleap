@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StudioDeck } from "@/components/deck/StudioDeck";
 import { ComputersView } from "@/components/computers/ComputersView";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { AppHeader, type ShellTab } from "@/components/shell/AppHeader";
+import { CommandPalette } from "@/components/shell/CommandPalette";
+import { ConnectionDoctor } from "@/components/ConnectionDoctor";
+import { TimelineDrawer } from "@/components/deck/TimelinePanel";
 import { PairDialog } from "@/components/PairDialog";
 import { useAppStore } from "@/store/useAppStore";
 import {
@@ -12,6 +15,9 @@ import {
   listSessions,
   onSessionExited,
   onSessionStarted,
+  startMirror,
+  stopMirror,
+  takeScreenshot,
 } from "@/lib/tauri";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
@@ -19,6 +25,9 @@ import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
 import { UpdateModal } from "@/components/shell/UpdateModal";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { useKvmStore } from "@/stores/kvmStore";
+import { logActivity, useActivityStore } from "@/stores/activityStore";
+import { buildCommands } from "@/lib/commandPalette";
+import type { StudioMode } from "@/components/deck/LaunchMatrix";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -40,16 +49,41 @@ function App() {
   const [showDetails, setShowDetails] = useState(false);
   const [activeTab, setActiveTab] = useState<ShellTab>("devices");
   const [pairOpen, setPairOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const devices = useAppStore((s) => s.devices);
+  const selectedSerial = useAppStore((s) => s.selectedSerial);
+  const openDoctor = useAppStore((s) => s.openDoctor);
+  const setTimelineOpen = useAppStore((s) => s.setTimelineOpen);
+  const kvmRunning = useKvmStore((s) => s.status.is_host_running);
 
   // Event listeners + initial hydrate.
   useEffect(() => {
     const unlisteners = [
       onSessionStarted((e) => upsertSession(e.payload)),
       onSessionExited((e) => {
+        const state = useAppStore.getState();
+        const endedSession = state.sessions.find((x) => x.id === e.payload.id);
         removeSession(e.payload.id);
-        const targetSerial =
-          e.payload.serial ||
-          useAppStore.getState().sessions.find((x) => x.id === e.payload.id)?.serial;
+        const targetSerial = e.payload.serial || endedSession?.serial;
+        if (endedSession) {
+          const dev = state.devices.find((d) => d.serial === endedSession.serial);
+          const label =
+            state.nicknames[endedSession.serial] ||
+            dev?.model ||
+            dev?.product ||
+            endedSession.serial;
+          const durationMs = Math.max(0, Date.now() - endedSession.started_at);
+          logActivity({
+            kind: endedSession.mode === "camera" ? "camera" : "mirror",
+            title:
+              endedSession.mode === "camera"
+                ? `Camera Studio ${label}`
+                : `Mirrored ${label}`,
+            detail: e.payload.last_error || undefined,
+            durationMs,
+          });
+        }
         if (targetSerial) {
           const mirrorLabel = `mirror-${targetSerial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
           const closeMirror = () => {
@@ -128,7 +162,25 @@ function App() {
       })
       .catch(() => {});
     getNicknames().then(setNicknames).catch(() => {});
+    void useActivityStore.getState().load();
   }, [setSettings, setPreset, setAppPrefs, setNicknames]);
+
+  // Global Ctrl+K shortcut for Command Palette
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        const el = document.activeElement as HTMLElement | null;
+        const tag = el?.tagName?.toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select" || el?.isContentEditable) {
+          return;
+        }
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Minimize to tray on close when enabled (read live pref to avoid a stale closure).
   useEffect(() => {
@@ -283,12 +335,91 @@ function App() {
     })();
   }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmIsTrapped]);
 
+  const paletteCommands = useMemo(() => {
+    const hasOnlineDevice = Boolean(
+      selectedSerial &&
+        devices.some((d) => d.serial === selectedSerial && d.state === "device"),
+    );
+    const activeSession = selectedSerial
+      ? sessions.find((s) => s.serial === selectedSerial) ?? sessions[0]
+      : sessions[0];
+
+    return buildCommands({
+      selectedSerial,
+      hasOnlineDevice,
+      hasActiveSession: Boolean(activeSession),
+      kvmRunning,
+      switchTab: setActiveTab,
+      startMode: (mode: StudioMode) => {
+        const store = useAppStore.getState();
+        store.setCurrentMode(mode);
+        setActiveTab("devices");
+        if (!selectedSerial) return;
+        const base = store.settings;
+        const nextSettings =
+          mode === "flex"
+            ? { ...base, flexDisplay: true, embedded: true, noWindowAspectRatioLock: true, renderFit: "unscaled" as const }
+            : mode === "mirror"
+              ? { ...base, flexDisplay: false, embedded: true, noWindowAspectRatioLock: false, renderFit: "letterbox" as const }
+              : mode === "camera"
+                ? { ...base, flexDisplay: false, embedded: true, noAudio: true, stayAwake: true }
+                : { ...base, embedded: true, maxFps: 60, videoBitRate: 20_000_000, videoCodec: "av1" as const };
+        store.setSettings(nextSettings);
+        if (mode !== "camera") {
+          void startMirror(selectedSerial, nextSettings).catch((err) => {
+            const msg = String(err);
+            store.setError(msg);
+            logActivity({ kind: "mirror", title: "Failed to start mirror", detail: msg });
+          });
+        }
+      },
+      stopMirroring: () => {
+        if (!activeSession) return;
+        void stopMirror(activeSession.id).catch((err) => setError(String(err)));
+      },
+      takeScreenshot: () => {
+        if (!selectedSerial) return;
+        void takeScreenshot(selectedSerial)
+          .then((bytes) => {
+            const blob = new Blob([new Uint8Array(bytes)], { type: "image/png" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `anyleap-${selectedSerial.replace(/[^a-zA-Z0-9_-]/g, "_")}-${Date.now()}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+            logActivity({
+              kind: "screenshot",
+              title: `Screenshot saved`,
+              detail: selectedSerial,
+            });
+          })
+          .catch((err) => setError(String(err)));
+      },
+      openPair: () => setPairOpen(true),
+      openDoctor: () => openDoctor(selectedSerial),
+      openTimeline: () => setTimelineOpen(true),
+      checkForUpdates: () => {
+        void useAppUpdateStore.getState().checkForUpdates();
+      },
+      toggleKvmServer: () => {
+        const kvm = useKvmStore.getState();
+        if (kvm.status.is_host_running) {
+          void kvm.stopServer();
+        } else {
+          void kvm.startServer();
+        }
+      },
+    });
+  }, [selectedSerial, devices, sessions, kvmRunning, openDoctor, setTimelineOpen, setError]);
+
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#0c0c0e] text-zinc-100">
       <AppHeader
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onOpenPair={() => setPairOpen(true)}
+        onOpenCommands={() => setPaletteOpen(true)}
       />
 
       {error && (
@@ -335,6 +466,13 @@ function App() {
       </main>
 
       {pairOpen && <PairDialog onClose={() => setPairOpen(false)} />}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={paletteCommands}
+      />
+      <ConnectionDoctor />
+      <TimelineDrawer />
       <UpdateModal />
     </div>
   );

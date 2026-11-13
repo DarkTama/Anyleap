@@ -4,7 +4,9 @@ import type {
   CameraDeviceOption,
   CameraSettings,
   CoreSettings,
+  DeviceDetails,
   DeviceInfo,
+  DoctorCheck,
   MdnsService,
   MirrorRect,
   SessionExited,
@@ -130,3 +132,9 @@ export const pushClipboardImage = (serial: string, imageBytes: number[], filenam
 
 export const getBatteryInfo = (serial: string) =>
   invoke<{ level: number | null; charging: boolean }>("get_battery_info", { serial });
+
+export const getDeviceDetails = (serial: string) =>
+  invoke<DeviceDetails>("get_device_details", { serial });
+
+export const runConnectionDoctor = (serial?: string | null) =>
+  invoke<DoctorCheck[]>("run_connection_doctor", { serial: serial ?? null });

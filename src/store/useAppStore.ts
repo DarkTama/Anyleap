@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type {
+  BatteryInfo,
   CoreSettings,
+  DeviceDetails,
   DeviceInfo,
   QualityPreset,
   SavedDevice,
@@ -11,6 +13,7 @@ import type { ControlConfig } from "@/lib/controlConfig";
 import { DEFAULT_CONTROL_CONFIG } from "@/lib/controlConfig";
 import type { AppPrefs } from "@/lib/persist";
 import { DEFAULT_APP_PREFS } from "@/lib/persist";
+import type { StudioMode } from "@/components/deck/LaunchMatrix";
 
 interface AppStore {
   devices: DeviceInfo[];
@@ -23,8 +26,23 @@ interface AppStore {
   error: string | null;
   deviceToggles: Record<string, { screenOff?: boolean; asleep?: boolean; swipeScroll?: boolean }>;
   nicknames: Record<string, string>;
+  selectedSerial: string | null;
+  currentMode: StudioMode;
+  deviceDetailsCache: Record<string, DeviceDetails>;
+  batteryMap: Record<string, BatteryInfo>;
+  doctorOpen: boolean;
+  doctorSerial: string | null;
+  timelineOpen: boolean;
+
   setNicknames: (n: Record<string, string>) => void;
   setNickname: (serial: string, name: string) => void;
+  setSelectedSerial: (serial: string | null) => void;
+  setCurrentMode: (mode: StudioMode) => void;
+  setDeviceDetails: (serial: string, details: DeviceDetails) => void;
+  setBatteryInfo: (serial: string, info: BatteryInfo) => void;
+  openDoctor: (serial?: string | null) => void;
+  closeDoctor: () => void;
+  setTimelineOpen: (open: boolean) => void;
 
   setDevices: (d: DeviceInfo[]) => void;
   setSessions: (s: SessionInfo[]) => void;
@@ -50,7 +68,28 @@ export const useAppStore = create<AppStore>((set) => ({
   error: null,
   deviceToggles: {},
   nicknames: {},
+  selectedSerial: null,
+  currentMode: "flex",
+  deviceDetailsCache: {},
+  batteryMap: {},
+  doctorOpen: false,
+  doctorSerial: null,
+  timelineOpen: false,
+
   setNicknames: (nicknames) => set({ nicknames }),
+  setSelectedSerial: (selectedSerial) => set({ selectedSerial }),
+  setCurrentMode: (currentMode) => set({ currentMode }),
+  setDeviceDetails: (serial, details) =>
+    set((st) => ({
+      deviceDetailsCache: { ...st.deviceDetailsCache, [serial]: details },
+    })),
+  setBatteryInfo: (serial, info) =>
+    set((st) => ({
+      batteryMap: { ...st.batteryMap, [serial]: info },
+    })),
+  openDoctor: (serial = null) => set({ doctorOpen: true, doctorSerial: serial ?? null }),
+  closeDoctor: () => set({ doctorOpen: false }),
+  setTimelineOpen: (timelineOpen) => set({ timelineOpen }),
   setNickname: (serial, name) =>
     set((st) => {
       const next = { ...st.nicknames };

@@ -6,6 +6,7 @@ import { selectClass } from "@/lib/styles";
 import { listDeviceCameras, startCameraMirror } from "@/lib/tauri";
 import type { CameraDeviceOption, CameraSettings } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
+import { logActivity } from "@/stores/activityStore";
 interface CameraLaunchDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -96,7 +97,13 @@ export function CameraLaunchDialog({
       onClose();
       onStarted?.();
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg);
+      logActivity({
+        kind: "camera",
+        title: `Failed to start camera on ${deviceName}`,
+        detail: msg,
+      });
     } finally {
       setStarting(false);
     }

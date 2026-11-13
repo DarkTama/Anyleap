@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Camera, Check, Gamepad2, Pencil, Smartphone, Square, Unplug, Usb, Wifi, X } from "lucide-react";
+import { Camera, Check, Gamepad2, Pencil, Smartphone, Square, Stethoscope, Unplug, Usb, Wifi, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeviceStateBadge } from "./DeviceStateBadge";
 import { ControlBar } from "./ControlBar";
 import { useAppStore } from "@/store/useAppStore";
+import { logActivity } from "@/stores/activityStore";
 import { CameraLaunchDialog } from "./CameraLaunchDialog";
 import {
   connectDevice,
@@ -61,6 +62,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   const controlConfig = useAppStore((s) => s.controlConfig);
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
+  const openDoctor = useAppStore((s) => s.openDoctor);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -89,7 +91,9 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
     try {
       await startMirror(device.serial, settings);
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg);
+      logActivity({ kind: "mirror", title: `Failed to mirror ${device.serial}`, detail: msg });
     } finally {
       setBusy(false);
     }
@@ -115,6 +119,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
     try {
       await disconnectDevice(host, port);
       setDevices(await listDevices());
+      logActivity({ kind: "device", title: `Disconnected ${device.serial}` });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -180,6 +185,17 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
           )}
         </span>
         <span className="flex gap-2">
+          {device.state !== "device" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => openDoctor(device.serial)}
+              title="Run Connection Doctor"
+            >
+              <Stethoscope className="h-3.5 w-3.5" />
+              Troubleshoot
+            </Button>
+          )}
           {status === "mirroring" ? (
             <Button size="sm" variant="destructive" onClick={stop} disabled={busy}>
               <Square className="h-3.5 w-3.5" />
@@ -249,6 +265,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const controlConfig = useAppStore((s) => s.controlConfig);
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
+  const openDoctor = useAppStore((s) => s.openDoctor);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const serial = device?.serial;
@@ -323,6 +340,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
     try {
       await disconnectDevice(host, port);
       setDevices(await listDevices());
+      logActivity({ kind: "device", title: `Disconnected ${device.serial}` });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -394,9 +412,20 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
         </span>
         <span className="flex gap-2">
           {status === "offline" && (
-            <Button size="sm" variant="outline" onClick={reconnect} disabled={busy}>
-              {busy ? "…" : "Reconnect"}
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={reconnect} disabled={busy}>
+                {busy ? "…" : "Reconnect"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openDoctor(serial ?? `${saved.host}:${saved.port}`)}
+                title="Run Connection Doctor"
+              >
+                <Stethoscope className="h-3.5 w-3.5" />
+                Troubleshoot
+              </Button>
+            </>
           )}
           {status === "mirroring" && (
             <Button size="sm" variant="destructive" onClick={stop} disabled={busy}>

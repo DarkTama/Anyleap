@@ -169,3 +169,21 @@ export interface CameraSettings {
 }
 
 export type SessionMode = "display" | "camera";
+
+export interface DeviceDetails {
+  manufacturer: string;
+  model: string;
+  androidVersion: string;
+  sdk: number;
+  connection: "usb" | "wifi";
+}
+
+export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
+
+export interface DoctorCheck {
+  id: string;
+  label: string;
+  status: DoctorStatus;
+  detail: string;
+  fixHint: string | null;
+}

@@ -30,3 +30,9 @@ The capture, encoding, and transmission pipeline:
 - **Android Display**: `scrcpy` video stream over local ADB forward socket.
 - **PC Display**: DXGI Desktop Duplication API + Windows Media Foundation hardware encoder.
 - **Camera Studio**: Camera sensor capture routed to native Windows virtual camera or OBS virtual camera interface.
+
+### Studio Deck Diagnostics & Navigation
+- **Device Hero Card**: Top-of-deck summary showing the selected device's identity, Android version, connection type (`usb`/`wifi`), battery telemetry, live state, and primary actions.
+- **Activity Timeline**: Persistent local ring buffer (max 200 entries) recording mirroring sessions, screenshots, file/clipboard transfers, app launches, KVM peer events, and device connections.
+- **Command Palette**: Keyboard-driven (`Ctrl+K`) action launcher across tabs, streaming profiles, diagnostics, and KVM controls.
+- **Connection Doctor**: Sequenced diagnostic pipeline (`adb_binary` → `adb_server` → `scrcpy_binary` → `device_present` → `wireless_tcp` → `device_shell` → `android_version`) with actionable fix hints and plain-text report export.

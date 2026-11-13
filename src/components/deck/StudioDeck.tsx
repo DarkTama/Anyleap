@@ -1,7 +1,5 @@
 import { useState, useMemo } from "react";
 import {
-  Monitor,
-  RefreshCw,
   Play,
   Square,
   Sparkles,
@@ -11,6 +9,7 @@ import {
   MousePointer2,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
+import { logActivity } from "@/stores/activityStore";
 import {
   listDevices,
   startMirror,
@@ -21,8 +20,10 @@ import {
   resetDeviceDisplay,
 } from "@/lib/tauri";
 import { DeviceRack } from "./DeviceRack";
-import { LaunchMatrix, type StudioMode } from "./LaunchMatrix";
+import { DeviceHeroCard } from "./DeviceHeroCard";
+import { LaunchMatrix } from "./LaunchMatrix";
 import { DpiVisualizer } from "./DpiVisualizer";
+import { TimelinePanel } from "./TimelinePanel";
 import { CameraLaunchDialog } from "@/components/CameraLaunchDialog";
 import type { DeviceInfo, SavedDevice } from "@/lib/types";
 
@@ -30,7 +31,7 @@ interface StudioDeckProps {
   onOpenPair?: () => void;
 }
 
-export function StudioDeck({ onOpenPair: _onOpenPair }: StudioDeckProps) {
+export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
   const sessions = useAppStore((s) => s.sessions);
@@ -39,10 +40,14 @@ export function StudioDeck({ onOpenPair: _onOpenPair }: StudioDeckProps) {
   const setSettings = useAppStore((s) => s.setSettings);
   const setError = useAppStore((s) => s.setError);
   const nicknames = useAppStore((s) => s.nicknames);
+  const selectedSerial = useAppStore((s) => s.selectedSerial);
+  const setSelectedSerial = useAppStore((s) => s.setSelectedSerial);
+  const currentMode = useAppStore((s) => s.currentMode);
+  const setCurrentMode = useAppStore((s) => s.setCurrentMode);
+  const batteryMap = useAppStore((s) => s.batteryMap);
 
-  const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
-  const [currentMode, setCurrentMode] = useState<StudioMode>("flex");
   const [refreshing, setRefreshing] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
 
@@ -136,6 +141,11 @@ export function StudioDeck({ onOpenPair: _onOpenPair }: StudioDeckProps) {
           const connectedSerial = await connectDevice(saved.host, svc?.port ?? saved.port);
           targetSerial = connectedSerial;
           setDevices(await listDevices());
+          logActivity({
+            kind: "device",
+            title: `Connected ${saved.label || connectedSerial}`,
+            detail: connectedSerial,
+          });
         }
       }
 
@@ -145,9 +155,49 @@ export function StudioDeck({ onOpenPair: _onOpenPair }: StudioDeckProps) {
         await startMirror(targetSerial, settings);
       }
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg);
+      logActivity({
+        kind: "mirror",
+        title: `Failed to start mirror`,
+        detail: msg,
+      });
     } finally {
       setLaunching(false);
+    }
+  };
+
+  const isWireless = Boolean(
+    (selectedSerial && selectedSerial.includes(":")) ||
+      (activeDevice && !("state" in activeDevice)),
+  );
+
+  const handleReconnect = async () => {
+    if (!selectedSerial) return;
+    setReconnecting(true);
+    setError(null);
+    try {
+      const saved = savedDevices.find(
+        (s) => `${s.host}:${s.port}` === selectedSerial || s.lastSerial === selectedSerial,
+      );
+      const [hostPart, portPart] = selectedSerial.split(":");
+      const host = saved?.host ?? hostPart;
+      const fallbackPort = saved?.port ?? (portPart ? Number(portPart) : 5555);
+      if (!host) return;
+      const services = await discoverWireless().catch(() => []);
+      const svc = services.find((s) => s.host === host && s.serviceType.includes("connect"));
+      const connectedSerial = await connectDevice(host, svc?.port ?? fallbackPort);
+      setSelectedSerial(connectedSerial);
+      setDevices(await listDevices());
+      logActivity({
+        kind: "device",
+        title: `Reconnected ${saved?.label || connectedSerial}`,
+        detail: connectedSerial,
+      });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setReconnecting(false);
     }
   };
 
@@ -169,52 +219,25 @@ export function StudioDeck({ onOpenPair: _onOpenPair }: StudioDeckProps) {
 
       {/* Right Column: Workbench & Launch Bay */}
       <div className="flex flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-5 space-y-4">
-        {/* Selected Target Device Banner */}
-        <div className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#141417] px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div
-              className={`flex h-9 w-9 items-center justify-center rounded-lg border ${
-                isLive
-                  ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
-                  : "border-[#27272a] bg-[#18181c] text-zinc-400"
-              }`}
-            >
-              <Monitor className="h-4.5 w-4.5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-xs text-zinc-100">
-                  {targetDisplayName}
-                </span>
-                {targetNickname && (
-                  <span className="rounded bg-[#1a1a20] px-1.5 py-0.2 font-mono text-[9px] text-zinc-400 border border-[#27272a]">
-                    {targetNickname}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-400 mt-0.5">
-                <span>{selectedSerial || "No Device Selected"}</span>
-                <span>·</span>
-                <span className={isLive ? "text-emerald-400" : "text-zinc-500"}>
-                  {isLive ? (activeSession ? "STREAMING" : "CONNECTED") : "OFFLINE / SAVED"}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer"
-              title="Rescan devices"
-            >
-              <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin text-zinc-200" : "text-zinc-400"}`} />
-              <span className="hidden sm:inline">Refresh</span>
-            </button>
-          </div>
-        </div>
+        {/* Device Hero Card */}
+        <DeviceHeroCard
+          activeDevice={activeDevice}
+          selectedSerial={selectedSerial}
+          displayName={targetDisplayName}
+          nickname={targetNickname}
+          isLive={isLive}
+          isWireless={isWireless}
+          activeSession={activeSession}
+          currentMode={currentMode}
+          battery={selectedSerial ? batteryMap[selectedSerial] : undefined}
+          launching={launching}
+          reconnecting={reconnecting}
+          refreshing={refreshing}
+          onMirror={handlePrimaryLaunch}
+          onReconnect={handleReconnect}
+          onRefresh={handleRefresh}
+          onOpenPair={onOpenPair}
+        />
 
         {/* Mode Matrix Grid */}
         <LaunchMatrix currentMode={currentMode} onSelectMode={setCurrentMode} />
@@ -459,6 +482,9 @@ export function StudioDeck({ onOpenPair: _onOpenPair }: StudioDeckProps) {
           )}
         </div>
       </div>
+
+      {/* Deck Side Panel: Activity Timeline */}
+      <TimelinePanel />
 
       {/* Camera Launch Dialog */}
       {selectedSerial && (

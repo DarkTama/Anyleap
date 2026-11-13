@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { selectClass } from "@/lib/styles";
 import { useAppStore } from "@/store/useAppStore";
+import { logActivity } from "@/stores/activityStore";
 import { connectDevice, discoverWireless, listDevices, pairDevice } from "@/lib/tauri";
 import { upsertSaved } from "@/lib/savedDevices";
 import { generatePairingChallenge, type PairingChallenge } from "@/lib/qr";
@@ -148,6 +149,10 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
       }
       if (cancelled) return;
       await finishConnected(connect.host, connect.port);
+      logActivity({
+        kind: "device",
+        title: `Paired & connected ${connect.host}:${connect.port}`,
+      });
     })();
     return () => {
       cancelled = true;
@@ -179,6 +184,10 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
       setStatus("Connecting…");
       await connectDevice(connect.host, connect.port);
       await finishConnected(connect.host, connect.port);
+      logActivity({
+        kind: "device",
+        title: `Paired & connected ${connect.host}:${connect.port}`,
+      });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -206,6 +215,10 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
       setStatus("Connecting…");
       await connectDevice(ip, cPort);
       await finishConnected(ip, cPort);
+      logActivity({
+        kind: "device",
+        title: `Paired & connected ${ip}:${cPort}`,
+      });
     } catch (e) {
       setError(String(e));
     } finally {

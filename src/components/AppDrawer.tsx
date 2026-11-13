@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { Loader2, Play, RefreshCw, Rocket, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { listInstalledApps, launchApp } from "@/lib/tauri";
+import { logActivity } from "@/stores/activityStore";
 
 function formatAppName(pkg: string): string {
   const parts = pkg.split(".").filter(Boolean);
@@ -67,6 +68,11 @@ export function AppDrawer({
     setError(null);
     try {
       await launchApp(serial, pkg);
+      logActivity({
+        kind: "app",
+        title: `Launched ${formatAppName(pkg)}`,
+        detail: serial,
+      });
       onClose();
     } catch (e) {
       setError(String(e));

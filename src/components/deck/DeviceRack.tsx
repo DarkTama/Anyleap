@@ -12,8 +12,10 @@ import {
   Play,
   Square,
   RefreshCw,
+  Stethoscope,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
+import { logActivity } from "@/stores/activityStore";
 import {
   connectDevice,
   disconnectDevice,
@@ -38,11 +40,6 @@ interface DeviceRackProps {
   onSelectDevice: (serial: string) => void;
 }
 
-interface BatteryState {
-  level: number | null;
-  charging: boolean;
-}
-
 export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) {
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
@@ -53,11 +50,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   const settings = useAppStore((s) => s.settings);
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
+  const batteryMap = useAppStore((s) => s.batteryMap);
+  const setBatteryInfo = useAppStore((s) => s.setBatteryInfo);
+  const openDoctor = useAppStore((s) => s.openDoctor);
 
-  const [batteryMap, setBatteryMap] = useState<Record<string, BatteryState>>({});
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [busySerial, setBusySerial] = useState<string | null>(null);
+  const [failedSerial, setFailedSerial] = useState<string | null>(null);
 
   const { savedRows, otherDevices } = buildRows(devices, savedDevices, sessions);
 
@@ -70,7 +70,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
           try {
             const info = await getBatteryInfo(dev.serial);
             if (!cancelled) {
-              setBatteryMap((prev) => ({ ...prev, [dev.serial]: info }));
+              setBatteryInfo(dev.serial, info);
             }
           } catch {
             // best-effort
@@ -85,7 +85,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
       cancelled = true;
       clearInterval(timer);
     };
-  }, [devices]);
+  }, [devices, setBatteryInfo]);
 
   // If no device is selected yet and devices exist, pick the first available
   useEffect(() => {
@@ -121,12 +121,19 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   const handleConnect = async (saved: SavedDevice) => {
     setBusySerial(saved.id);
     setError(null);
+    setFailedSerial(null);
     try {
       const services = await discoverWireless().catch(() => []);
       const svc = services.find((s) => s.host === saved.host && s.serviceType.includes("connect"));
-      await connectDevice(saved.host, svc?.port ?? saved.port);
+      const connectedSerial = await connectDevice(saved.host, svc?.port ?? saved.port);
       setDevices(await listDevices());
+      logActivity({
+        kind: "device",
+        title: `Connected ${saved.label || connectedSerial}`,
+        detail: connectedSerial,
+      });
     } catch (e) {
+      setFailedSerial(saved.id);
       setError(String(e));
     } finally {
       setBusySerial(null);
@@ -141,6 +148,10 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
     try {
       await disconnectDevice(host, Number(port));
       setDevices(await listDevices());
+      logActivity({
+        kind: "device",
+        title: `Disconnected ${serial}`,
+      });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -162,10 +173,18 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   const handleMirror = async (serial: string) => {
     setBusySerial(serial);
     setError(null);
+    setFailedSerial(null);
     try {
       await startMirror(serial, settings);
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setFailedSerial(serial);
+      setError(msg);
+      logActivity({
+        kind: "mirror",
+        title: `Failed to mirror ${serial}`,
+        detail: msg,
+      });
     } finally {
       setBusySerial(null);
     }
@@ -355,6 +374,17 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   </button>
                 )}
 
+                {(dev.state !== "device" || failedSerial === dev.serial) && (
+                  <button
+                    type="button"
+                    onClick={() => openDoctor(dev.serial)}
+                    className="btn-tactile rounded-md bg-amber-500/15 p-1 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
+                    title="Run Connection Doctor"
+                  >
+                    <Stethoscope className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
                 {wireless && (
                   <button
                     type="button"
@@ -522,6 +552,17 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   >
                     <Play className="h-3 w-3 fill-zinc-300" />
                     Launch
+                  </button>
+                )}
+
+                {(failedSerial === saved.id || (serial && failedSerial === serial) || (device && device.state !== "device")) && (
+                  <button
+                    type="button"
+                    onClick={() => openDoctor(targetSerial)}
+                    className="btn-tactile rounded-md bg-amber-500/15 p-1 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
+                    title="Run Connection Doctor"
+                  >
+                    <Stethoscope className="h-3.5 w-3.5" />
                   </button>
                 )}
 
