@@ -19,3 +19,8 @@ pub mod session_sync;
 pub mod audio;
 pub mod media_keys;
 // --- /SPEC-25b ---
+// --- SPEC-25a ---
+pub mod cursor_scheme;
+pub mod dragdrop;
+pub mod staging;
+// --- end SPEC-25a ---

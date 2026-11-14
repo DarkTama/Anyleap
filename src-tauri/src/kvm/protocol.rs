@@ -163,7 +163,68 @@ pub enum KvmPacket {
         is_down: bool,
     },
     // --- /SPEC-25b ---
+    // --- SPEC-25a ---
+    DragOffer {
+        drag_id: String,
+        files: Vec<FileMeta>,
+        #[serde(default = "default_drag_button")]
+        button: u8,
+    },
+    DragReady {
+        drag_id: String,
+    },
+    DragCancel {
+        drag_id: String,
+    },
+    DragResult {
+        drag_id: String,
+        outcome: DragOutcome,
+        #[serde(default)]
+        notice: Option<String>,
+    },
+    FileClipOffer {
+        offer_id: String,
+        files: Vec<FileMeta>,
+    },
+    ClipFetchRequest {
+        offer_id: String,
+    },
+    CursorSchemeOffer {
+        roles: Vec<String>,
+    },
+    // --- end SPEC-25a ---
 }
+
+fn default_drag_button() -> u8 {
+    1
+}
+
+// --- SPEC-25a ---
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DragOutcome {
+    Done,
+    Failed,
+    Cancelled,
+}
+
+impl DragOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileMeta {
+    pub rel_path: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+// --- end SPEC-25a ---
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UdpMouseDelta {
@@ -226,6 +287,25 @@ pub enum Outbound {
         path: std::path::PathBuf,
     },
     // --- end SPEC-25c ---
+    // --- SPEC-25a ---
+    DragFile {
+        drag_id: String,
+        rel_path: String,
+        path: std::path::PathBuf,
+        size: u64,
+    },
+    ClipFile {
+        offer_id: String,
+        rel_path: String,
+        path: std::path::PathBuf,
+        size: u64,
+    },
+    CursorFile {
+        role: String,
+        name: String,
+        data: Vec<u8>,
+    },
+    // --- end SPEC-25a ---
 }
 
 /// Bulk transfers completed on a unidirectional stream.
@@ -261,6 +341,25 @@ pub enum TransferEvent {
         reason: String,
     },
     // --- end SPEC-25c ---
+    // --- SPEC-25a ---
+    DragFile {
+        drag_id: String,
+        rel_path: String,
+        path: std::path::PathBuf,
+        size: u64,
+    },
+    ClipFile {
+        offer_id: String,
+        rel_path: String,
+        path: std::path::PathBuf,
+        size: u64,
+    },
+    CursorFile {
+        role: String,
+        name: String,
+        data: Vec<u8>,
+    },
+    // --- end SPEC-25a ---
 }
 
 /// Header at the start of every unidirectional stream (raw bytes follow).
@@ -276,6 +375,23 @@ pub enum StreamHeader {
         size: u64,
     },
     // --- end SPEC-25c ---
+    // --- SPEC-25a ---
+    DragFile {
+        drag_id: String,
+        rel_path: String,
+        size: u64,
+    },
+    ClipFile {
+        offer_id: String,
+        rel_path: String,
+        size: u64,
+    },
+    CursorFile {
+        role: String,
+        name: String,
+        size: u64,
+    },
+    // --- end SPEC-25a ---
 }
 
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -570,4 +686,49 @@ mod tests {
         assert_eq!(decode_audio_datagram(&bad_tag), None);
     }
     // --- /SPEC-25b ---
+
+    // --- SPEC-25a ---
+    #[test]
+    fn test_spec25a_packets_and_stream_headers_roundtrip() {
+        let packets = vec![
+            KvmPacket::DragOffer {
+                drag_id: "d-1".into(),
+                files: vec![
+                    FileMeta { rel_path: "folder".into(), size: 0, is_dir: true },
+                    FileMeta { rel_path: "folder/a.txt".into(), size: 42, is_dir: false },
+                ],
+                button: 1,
+            },
+            KvmPacket::DragReady { drag_id: "d-1".into() },
+            KvmPacket::DragCancel { drag_id: "d-1".into() },
+            KvmPacket::DragResult {
+                drag_id: "d-1".into(),
+                outcome: DragOutcome::Failed,
+                notice: Some("Drop was not accepted by the target app".into()),
+            },
+            KvmPacket::FileClipOffer {
+                offer_id: "c-1".into(),
+                files: vec![FileMeta { rel_path: "pic.png".into(), size: 1024, is_dir: false }],
+            },
+            KvmPacket::ClipFetchRequest { offer_id: "c-1".into() },
+            KvmPacket::CursorSchemeOffer { roles: vec!["Arrow".into(), "Hand".into()] },
+        ];
+        for p in packets {
+            let json = serde_json::to_string(&p).unwrap();
+            let rt: KvmPacket = serde_json::from_str(&json).unwrap();
+            assert_eq!(p, rt);
+        }
+
+        let headers = vec![
+            StreamHeader::DragFile { drag_id: "d-1".into(), rel_path: "folder/a.txt".into(), size: 42 },
+            StreamHeader::ClipFile { offer_id: "c-1".into(), rel_path: "pic.png".into(), size: 1024 },
+            StreamHeader::CursorFile { role: "Arrow".into(), name: "arrow.cur".into(), size: 512 },
+        ];
+        for h in headers {
+            let json = serde_json::to_string(&h).unwrap();
+            let rt: StreamHeader = serde_json::from_str(&json).unwrap();
+            assert_eq!(h, rt);
+        }
+    }
+    // --- end SPEC-25a ---
 }

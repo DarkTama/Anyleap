@@ -38,6 +38,83 @@ impl KeyDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyClass {
+    Letter,
+    Digit,
+    Punct,
+    Space,
+    Nav,
+    Fn,
+    Modifier,
+    Media,
+    Other,
+}
+
+impl KeyClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Letter => "letter",
+            Self::Digit => "digit",
+            Self::Punct => "punct",
+            Self::Space => "space",
+            Self::Nav => "nav",
+            Self::Fn => "fn",
+            Self::Modifier => "modifier",
+            Self::Media => "media",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Classify a Windows virtual-key code into a privacy-safe key class.
+pub fn classify_vk(vk: u16) -> KeyClass {
+    match vk {
+        0x41..=0x5A => KeyClass::Letter,
+        0x30..=0x39 | 0x60..=0x69 => KeyClass::Digit,
+        0x6A..=0x6F | 0xBA..=0xC0 | 0xDB..=0xDF | 0xE2 => KeyClass::Punct,
+        0x20 => KeyClass::Space,
+        0x21..=0x28 | 0x2D | 0x2E => KeyClass::Nav,
+        0x70..=0x87 => KeyClass::Fn,
+        0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5 => KeyClass::Modifier,
+        0xA6..=0xB7 => KeyClass::Media,
+        _ => KeyClass::Other,
+    }
+}
+
+/// Exact vk/scan codes are logged ONLY for modifiers, Esc, Enter, Tab,
+/// Backspace, function keys, media/volume keys, and Windows keys.
+pub fn should_log_exact_vk(vk: u16) -> bool {
+    matches!(
+        vk,
+        0x08 // VK_BACK
+        | 0x09 // VK_TAB
+        | 0x0D // VK_RETURN
+        | 0x10..=0x12 // VK_SHIFT, VK_CONTROL, VK_MENU
+        | 0x1B // VK_ESCAPE
+        | 0x5B..=0x5C // VK_LWIN, VK_RWIN
+        | 0x70..=0x87 // VK_F1..=VK_F24
+        | 0xA0..=0xA5 // VK_LSHIFT..=VK_RMENU
+        | 0xAD..=0xB3 // VK_VOLUME_MUTE..=VK_MEDIA_PLAY_PAUSE
+    )
+}
+
+fn format_key_vk_field(vk: u16) -> String {
+    if should_log_exact_vk(vk) {
+        format!("0x{vk:02X}")
+    } else {
+        "redacted".to_string()
+    }
+}
+
+fn format_key_scan_field(vk: u16, scan_code: u16) -> String {
+    if should_log_exact_vk(vk) {
+        format!("0x{scan_code:02X}")
+    } else {
+        "redacted".to_string()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookKind {
     Keyboard,
     Mouse,
@@ -98,7 +175,13 @@ impl KeySnapshot {
         }
         let mut parts: Vec<String> = self.keys[..self.len as usize]
             .iter()
-            .map(|k| format!("0x{:02X}", k.key_code))
+            .map(|k| {
+                if should_log_exact_vk(k.key_code) {
+                    format!("0x{:02X}", k.key_code)
+                } else {
+                    classify_vk(k.key_code).as_str().to_string()
+                }
+            })
             .collect();
         if self.total_count > self.len as usize {
             parts.push(format!("...+{}", self.total_count - self.len as usize));
@@ -113,12 +196,20 @@ impl KeySnapshot {
         let mut parts: Vec<String> = self.keys[..self.len as usize]
             .iter()
             .map(|k| {
-                format!(
-                    "0x{:02X}(scan=0x{:02X},ext={})",
-                    k.key_code,
-                    k.scan_code,
-                    u8::from(k.extended)
-                )
+                if should_log_exact_vk(k.key_code) {
+                    format!(
+                        "0x{:02X}(scan=0x{:02X},ext={})",
+                        k.key_code,
+                        k.scan_code,
+                        u8::from(k.extended)
+                    )
+                } else {
+                    format!(
+                        "{}(ext={})",
+                        classify_vk(k.key_code).as_str(),
+                        u8::from(k.extended)
+                    )
+                }
             })
             .collect();
         if self.total_count > self.len as usize {
@@ -559,8 +650,11 @@ fn format_event_line(
             hwnd,
         } => {
             let w = window_resolver(*hwnd, false);
+            let key_class = classify_vk(*vk).as_str();
+            let vk_field = format_key_vk_field(*vk);
+            let scan_field = format_key_scan_field(*vk, *scan_code);
             format!(
-                "ts_us={ts_us} event=KEY vk=0x{vk:02X} scan=0x{scan_code:02X} state={} ext={} injected={} trapped={} decision={} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=KEY key_class={key_class} vk={vk_field} scan={scan_field} state={} ext={} injected={} trapped={} decision={} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
                 if *is_down { "DOWN" } else { "UP" },
                 u8::from(*extended),
                 u8::from(*injected),
@@ -692,8 +786,11 @@ fn format_event_line(
             focus_hwnd,
         } => {
             let w = window_resolver(*hwnd, true);
+            let key_class = classify_vk(*vk).as_str();
+            let vk_field = format_key_vk_field(*vk);
+            let scan_field = format_key_scan_field(*vk, *scan_code);
             format!(
-                "ts_us={ts_us} event=REMOTE_KEY vk=0x{vk:02X} scan=0x{scan_code:02X} state={} ext={} sent={sent} last_err={last_err} hwnd=0x{hwnd:X} focus_hwnd={} elevated={} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=REMOTE_KEY key_class={key_class} vk={vk_field} scan={scan_field} state={} ext={} sent={sent} last_err={last_err} hwnd=0x{hwnd:X} focus_hwnd={} elevated={} proc=\"{}\" title=\"{}\"\n",
                 if *is_down { "DOWN" } else { "UP" },
                 u8::from(*extended),
                 format_focus_hwnd(*focus_hwnd),
@@ -819,39 +916,204 @@ impl RotatingLogWriter {
     }
 }
 
+#[cfg(windows)]
+fn resolve_proc_name_for_pid(pid: u32) -> String {
+    if pid == 0 {
+        return "none".to_string();
+    }
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return format!("pid:{pid}");
+        };
+        let mut path_buf = [0u16; 512];
+        let mut len = path_buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(path_buf.as_mut_ptr()),
+            &mut len,
+        )
+        .is_ok();
+        let _ = CloseHandle(handle);
+        if ok && len > 0 {
+            let full = String::from_utf16_lossy(&path_buf[..len as usize]);
+            let name = Path::new(&full)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&full);
+            sanitize_log_str(name)
+        } else {
+            format!("pid:{pid}")
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn query_capture_snapshot() -> (isize, u32, String, u32, isize) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    };
+
+    unsafe {
+        let mut fg_info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let (cap_hwnd, cap_pid, cap_proc) = if GetGUIThreadInfo(0, &mut fg_info).is_ok()
+            && !fg_info.hwndCapture.0.is_null()
+        {
+            let h = fg_info.hwndCapture;
+            let mut pid = 0u32;
+            let _ = GetWindowThreadProcessId(h, Some(&mut pid));
+            let proc_name = resolve_proc_name_for_pid(pid);
+            (h.0 as isize, pid, proc_name)
+        } else {
+            (0, 0, "none".to_string())
+        };
+
+        let our_pid = GetCurrentProcessId();
+        let mut own_tid = 0u32;
+        let mut own_hwnd = 0isize;
+        if let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) {
+            let mut entry = THREADENTRY32 {
+                dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+                ..Default::default()
+            };
+            if Thread32First(snap, &mut entry).is_ok() {
+                loop {
+                    if entry.th32OwnerProcessID == our_pid {
+                        let mut t_info = GUITHREADINFO {
+                            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                            ..Default::default()
+                        };
+                        if GetGUIThreadInfo(entry.th32ThreadID, &mut t_info).is_ok()
+                            && !t_info.hwndCapture.0.is_null()
+                        {
+                            own_tid = entry.th32ThreadID;
+                            own_hwnd = t_info.hwndCapture.0 as isize;
+                            break;
+                        }
+                    }
+                    if Thread32Next(snap, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snap);
+        }
+
+        (cap_hwnd, cap_pid, cap_proc, own_tid, own_hwnd)
+    }
+}
+
+#[cfg(not(windows))]
+fn query_capture_snapshot() -> (isize, u32, String, u32, isize) {
+    (0, 0, "none".to_string(), 0, 0)
+}
+
+fn format_dnd_state_payload() -> String {
+    let snap = super::dragdrop::dnd_state_snapshot();
+    let (cap_hwnd, cap_pid, cap_proc, own_tid, own_hwnd) = query_capture_snapshot();
+    format!(
+        "DND_STATE target_tid={} local_src_active={} leap_in_progress={} catcher_visible={} remote_btn_down={} capture_hwnd=0x{:X} capture_pid={} capture_proc=\"{}\" own_capture_tid={} own_capture_hwnd=0x{:X}",
+        snap.target_tid,
+        snap.local_src_active,
+        snap.leap_in_progress,
+        snap.catcher_visible,
+        snap.remote_btn_down,
+        cap_hwnd,
+        cap_pid,
+        cap_proc,
+        own_tid,
+        own_hwnd,
+    )
+}
+
+pub fn should_emit_dnd_state_line(last_line: &mut Option<String>, current: &str) -> bool {
+    if last_line.as_deref() == Some(current) {
+        false
+    } else {
+        *last_line = Some(current.to_string());
+        true
+    }
+}
+
 fn writer_loop(rx: mpsc::Receiver<LogCommand>) {
     let mut writer = RotatingLogWriter::new(PathBuf::new(), MAX_LOG_BYTES);
     let mut seen_gen = 0u64;
+    let mut last_dnd_sample = std::time::Instant::now();
+    let mut last_dnd_line: Option<String> = None;
 
-    while let Ok(first) = rx.recv() {
+    loop {
+        let recv_res = rx.recv_timeout(std::time::Duration::from_secs(5));
+
         if let Ok(guard) = path_state().lock() {
             if guard.1 != seen_gen {
                 seen_gen = guard.1;
                 writer.set_path(guard.0.clone());
+                last_dnd_line = None;
             }
         }
 
+        let mut wrote_any = false;
         let mut acks: Vec<mpsc::SyncSender<()>> = Vec::new();
-        match first {
-            LogCommand::Event(ev) => {
-                let line = format_event_line(&ev, resolve_window_details);
-                let _ = writer.write_line(&line);
+        match recv_res {
+            Ok(first) => {
+                match first {
+                    LogCommand::Event(ev) => {
+                        let line = format_event_line(&ev, resolve_window_details);
+                        let _ = writer.write_line(&line);
+                        wrote_any = true;
+                    }
+                    LogCommand::Flush(ack) => {
+                        acks.push(ack);
+                    }
+                }
+
+                while let Ok(cmd) = rx.try_recv() {
+                    match cmd {
+                        LogCommand::Event(ev) => {
+                            let line = format_event_line(&ev, resolve_window_details);
+                            let _ = writer.write_line(&line);
+                            wrote_any = true;
+                        }
+                        LogCommand::Flush(ack) => {
+                            acks.push(ack);
+                        }
+                    }
+                }
             }
-            LogCommand::Flush(ack) => {
-                acks.push(ack);
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        while let Ok(cmd) = rx.try_recv() {
-            match cmd {
-                LogCommand::Event(ev) => {
+        if is_enabled() {
+            if last_dnd_sample.elapsed() >= std::time::Duration::from_secs(5) {
+                last_dnd_sample = std::time::Instant::now();
+                let payload = format_dnd_state_payload();
+                if should_emit_dnd_state_line(&mut last_dnd_line, &payload) {
+                    let ev = DebugEvent::Note {
+                        ts_us: now_us(),
+                        hwnd: foreground_hwnd_raw(),
+                        text: payload,
+                    };
                     let line = format_event_line(&ev, resolve_window_details);
                     let _ = writer.write_line(&line);
-                }
-                LogCommand::Flush(ack) => {
-                    acks.push(ack);
+                    wrote_any = true;
                 }
             }
+        } else {
+            last_dnd_line = None;
         }
 
         let dropped = DROPPED_EVENTS.swap(0, Ordering::Relaxed);
@@ -861,8 +1123,11 @@ fn writer_loop(rx: mpsc::Receiver<LogCommand>) {
                 now_us()
             );
             let _ = writer.write_line(&note);
+            wrote_any = true;
         }
-        writer.flush();
+        if wrote_any || !acks.is_empty() {
+            writer.flush();
+        }
         for ack in acks {
             let _ = ack.try_send(());
         }
@@ -903,13 +1168,35 @@ mod tests {
         );
         assert!(key_line.contains("ts_us=123456"));
         assert!(key_line.contains("event=KEY"));
-        assert!(key_line.contains("vk=0x41"));
+        assert!(key_line.contains("key_class=letter"));
+        assert!(key_line.contains("vk=redacted"));
+        assert!(key_line.contains("scan=redacted"));
+        assert!(!key_line.contains("0x41"));
+        assert!(!key_line.contains("0x1E"));
         assert!(key_line.contains("state=DOWN"));
         assert!(key_line.contains("injected=0"));
         assert!(key_line.contains("trapped=1"));
         assert!(key_line.contains("decision=forward"));
         assert!(key_line.contains("hwnd=0x1234"));
         assert!(key_line.contains("proc=\"notepad.exe\""));
+
+        let allowlisted_key = format_event_line(
+            &DebugEvent::Key {
+                ts_us: 123457,
+                vk: 0x1B, // Esc
+                scan_code: 0x01,
+                is_down: true,
+                extended: false,
+                injected: false,
+                is_trapped: true,
+                decision: KeyDecision::Forward,
+                hwnd: 0x1234,
+            },
+            stub_window,
+        );
+        assert!(allowlisted_key.contains("key_class=other"));
+        assert!(allowlisted_key.contains("vk=0x1B"));
+        assert!(allowlisted_key.contains("scan=0x01"));
 
         let slow_line = format_event_line(
             &DebugEvent::SlowHook {
@@ -1008,9 +1295,27 @@ mod tests {
             },
             stub_window,
         );
-        assert!(remote_key.contains("event=REMOTE_KEY vk=0x41"));
+        assert!(remote_key.contains("event=REMOTE_KEY key_class=letter vk=redacted scan=redacted"));
+        assert!(!remote_key.contains("0x41"));
+        assert!(!remote_key.contains("0x1E"));
         assert!(remote_key.contains("sent=0 last_err=5"));
         assert!(remote_key.contains("hwnd=0x100 focus_hwnd=0x200 elevated=0"));
+
+        let remote_mod = format_event_line(
+            &DebugEvent::RemoteKey {
+                ts_us: 7001,
+                vk: 0xA2, // VK_LCONTROL
+                scan_code: 0x1D,
+                is_down: true,
+                extended: false,
+                sent: 1,
+                last_err: 0,
+                hwnd: 0x100,
+                focus_hwnd: Some(0x200),
+            },
+            stub_window,
+        );
+        assert!(remote_mod.contains("event=REMOTE_KEY key_class=modifier vk=0xA2 scan=0x1D"));
 
         let remote_btn = format_event_line(
             &DebugEvent::RemoteMouseButton {
@@ -1083,5 +1388,67 @@ mod tests {
         assert_eq!(disk, "immediate-line\n");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn key_classifier_covers_classes_and_privacy_allowlist() {
+        assert_eq!(classify_vk(0x41), KeyClass::Letter); // A
+        assert_eq!(classify_vk(0x5A), KeyClass::Letter); // Z
+        assert_eq!(classify_vk(0x30), KeyClass::Digit); // 0
+        assert_eq!(classify_vk(0x65), KeyClass::Digit); // Numpad 5
+        assert_eq!(classify_vk(0xBA), KeyClass::Punct); // ;
+        assert_eq!(classify_vk(0x6B), KeyClass::Punct); // Numpad +
+        assert_eq!(classify_vk(0x20), KeyClass::Space); // Space
+        assert_eq!(classify_vk(0x25), KeyClass::Nav); // Left
+        assert_eq!(classify_vk(0x2E), KeyClass::Nav); // Delete
+        assert_eq!(classify_vk(0x70), KeyClass::Fn); // F1
+        assert_eq!(classify_vk(0x87), KeyClass::Fn); // F24
+        assert_eq!(classify_vk(0x10), KeyClass::Modifier); // Shift
+        assert_eq!(classify_vk(0xA2), KeyClass::Modifier); // LCtrl
+        assert_eq!(classify_vk(0x5B), KeyClass::Modifier); // LWin
+        assert_eq!(classify_vk(0xAD), KeyClass::Media); // Volume Mute
+        assert_eq!(classify_vk(0xB3), KeyClass::Media); // Media Play/Pause
+        assert_eq!(classify_vk(0x1B), KeyClass::Other); // Esc
+        assert_eq!(classify_vk(0x0D), KeyClass::Other); // Enter
+
+        // Redacted non-allowlisted keys
+        for vk in [0x41, 0x5A, 0x30, 0x65, 0xBA, 0x20, 0x25, 0x2E, 0x14, 0x2C] {
+            assert!(!should_log_exact_vk(vk), "vk 0x{vk:02X} must be redacted");
+        }
+
+        // Allowlisted keys
+        for vk in [
+            0x10, 0x11, 0x12, 0xA0, 0xA2, 0xA5, // modifiers
+            0x1B, 0x0D, 0x09, 0x08, // Esc, Enter, Tab, Backspace
+            0x70, 0x7B, 0x87, // Function keys
+            0xAD, 0xAE, 0xAF, 0xB0, 0xB3, // Media/volume keys
+            0x5B, 0x5C, // Windows keys
+        ] {
+            assert!(should_log_exact_vk(vk), "vk 0x{vk:02X} must be allowlisted");
+        }
+
+        // KeySnapshot also redacts non-allowlisted keys while keeping allowlisted ones
+        let snap = KeySnapshot::from_slice(&[
+            TrackedKey {
+                key_code: 0x41,
+                scan_code: 0x1E,
+                extended: false,
+            },
+            TrackedKey {
+                key_code: 0x5B,
+                scan_code: 0x5B,
+                extended: true,
+            },
+        ]);
+        assert_eq!(snap.format_vks(), "[letter,0x5B]");
+        assert_eq!(snap.format_detailed(), "[letter(ext=0),0x5B(scan=0x5B,ext=1)]");
+    }
+
+    #[test]
+    fn dnd_state_dedup_logs_only_on_change() {
+        let mut last = None;
+        assert!(should_emit_dnd_state_line(&mut last, "DND_STATE target_tid=0"));
+        assert!(!should_emit_dnd_state_line(&mut last, "DND_STATE target_tid=0"));
+        assert!(should_emit_dnd_state_line(&mut last, "DND_STATE target_tid=42"));
     }
 }

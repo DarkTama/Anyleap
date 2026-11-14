@@ -108,6 +108,10 @@ pub fn run() {
             kvm::commands::kvm_set_audio_settings,
             kvm::commands::kvm_get_audio_state,
             // --- /SPEC-25b ---
+            // --- SPEC-25a ---
+            kvm::dragdrop::kvm_set_files_settings,
+            kvm::commands::kvm_fetch_clip,
+            // --- end SPEC-25a ---
             phone_files::list_device_dir,
             phone_files::pull_device_file,
             phone_files::push_to_device,

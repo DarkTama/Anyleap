@@ -174,11 +174,45 @@ pub fn peer_fingerprint(conn: &quinn::Connection) -> Option<String> {
     certs.first().map(|c| fingerprint(c))
 }
 
+/// Centralized QUIC transport tuning knobs (SPEC-25a R2).
+/// Kept in one place so window sizes, congestion control, and bulk chunk/pacing
+/// settings can be inspected or reverted without hunting across modules.
+pub mod transport_tuning {
+    use std::time::Duration;
+
+    pub const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(2);
+    pub const MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+
+    /// Smaller connection/stream windows closer to `quinn` defaults prevent
+    /// multi-megabyte bufferbloat inside LAN/Wi-Fi queues so 12-byte mouse
+    /// datagrams aren't delayed behind huge congestion windows.
+    pub const RECEIVE_WINDOW_BYTES: u32 = 4 * 1024 * 1024;
+    pub const STREAM_RECEIVE_WINDOW_BYTES: u32 = 1_250_000;
+    pub const SEND_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
+
+    /// Chunk size fed to bulk uni streams (`ClipFile`/`DragFile`).
+    pub const BULK_STREAM_CHUNK_BYTES: usize = 64 * 1024;
+    pub const BULK_STREAM_PRIORITY: i32 = -10;
+    pub const BULK_PACE_INTERVAL: Option<Duration> = None;
+
+    /// Build the QUIC transport config using the stable `CubicConfig`
+    /// (`BbrConfig` is marked experimental in `quinn-proto 0.11.15`).
+    pub fn build_transport_config() -> std::sync::Arc<quinn::TransportConfig> {
+        let mut t = quinn::TransportConfig::default();
+        t.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
+        t.max_idle_timeout(Some(MAX_IDLE_TIMEOUT.try_into().unwrap()));
+        t.receive_window(RECEIVE_WINDOW_BYTES.into());
+        t.stream_receive_window(STREAM_RECEIVE_WINDOW_BYTES.into());
+        t.send_window(SEND_WINDOW_BYTES);
+        t.congestion_controller_factory(std::sync::Arc::new(
+            quinn::congestion::CubicConfig::default(),
+        ));
+        std::sync::Arc::new(t)
+    }
+}
+
 fn transport_config() -> Arc<quinn::TransportConfig> {
-    let mut t = quinn::TransportConfig::default();
-    t.keep_alive_interval(Some(std::time::Duration::from_secs(2)));
-    t.max_idle_timeout(Some(std::time::Duration::from_secs(10).try_into().unwrap()));
-    Arc::new(t)
+    transport_tuning::build_transport_config()
 }
 
 pub fn server_config(id: &Identity) -> Result<quinn::ServerConfig, String> {
