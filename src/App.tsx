@@ -37,7 +37,8 @@ import { loadControlConfig } from "@/lib/controlConfig";
 import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
 import { UpdateModal } from "@/components/shell/UpdateModal";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
-import { useKvmStore } from "@/stores/kvmStore";
+import { loadAllowControl, useKvmStore } from "@/stores/kvmStore";
+import { kvmDebugNote, kvmSetDebugLog } from "@/services/kvmService";
 import { logActivity, useActivityStore } from "@/stores/activityStore";
 import { buildCommands } from "@/lib/commandPalette";
 import type { StudioMode } from "@/components/deck/LaunchMatrix";
@@ -75,7 +76,9 @@ function App() {
   const selectedSerial = useAppStore((s) => s.selectedSerial);
   const openDoctor = useAppStore((s) => s.openDoctor);
   const setTimelineOpen = useAppStore((s) => s.setTimelineOpen);
-  const kvmRunning = useKvmStore((s) => s.status.is_host_running);
+  const kvmRunning = useKvmStore(
+    (s) => s.status.allow_control ?? s.status.is_host_running
+  );
 
   const desktopNotifications = useAppStore((s) => s.appPrefs.desktopNotifications);
   const onlineDevices = devices.filter((d) => d.state === "device");
@@ -255,6 +258,8 @@ function App() {
       .catch(() => {});
     getNicknames().then(setNicknames).catch(() => {});
     void useActivityStore.getState().load();
+    void useKvmStore.getState().setAllowControl(loadAllowControl());
+    void kvmSetDebugLog(Boolean(useKvmStore.getState().settings.debugLog)).catch(() => {});
   }, [setSettings, setPreset, setAppPrefs, setNicknames]);
 
   // Global Ctrl+K shortcut for Command Palette
@@ -382,7 +387,10 @@ function App() {
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const closeHud = async () => {
       const w = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
-      await w?.close().catch(() => {});
+      if (w) {
+        await w.close().catch(() => {});
+        void kvmDebugNote("HUD_CLOSE").catch(() => {});
+      }
     };
 
     if (!(kvmIndicatorHud && kvmHasPeers && kvmOwnsCursor)) {
@@ -415,7 +423,10 @@ function App() {
           shadow: false,
           focus: false,
         });
-        w.once("tauri://created", () => void w.setIgnoreCursorEvents(true).catch(() => {}));
+        w.once("tauri://created", () => {
+          void kvmDebugNote("HUD_CREATE").catch(() => {});
+          void w.setIgnoreCursorEvents(true).catch(() => {});
+        });
         w.once("tauri://error", (e) => console.error("kvm-hud window error:", e));
       } catch (e) {
         console.error("Failed to spawn native desktop HUD overlay:", e);
@@ -532,11 +543,8 @@ function App() {
       },
       toggleKvmServer: () => {
         const kvm = useKvmStore.getState();
-        if (kvm.status.is_host_running) {
-          void kvm.stopServer();
-        } else {
-          void kvm.startServer();
-        }
+        const enabled = kvm.status.allow_control ?? kvm.status.is_host_running;
+        void kvm.setAllowControl(!enabled);
       },
     });
   }, [selectedSerial, devices, sessions, kvmRunning, openDoctor, setTimelineOpen, setError]);

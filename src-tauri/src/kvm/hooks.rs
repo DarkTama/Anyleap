@@ -1,8 +1,10 @@
+use super::debug_log::{self, DebugEvent, HookKind, KeyDecision, KeySnapshot};
 use super::input_logic::{
-    controller_return_pos, detect_controller_edge, Edge, PressedInputTracker,
+    detect_controller_edge, map_leap_relative_y, map_return_position, union_rect, Edge,
+    PressedInputTracker,
 };
 use super::monitors::{get_local_monitors, MonitorDisplay};
-use super::protocol::{KvmPacket, TopologyConfig};
+use super::protocol::{KvmPacket, ScreenRect, TopologyConfig};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc;
@@ -12,7 +14,7 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONULL};
 #[cfg(windows)]
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -45,11 +47,23 @@ static LINK_TO_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
 static HAS_ACTIVE_LINK: AtomicBool = AtomicBool::new(false);
 static DEADZONE_PX: AtomicI32 = AtomicI32::new(48);
 static RESISTANCE_MS: AtomicU64 = AtomicU64::new(120);
+static LOCAL_UNION_X: AtomicI32 = AtomicI32::new(0);
+static LOCAL_UNION_Y: AtomicI32 = AtomicI32::new(0);
+static LOCAL_UNION_W: AtomicI32 = AtomicI32::new(1920);
+static LOCAL_UNION_H: AtomicI32 = AtomicI32::new(1080);
+static PEER_UNION_W: AtomicI32 = AtomicI32::new(0);
+static PEER_UNION_H: AtomicI32 = AtomicI32::new(0);
+static LINK_OFFSET_X: AtomicI32 = AtomicI32::new(0);
+static LINK_OFFSET_Y: AtomicI32 = AtomicI32::new(0);
 
 static MOUSE_BUTTONS_DOWN: AtomicU8 = AtomicU8::new(0);
 static KEY_CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static KEY_ALT_DOWN: AtomicBool = AtomicBool::new(false);
 static EDGE_DWELL_START: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static LAST_MOUSE_HOOK_US: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static LAST_KBD_HOOK_US: AtomicU64 = AtomicU64::new(0);
 
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
@@ -154,6 +168,13 @@ impl HookController {
         HOOK_ACTIVE.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_active_for_test(&self, active: bool, edge: Edge) {
+        HOOK_ACTIVE.store(active, Ordering::SeqCst);
+        LINK_FROM_EDGE.store(edge as u8, Ordering::Relaxed);
+        HAS_ACTIVE_LINK.store(active, Ordering::Release);
+    }
+
     /// Edge that leaps to the peer, when capture is active with a link.
     pub fn active_link_edge(&self) -> Option<&'static str> {
         (HOOK_ACTIVE.load(Ordering::Relaxed) && HAS_ACTIVE_LINK.load(Ordering::Acquire))
@@ -174,7 +195,16 @@ impl HookController {
     }
 
     pub fn handle_cursor_return(&self, relative_y: f32) {
-        if !IS_TRAPPED.swap(false, Ordering::SeqCst) {
+        let was_trapped = IS_TRAPPED.swap(false, Ordering::SeqCst);
+        if debug_log::is_enabled() {
+            debug_log::record_event(DebugEvent::Return {
+                ts_us: debug_log::now_us(),
+                relative_y,
+                was_trapped,
+                hwnd: debug_log::foreground_hwnd_raw(),
+            });
+        }
+        if !was_trapped {
             return;
         }
         CURSOR_CENTERED.store(false, Ordering::Release);
@@ -182,7 +212,7 @@ impl HookController {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
         notify_hook_thread_restore();
 
-        let mon = MonitorDisplay {
+        let fallback_mon = MonitorDisplay {
             id: String::new(),
             x: TRAP_MON_X.load(Ordering::Relaxed),
             y: TRAP_MON_Y.load(Ordering::Relaxed),
@@ -190,8 +220,36 @@ impl HookController {
             height: TRAP_MON_H.load(Ordering::Relaxed),
             is_primary: true,
         };
+        let peer_union = ScreenRect {
+            x: 0,
+            y: 0,
+            width: PEER_UNION_W.load(Ordering::Relaxed),
+            height: PEER_UNION_H.load(Ordering::Relaxed),
+        };
         let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
-        let (rx, ry) = controller_return_pos(&mon, link_edge, relative_y);
+        let offset_x = LINK_OFFSET_X.load(Ordering::Relaxed);
+        let offset_y = LINK_OFFSET_Y.load(Ordering::Relaxed);
+        let (rx, ry) = if let Ok(mons) = local_monitors().try_lock() {
+            map_return_position(
+                &mons,
+                &fallback_mon,
+                &peer_union,
+                link_edge,
+                offset_x,
+                offset_y,
+                relative_y,
+            )
+        } else {
+            map_return_position(
+                &[],
+                &fallback_mon,
+                &peer_union,
+                link_edge,
+                offset_x,
+                offset_y,
+                relative_y,
+            )
+        };
         #[cfg(windows)]
         unsafe {
             let _ = SetCursorPos(rx, ry);
@@ -201,6 +259,12 @@ impl HookController {
     }
 
     pub fn emergency_release(&self) {
+        if debug_log::is_enabled() {
+            debug_log::record_event(DebugEvent::Release {
+                ts_us: debug_log::now_us(),
+                reason: "emergency_release",
+            });
+        }
         self.set_trapped(false);
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
         MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
@@ -222,6 +286,11 @@ impl HookController {
         delta_tx: mpsc::Sender<(i32, i32)>,
     ) {
         let monitors = get_local_monitors();
+        let local_union = union_rect(&monitors);
+        LOCAL_UNION_X.store(local_union.x, Ordering::Relaxed);
+        LOCAL_UNION_Y.store(local_union.y, Ordering::Relaxed);
+        LOCAL_UNION_W.store(local_union.width, Ordering::Relaxed);
+        LOCAL_UNION_H.store(local_union.height, Ordering::Relaxed);
         if let Ok(mut mons) = local_monitors().lock() {
             *mons = monitors;
         }
@@ -235,10 +304,32 @@ impl HookController {
         if let Some(link) = local_id.and_then(|id| topology.links.iter().find(|l| l.from_id == id)) {
             let from_edge = Edge::from_str(&link.from_edge).unwrap_or(Edge::Right);
             let to_edge = Edge::from_str(&link.to_edge).unwrap_or_else(|| from_edge.opposite());
+            let peer_bounds = topology
+                .computers
+                .iter()
+                .find(|c| c.id == link.to_id)
+                .or_else(|| topology.computers.iter().find(|c| !c.is_local))
+                .map(|c| {
+                    if !c.monitors.is_empty() {
+                        union_rect(&c.monitors)
+                    } else {
+                        c.bounds.clone()
+                    }
+                })
+                .unwrap_or_else(|| ScreenRect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                });
             LINK_FROM_EDGE.store(from_edge as u8, Ordering::Relaxed);
             LINK_TO_EDGE.store(to_edge as u8, Ordering::Relaxed);
             DEADZONE_PX.store(link.deadzone_px.unwrap_or(48), Ordering::Relaxed);
             RESISTANCE_MS.store(link.resistance_ms.unwrap_or(120) as u64, Ordering::Relaxed);
+            LINK_OFFSET_X.store(link.offset_x.unwrap_or(0), Ordering::Relaxed);
+            LINK_OFFSET_Y.store(link.offset_y.unwrap_or(0), Ordering::Relaxed);
+            PEER_UNION_W.store(peer_bounds.width, Ordering::Relaxed);
+            PEER_UNION_H.store(peer_bounds.height, Ordering::Relaxed);
             HAS_ACTIVE_LINK.store(true, Ordering::Release);
         } else {
             HAS_ACTIVE_LINK.store(false, Ordering::Release);
@@ -253,6 +344,12 @@ impl HookController {
 
         if HOOK_ACTIVE.swap(true, Ordering::SeqCst) {
             return;
+        }
+
+        #[cfg(windows)]
+        {
+            LAST_MOUSE_HOOK_US.store(0, Ordering::Relaxed);
+            LAST_KBD_HOOK_US.store(0, Ordering::Relaxed);
         }
 
         #[cfg(windows)]
@@ -323,20 +420,69 @@ fn disarm_trapped_in_callback() {
 }
 
 #[cfg(windows)]
+const SLOW_HOOK_THRESHOLD_US: u64 = 20_000;
+#[cfg(windows)]
+const HOOK_GAP_THRESHOLD_US: u64 = 250_000;
+
+#[cfg(windows)]
+fn record_hook_entry(kind: HookKind) -> Option<std::time::Instant> {
+    if !debug_log::is_enabled() {
+        return None;
+    }
+    let now = debug_log::now_us();
+    let slot = match kind {
+        HookKind::Keyboard => &LAST_KBD_HOOK_US,
+        HookKind::Mouse => &LAST_MOUSE_HOOK_US,
+    };
+    let prev = slot.swap(now, Ordering::Relaxed);
+    if prev != 0 && IS_TRAPPED.load(Ordering::Acquire) {
+        let gap_us = now.saturating_sub(prev);
+        if gap_us > HOOK_GAP_THRESHOLD_US {
+            debug_log::record_event(DebugEvent::HookGap {
+                ts_us: now,
+                kind,
+                gap_us,
+            });
+        }
+    }
+    Some(std::time::Instant::now())
+}
+
+#[cfg(windows)]
+fn record_if_slow_hook(kind: HookKind, started: Option<std::time::Instant>) {
+    if let Some(t0) = started {
+        let duration_us = t0.elapsed().as_micros() as u64;
+        if duration_us > SLOW_HOOK_THRESHOLD_US {
+            debug_log::record_event(DebugEvent::SlowHook {
+                ts_us: debug_log::now_us(),
+                kind,
+                duration_us,
+            });
+        }
+    }
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn low_level_mouse_proc(
     n_code: i32,
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
+    let started = record_hook_entry(HookKind::Mouse);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle_mouse_event(n_code, w_param, l_param)
     }));
+    record_if_slow_hook(HookKind::Mouse, started);
 
     match outcome {
         Ok(Some(res)) => res,
         Ok(None) => CallNextHookEx(None, n_code, w_param, l_param),
         Err(_) => {
             disarm_trapped_in_callback();
+            debug_log::record_event(DebugEvent::Release {
+                ts_us: debug_log::now_us(),
+                reason: "mouse_hook_panic",
+            });
             post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
             CallNextHookEx(None, n_code, w_param, l_param)
         }
@@ -435,8 +581,32 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
         let Ok(mons) = local_monitors().try_lock() else {
             return None;
         };
-        detect_controller_edge((pt.x, pt.y), &mons, link_edge, deadzone).map(|(idx, rel)| {
+        detect_controller_edge((pt.x, pt.y), &mons, link_edge, deadzone).map(|(idx, _)| {
             let m = &mons[idx];
+            let clamped = (
+                pt.x.clamp(m.x, m.x + m.width - 1),
+                pt.y.clamp(m.y, m.y + m.height - 1),
+            );
+            let local_union = ScreenRect {
+                x: LOCAL_UNION_X.load(Ordering::Relaxed),
+                y: LOCAL_UNION_Y.load(Ordering::Relaxed),
+                width: LOCAL_UNION_W.load(Ordering::Relaxed),
+                height: LOCAL_UNION_H.load(Ordering::Relaxed),
+            };
+            let peer_union = ScreenRect {
+                x: 0,
+                y: 0,
+                width: PEER_UNION_W.load(Ordering::Relaxed),
+                height: PEER_UNION_H.load(Ordering::Relaxed),
+            };
+            let rel = map_leap_relative_y(
+                clamped,
+                &local_union,
+                &peer_union,
+                link_edge,
+                LINK_OFFSET_X.load(Ordering::Relaxed),
+                LINK_OFFSET_Y.load(Ordering::Relaxed),
+            );
             (m.x, m.y, m.width, m.height, rel)
         })
     };
@@ -506,7 +676,53 @@ fn request_engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
     KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
     KEY_ALT_DOWN.store(false, Ordering::Relaxed);
 
+    if debug_log::is_enabled() {
+        debug_log::record_event(DebugEvent::Engage {
+            ts_us: debug_log::now_us(),
+            phase: "request",
+            edge: Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed)),
+            relative_y,
+            hwnd: debug_log::foreground_hwnd_raw(),
+        });
+    }
+
     post_hook_thread_message(WM_KVM_ENGAGE);
+}
+
+#[cfg(windows)]
+unsafe fn handoff_own_foreground_focus(log_enabled: bool) {
+    let fg = GetForegroundWindow();
+    if fg.0.is_null() {
+        return;
+    }
+    let mut fg_pid = 0u32;
+    let _ = GetWindowThreadProcessId(fg, Some(&mut fg_pid));
+    if fg_pid != GetCurrentProcessId() {
+        return;
+    }
+
+    // Evidence (kvm-debug.log): while AnyLeap's own window is foreground, the
+    // WH_KEYBOARD_LL hook receives no KEY events (e.g. Win key opens Start on
+    // the Main PC until another process takes focus). Hand foreground off to
+    // the shell/desktop before capture continues; do not restore on return.
+    let shell = GetShellWindow();
+    let target = if !shell.0.is_null() {
+        shell
+    } else {
+        GetDesktopWindow()
+    };
+    let ok = !target.0.is_null() && SetForegroundWindow(target).as_bool();
+
+    if log_enabled {
+        debug_log::record_event(DebugEvent::Note {
+            ts_us: debug_log::now_us(),
+            hwnd: target.0 as isize,
+            text: format!(
+                "FOCUS_HANDOFF from=0x{:X} to=0x{:X} ok={ok}",
+                fg.0 as isize, target.0 as isize
+            ),
+        });
+    }
 }
 
 #[cfg(windows)]
@@ -519,6 +735,9 @@ unsafe fn perform_engage_leap() {
         return;
     }
 
+    let log_enabled = debug_log::is_enabled();
+    handoff_own_foreground_focus(log_enabled);
+
     let mx = TRAP_MON_X.load(Ordering::Relaxed);
     let my = TRAP_MON_Y.load(Ordering::Relaxed);
     let mw = TRAP_MON_W.load(Ordering::Relaxed);
@@ -526,6 +745,11 @@ unsafe fn perform_engage_leap() {
     let center_x = CLAMP_CENTER_X.load(Ordering::Relaxed);
     let center_y = CLAMP_CENTER_Y.load(Ordering::Relaxed);
     let relative_y = f32::from_bits(PENDING_ENGAGE_REL_Y.load(Ordering::Relaxed));
+    let fg_hwnd = if log_enabled {
+        debug_log::foreground_hwnd_raw()
+    } else {
+        0
+    };
 
     let clip_rect = RECT {
         left: mx,
@@ -543,16 +767,53 @@ unsafe fn perform_engage_leap() {
         }
     }
 
-    if let Ok(mut tracker) = controller_tracker().try_lock() {
-        for k in tracker.release_keys() {
-            super::injector::inject_key(k.key_code, k.scan_code, false, k.extended);
-        }
+    let (tracker_before, released, send_input_us) =
+        if let Ok(mut tracker) = controller_tracker().try_lock() {
+            let before = if log_enabled {
+                KeySnapshot::from_slice(tracker.held_keys())
+            } else {
+                KeySnapshot::lock_failed()
+            };
+            let keys = tracker.release_keys();
+            let rel_snap = if log_enabled {
+                KeySnapshot::from_slice(&keys)
+            } else {
+                KeySnapshot::lock_failed()
+            };
+            let t0 = log_enabled.then(std::time::Instant::now);
+            for k in &keys {
+                let _ = super::injector::inject_key(k.key_code, k.scan_code, false, k.extended);
+            }
+            let elapsed_us = t0.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
+            (before, rel_snap, elapsed_us)
+        } else {
+            (
+                KeySnapshot::lock_failed(),
+                KeySnapshot::lock_failed(),
+                0,
+            )
+        };
+
+    if log_enabled {
+        debug_log::record_event(DebugEvent::EngagePerform {
+            ts_us: debug_log::now_us(),
+            edge: Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed)),
+            relative_y,
+            hwnd: fg_hwnd,
+            tracker_before,
+            released,
+            send_input_us,
+        });
     }
 
     let to_edge = Edge::from_u8(LINK_TO_EDGE.load(Ordering::Relaxed));
+    let dwell_ms = RESISTANCE_MS.load(Ordering::Relaxed) as u32;
+    let deadzone_px = DEADZONE_PX.load(Ordering::Relaxed);
     try_send_packet(KvmPacket::CursorEnter {
         edge: to_edge.as_str().to_string(),
         relative_y,
+        dwell_ms,
+        deadzone_px,
     });
 }
 
@@ -562,15 +823,21 @@ unsafe extern "system" fn low_level_keyboard_proc(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
+    let started = record_hook_entry(HookKind::Keyboard);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle_keyboard_event(n_code, w_param, l_param)
     }));
+    record_if_slow_hook(HookKind::Keyboard, started);
 
     match outcome {
         Ok(Some(res)) => res,
         Ok(None) => CallNextHookEx(None, n_code, w_param, l_param),
         Err(_) => {
             disarm_trapped_in_callback();
+            debug_log::record_event(DebugEvent::Release {
+                ts_us: debug_log::now_us(),
+                reason: "kbd_hook_panic",
+            });
             post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
             CallNextHookEx(None, n_code, w_param, l_param)
         }
@@ -579,19 +846,55 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
 #[cfg(windows)]
 unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> Option<LRESULT> {
-    if n_code < 0 || !HOOK_ACTIVE.load(Ordering::Relaxed) {
+    if n_code < 0 {
         return None;
     }
 
     let kbd = *(l_param.0 as *const KBDLLHOOKSTRUCT);
-    if (kbd.flags.0 & LLKHF_INJECTED.0) != 0 {
-        return None;
-    }
-
     let vk_code = kbd.vkCode as u16;
     let scan_code = kbd.scanCode as u16;
     let is_down = w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN;
     let extended = (kbd.flags.0 & LLKHF_EXTENDED.0) != 0;
+    let injected = (kbd.flags.0 & (LLKHF_INJECTED.0 | 0x02)) != 0;
+    let hook_active = HOOK_ACTIVE.load(Ordering::Relaxed);
+    let trapped = IS_TRAPPED.load(Ordering::Acquire);
+    let log_enabled = debug_log::is_enabled();
+    let ts_us = if log_enabled { debug_log::now_us() } else { 0 };
+    let hwnd = if log_enabled { debug_log::foreground_hwnd_raw() } else { 0 };
+
+    if !hook_active {
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Key {
+                ts_us,
+                vk: vk_code,
+                scan_code,
+                is_down,
+                extended,
+                injected,
+                is_trapped: trapped,
+                decision: KeyDecision::Pass,
+                hwnd,
+            });
+        }
+        return None;
+    }
+
+    if injected {
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Key {
+                ts_us,
+                vk: vk_code,
+                scan_code,
+                is_down,
+                extended,
+                injected: true,
+                is_trapped: trapped,
+                decision: KeyDecision::Pass,
+                hwnd,
+            });
+        }
+        return None;
+    }
 
     if vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3 {
         KEY_CTRL_DOWN.store(is_down, Ordering::Relaxed);
@@ -612,6 +915,23 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
         if let Ok(mut tracker) = controller_tracker().try_lock() {
             let _ = tracker.release_all();
         }
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Key {
+                ts_us,
+                vk: vk_code,
+                scan_code,
+                is_down,
+                extended,
+                injected: false,
+                is_trapped: trapped,
+                decision: KeyDecision::Block,
+                hwnd,
+            });
+            debug_log::record_event(DebugEvent::Release {
+                ts_us,
+                reason: "emergency_hotkey",
+            });
+        }
         post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
 
         try_send_packet(KvmPacket::EmergencyRelease);
@@ -619,7 +939,20 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
         return Some(LRESULT(0));
     }
 
-    if IS_TRAPPED.load(Ordering::Acquire) {
+    if trapped {
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Key {
+                ts_us,
+                vk: vk_code,
+                scan_code,
+                is_down,
+                extended,
+                injected: false,
+                is_trapped: true,
+                decision: KeyDecision::Forward,
+                hwnd,
+            });
+        }
         try_send_packet(KvmPacket::KeyEvent {
             key_code: vk_code,
             scan_code,
@@ -627,6 +960,20 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
             extended,
         });
         return Some(LRESULT(1));
+    }
+
+    if log_enabled {
+        debug_log::record_event(DebugEvent::Key {
+            ts_us,
+            vk: vk_code,
+            scan_code,
+            is_down,
+            extended,
+            injected: false,
+            is_trapped: false,
+            decision: KeyDecision::Pass,
+            hwnd,
+        });
     }
 
     if let Ok(mut tracker) = controller_tracker().try_lock() {

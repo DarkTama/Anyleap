@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
+import { FolderOpen, LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
 import { getSystemResolution } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
@@ -24,7 +24,11 @@ import {
 } from "@/lib/controlConfig";
 import { saveAppPrefs, saveQuality, type AppPrefs } from "@/lib/persist";
 import { useKvmStore } from "@/stores/kvmStore";
-import { kvmSetSyncSettings } from "@/services/kvmService";
+import {
+  kvmGetDebugLogPath,
+  kvmOpenDebugLogFolder,
+  kvmSetSyncSettings,
+} from "@/services/kvmService";
 
 const CODECS: Codec[] = ["h264", "h265", "av1"];
 const SIZE_LABELS: Record<ControlConfig["size"], string> = {
@@ -451,6 +455,7 @@ export function SettingsPanel() {
 function KvmSettingsCard() {
   const kvmSettings = useKvmStore((s) => s.settings);
   const updateKvmSettings = useKvmStore((s) => s.updateSettings);
+  const [debugLogPath, setDebugLogPath] = useState<string>("");
 
   useEffect(() => {
     void kvmSetSyncSettings(
@@ -464,12 +469,27 @@ function KvmSettingsCard() {
     kvmSettings.syncFileTransfer,
   ]);
 
+  useEffect(() => {
+    void kvmGetDebugLogPath()
+      .then((path) => setDebugLogPath(path))
+      .catch(() => {});
+  }, []);
+
+  const handleDebugLogToggle = (enabled: boolean) => {
+    updateKvmSettings({ debugLog: enabled });
+    if (!debugLogPath) {
+      void kvmGetDebugLogPath()
+        .then((path) => setDebugLogPath(path))
+        .catch(() => {});
+    }
+  };
+
   return (
     <Card className="rounded-xl border border-[#222226] bg-[#141417]">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
           <Laptop className="h-4 w-4 text-sky-400" />
-          Computer Link & Virtual KVM
+          Shared Mouse &amp; Keyboard
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -620,6 +640,39 @@ function KvmSettingsCard() {
                 updateKvmSettings({ syncFileTransfer: checked })
               }
             />
+          </div>
+        </div>
+
+        {/* Diagnostics */}
+        <div className="space-y-2.5 pt-2 border-t border-[#222226]">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            Diagnostics
+          </span>
+          <div className="space-y-2">
+            <Toggle
+              label="KVM diagnostics log"
+              checked={kvmSettings.debugLog ?? false}
+              onChange={handleDebugLogToggle}
+            />
+            <p className="text-[11px] text-zinc-400">
+              Records keyboard hook decisions, engage/return/release events, slow callbacks (&gt;20ms), and foreground window details (rotates at 5 MB).
+            </p>
+            <div className="flex items-center gap-2">
+              <div
+                className="flex-1 truncate rounded-lg border border-[#27272a] bg-[#101013] px-3 py-1.5 font-mono text-[11px] text-zinc-300"
+                title={debugLogPath || "kvm-debug.log"}
+              >
+                {debugLogPath || "kvm-debug.log"}
+              </div>
+              <button
+                type="button"
+                onClick={() => void kvmOpenDebugLogFolder().catch(() => {})}
+                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer shrink-0"
+              >
+                <FolderOpen className="h-3.5 w-3.5 text-zinc-400" />
+                <span>Open log folder</span>
+              </button>
+            </div>
           </div>
         </div>
       </CardContent>

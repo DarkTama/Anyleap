@@ -10,8 +10,21 @@ An abstract polymorphic handle representing an attached client device:
 - **`AdbDevice`**: An Android device connected via USB or Wi-Fi (ADB pairing / QR code) running `scrcpy` subprocesses for mirroring, camera studio, and audio forwarding.
 - **`NetworkPcDevice`**: A secondary PC or laptop connected over local network (mDNS / direct IP) running a native QUIC link for virtual KVM, remote desktop, and deck control.
 
-### Virtual KVM (Computer Link)
-A software-defined keyboard, video, and mouse multiplexer that allows a single physical mouse and keyboard to control multiple independent PCs by roaming across spatial screen boundaries.
+### Virtual KVM (Computer Link / Shared Mouse & Keyboard)
+A software-defined keyboard, video, and mouse multiplexer that allows a single physical mouse and keyboard to control another PC by roaming across spatial screen boundaries.
+
+#### UI-Term ↔ Code-Term Glossary (SPEC-23)
+| User-Facing UI Term | Internal Code Term(s) | Meaning |
+|---|---|---|
+| **Shared Mouse & Keyboard** | `kvm`, Computer Link | Feature name across UI; backend module and commands retain the `kvm` prefix. |
+| **Main PC** | Controller (`kvm.client`, `hooks`, `role: "main"`) | PC whose physical mouse and keyboard are used; runs input hooks and QUIC client. |
+| **Linked PC** | Receiver (`kvm.server`, `injector`, `role: "linked"`) | PC being controlled; runs QUIC server and injects received input. |
+| **Allow other PCs to control this PC** | `allow_control`, `kvm_set_allow_control`, `is_host_running` | Starts/stops the QUIC receiver server independently of any outgoing Main PC controller link. |
+| **Pairing code** | `security_pin`, `pin` | 6-digit one-time code required only on first link before the peer's certificate fingerprint is pinned. |
+| **Link** | `kvm_connect_peer`, `kvm_pair_peer` | Establishes the active single-peer link from Main PC to Linked PC. |
+| **Unlink** | `kvm_disconnect_peer` | Role-aware disconnect: closes outgoing client + stops hooks on Main PC, or closes incoming controller sessions on Linked PC. |
+| **Forget** | `kvm_forget_peer` | Removes a peer's pinned fingerprint from `TrustStore` by `computer_id` and closes any active session with it. |
+| **Bring cursor back** | `kvm_emergency_release` | Un-traps the Main PC cursor and sends `EmergencyRelease` / `ReleaseAll`. |
 
 ### Trust Store
 `kvm_trusted_peers.json` in the app data dir: the peers (`computer_id`, `name`, `fingerprint`) a PC has paired with. A connection from an unknown fingerprint may only send `Pair`; everything else closes it.

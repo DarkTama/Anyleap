@@ -110,6 +110,10 @@ impl TrustStore {
         g.retain(|p| p.computer_id != computer_id);
         self.save(&g);
     }
+
+    pub fn list(&self) -> Vec<TrustedPeer> {
+        self.peers.lock().unwrap().clone()
+    }
 }
 
 /// Accepts any self-signed cert at the TLS layer; handshake signatures are

@@ -77,6 +77,10 @@ pub enum KvmPacket {
     CursorEnter {
         edge: String,
         relative_y: f32, // 0.0 .. 1.0 along the boundary
+        #[serde(default)]
+        dwell_ms: u32,
+        #[serde(default)]
+        deadzone_px: i32,
     },
     CursorReturn {
         edge: String,
@@ -105,6 +109,20 @@ pub struct UdpMouseDelta {
     pub seq: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LinkedPeerInfo {
+    pub computer_id: String,
+    pub name: String,
+    pub role: String, // "main" | "linked"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrustedPeerInfo {
+    pub computer_id: String,
+    pub name: String,
+    pub address: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct KvmStatus {
     pub is_host_running: bool,
@@ -126,6 +144,12 @@ pub struct KvmStatus {
     /// True while a remote controller currently drives this PC's cursor.
     #[serde(default)]
     pub receiver_entered: bool,
+    /// True while this PC allows other PCs to control it (receiver running).
+    #[serde(default)]
+    pub allow_control: bool,
+    /// Single active link and this PC's role in it; None when unlinked.
+    #[serde(default)]
+    pub linked_peer: Option<LinkedPeerInfo>,
 }
 
 /// Outbound traffic: control packets or a clipboard image (own uni stream).
@@ -233,6 +257,31 @@ mod tests {
         let json = serde_json::to_string(&packet).expect("serialize");
         let decoded: KvmPacket = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(packet, decoded);
+    }
+
+    #[test]
+    fn test_cursor_enter_defaults_and_roundtrip() {
+        let legacy = r#"{"type":"CursorEnter","payload":{"edge":"left","relative_y":0.5}}"#;
+        let decoded: KvmPacket = serde_json::from_str(legacy).expect("deserialize legacy");
+        assert_eq!(
+            decoded,
+            KvmPacket::CursorEnter {
+                edge: "left".into(),
+                relative_y: 0.5,
+                dwell_ms: 0,
+                deadzone_px: 0,
+            }
+        );
+
+        let pkt = KvmPacket::CursorEnter {
+            edge: "right".into(),
+            relative_y: 0.25,
+            dwell_ms: 120,
+            deadzone_px: 48,
+        };
+        let json = serde_json::to_string(&pkt).expect("serialize");
+        let rt: KvmPacket = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(pkt, rt);
     }
 
     #[test]

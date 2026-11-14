@@ -23,11 +23,13 @@ export interface ComputerNode {
   monitors?: MonitorDisplay[];
 }
 
+export type EdgeSide = "left" | "right" | "top" | "bottom";
+
 export interface TopologyLink {
   from_id: string;
-  from_edge: "left" | "right" | "top" | "bottom";
+  from_edge: EdgeSide;
   to_id: string;
-  to_edge: "left" | "right" | "top" | "bottom";
+  to_edge: EdgeSide;
   offset_x?: number;
   offset_y?: number;
   deadzone_px?: number;
@@ -39,13 +41,27 @@ export interface TopologyConfig {
   links: TopologyLink[];
 }
 
+export interface LinkedPeerInfo {
+  computer_id: string;
+  name: string;
+  role: "main" | "linked";
+}
+
+export interface TrustedPeerInfo {
+  computer_id: string;
+  name: string;
+  address: string;
+}
+
 export interface KvmStatus {
   is_host_running: boolean;
+  allow_control?: boolean;
   port: number;
   security_pin: string;
   connected_peers: string[];
   is_input_trapped: boolean;
   active_target_id?: string;
+  linked_peer?: LinkedPeerInfo | null;
   local_name?: string;
   local_id?: string;
   screen_width?: number;
@@ -82,12 +98,11 @@ export interface KvmActivityItem {
 export interface KvmSettingsConfig {
   edgeResistanceMs: number;
   cornerDeadzonePx: number;
-  indicatorRipple: boolean;
   indicatorHud: boolean;
   indicatorHudCorner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
   indicatorCanvasDot: boolean;
-  emergencyKeyCombo: string;
   syncClipboardText: boolean;
   syncClipboardImage: boolean;
   syncFileTransfer: boolean;
+  debugLog?: boolean;
 }

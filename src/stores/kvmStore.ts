@@ -2,52 +2,48 @@ import { create } from "zustand";
 import type {
   ComputerNode,
   DiscoveredPeer,
+  EdgeSide,
   KvmActivityItem,
   KvmSettingsConfig,
   KvmStatus,
   MonitorDisplay,
   ScreenRect,
   TopologyConfig,
+  TopologyLink,
+  TrustedPeerInfo,
 } from "@/types/kvm";
 import {
   kvmGetStatus,
+  kvmSetAllowControl,
   kvmStartServer,
   kvmStopServer,
   kvmGetDiscoveredPeers,
+  kvmListTrusted,
   kvmConnectPeer,
   kvmDisconnectPeer,
+  kvmForgetPeer,
   kvmUpdateTopology,
   kvmEmergencyRelease,
   kvmSendFile,
+  kvmSetSyncSettings,
+  kvmSetDebugLog,
 } from "@/services/kvmService";
 import { listen } from "@tauri-apps/api/event";
 import { logActivity } from "./activityStore";
+import {
+  computePeerOrigin,
+  oppositeEdge,
+  unionRect as layoutUnionRect,
+} from "@/components/computers/topologyLayout";
 
 export function unionRect(monitors: MonitorDisplay[]): ScreenRect {
-  if (!monitors || monitors.length === 0) {
-    return { x: 0, y: 0, width: 0, height: 0 };
-  }
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const m of monitors) {
-    minX = Math.min(minX, m.x);
-    minY = Math.min(minY, m.y);
-    maxX = Math.max(maxX, m.x + m.width);
-    maxY = Math.max(maxY, m.y + m.height);
-  }
-  return {
-    x: minX,
-    y: minY,
-    width: Math.max(0, maxX - minX),
-    height: Math.max(0, maxY - minY),
-  };
+  return layoutUnionRect(monitors);
 }
 
 export interface KvmState {
   status: KvmStatus;
   discoveredPeers: DiscoveredPeer[];
+  trustedPeers: TrustedPeerInfo[];
   topology: TopologyConfig;
   selectedPeer: DiscoveredPeer | null;
   isPairingModalOpen: boolean;
@@ -60,11 +56,14 @@ export interface KvmState {
 
   init: () => Promise<void>;
   refreshStatus: () => Promise<void>;
+  setAllowControl: (enabled: boolean) => Promise<void>;
   startServer: () => Promise<void>;
   stopServer: () => Promise<void>;
   refreshDiscovered: () => Promise<void>;
+  refreshTrusted: () => Promise<void>;
   connectPeer: (peer: DiscoveredPeer) => Promise<void>;
   disconnectPeer: () => Promise<void>;
+  forgetPeer: (computerId: string) => Promise<void>;
   setTopology: (topology: TopologyConfig) => Promise<void>;
   emergencyRelease: () => Promise<void>;
   sendFile: (filePath: string) => Promise<void>;
@@ -84,11 +83,13 @@ export interface KvmState {
 
 const defaultStatus: KvmStatus = {
   is_host_running: false,
+  allow_control: false,
   port: 4177,
   security_pin: "",
   connected_peers: [],
   is_input_trapped: false,
   active_target_id: undefined,
+  linked_peer: null,
   local_name: "This PC",
   local_id: "local-host",
   screen_width: 0,
@@ -100,14 +101,13 @@ const defaultStatus: KvmStatus = {
 const defaultSettings: KvmSettingsConfig = {
   edgeResistanceMs: 120,
   cornerDeadzonePx: 48,
-  indicatorRipple: true,
   indicatorHud: true,
   indicatorHudCorner: "top-right",
   indicatorCanvasDot: true,
-  emergencyKeyCombo: "Ctrl + Alt + Escape",
   syncClipboardText: true,
   syncClipboardImage: true,
   syncFileTransfer: true,
+  debugLog: false,
 };
 
 const defaultTopology: TopologyConfig = {
@@ -145,16 +145,38 @@ function saveSettings(settings: KvmSettingsConfig) {
   }
 }
 
-function loadSavedPlacement(): "left" | "right" {
+export function loadAllowControl(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const raw = localStorage.getItem("anyleap_kvm_allow_control");
+    if (raw === null) return true;
+    return raw !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function saveAllowControl(enabled: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem("anyleap_kvm_allow_control", String(enabled));
+  } catch {
+    // ignore
+  }
+}
+
+function loadSavedPlacement(): EdgeSide {
   if (typeof window === "undefined") return "right";
   try {
     const raw = localStorage.getItem("anyleap_kvm_placement");
-    if (raw === "left" || raw === "right") return raw;
+    if (raw === "left" || raw === "right" || raw === "top" || raw === "bottom") {
+      return raw;
+    }
   } catch {}
   return "right";
 }
 
-function savePlacement(placement: "left" | "right") {
+function savePlacement(placement: EdgeSide) {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem("anyleap_kvm_placement", placement);
@@ -163,19 +185,23 @@ function savePlacement(placement: "left" | "right") {
 
 function mergePeers(existing: ComputerNode[], statusPeers: ComputerNode[] | undefined): ComputerNode[] {
   const local = existing.find((c) => c.is_local) || existing[0];
-  const remoteMap = new Map<string, ComputerNode>();
+  const prevMap = new Map<string, ComputerNode>();
   for (const c of existing) {
-    if (!c.is_local) remoteMap.set(c.id, c);
+    if (!c.is_local) prevMap.set(c.id, c);
   }
-  if (statusPeers) {
-    for (const sp of statusPeers) {
-      if (sp.is_local) continue;
-      const prev = remoteMap.get(sp.id);
-      const bounds = sp.monitors && sp.monitors.length > 0 ? unionRect(sp.monitors) : sp.bounds;
-      remoteMap.set(sp.id, prev ? { ...prev, ...sp, bounds } : { ...sp, bounds });
-    }
+  const nextRemotes: ComputerNode[] = [];
+  for (const sp of statusPeers ?? []) {
+    if (sp.is_local) continue;
+    const prev = prevMap.get(sp.id);
+    const bounds = sp.monitors && sp.monitors.length > 0 ? unionRect(sp.monitors) : sp.bounds;
+    nextRemotes.push(prev ? { ...prev, ...sp, bounds } : { ...sp, bounds });
   }
-  return [local, ...remoteMap.values()];
+  return [local, ...nextRemotes];
+}
+
+function pruneLinks(links: TopologyLink[], computers: ComputerNode[]): TopologyLink[] {
+  const ids = new Set(computers.map((c) => c.id));
+  return links.filter((l) => ids.has(l.from_id) && ids.has(l.to_id));
 }
 
 let eventListening = false;
@@ -183,6 +209,7 @@ let eventListening = false;
 export const useKvmStore = create<KvmState>((set, get) => ({
   status: defaultStatus,
   discoveredPeers: [],
+  trustedPeers: [],
   topology: defaultTopology,
   selectedPeer: null,
   isPairingModalOpen: false,
@@ -194,39 +221,49 @@ export const useKvmStore = create<KvmState>((set, get) => ({
 
   init: async () => {
     try {
-      const status = await kvmGetStatus();
-      const currentTopology = get().topology;
-      const primary = currentTopology.computers.find((c) => c.is_local) || currentTopology.computers[0];
-      const localMonitors = status.monitors || [];
-      const localUnion =
-        localMonitors.length > 0
-          ? unionRect(localMonitors)
-          : {
-              x: 0,
-              y: 0,
-              width: status.screen_width ?? 0,
-              height: status.screen_height ?? 0,
-            };
+      const [status, trustedPeers] = await Promise.all([
+        kvmGetStatus(),
+        kvmListTrusted().catch(() => [] as TrustedPeerInfo[]),
+      ]);
 
-      const updatedPrimary: ComputerNode = {
-        ...primary,
-        id: status.local_id || primary.id,
-        name: status.local_name ? `${status.local_name} (This PC)` : "This PC",
-        bounds: localUnion,
-        monitors: localMonitors,
-      };
+      set((state) => {
+        const currentTopology = state.topology;
+        const primary =
+          currentTopology.computers.find((c) => c.is_local) ||
+          currentTopology.computers[0];
+        const localMonitors = status.monitors || [];
+        const localUnion =
+          localMonitors.length > 0
+            ? unionRect(localMonitors)
+            : {
+                x: 0,
+                y: 0,
+                width: status.screen_width ?? 0,
+                height: status.screen_height ?? 0,
+              };
 
-      const computers = mergePeers(
-        [updatedPrimary, ...currentTopology.computers.filter((c) => !c.is_local)],
-        status.peers
-      );
+        const updatedPrimary: ComputerNode = {
+          ...primary,
+          id: status.local_id || primary.id,
+          name: status.local_name ? `${status.local_name} (This PC)` : "This PC",
+          bounds: localUnion,
+          monitors: localMonitors,
+        };
 
-      set({
-        status,
-        topology: {
-          ...currentTopology,
-          computers,
-        },
+        const computers = mergePeers(
+          [updatedPrimary, ...currentTopology.computers.filter((c) => !c.is_local)],
+          status.peers
+        );
+        const links = pruneLinks(currentTopology.links, computers);
+
+        return {
+          status,
+          trustedPeers,
+          topology: {
+            computers,
+            links,
+          },
+        };
       });
 
       if (!eventListening && typeof window !== "undefined") {
@@ -288,19 +325,59 @@ export const useKvmStore = create<KvmState>((set, get) => ({
   refreshStatus: async () => {
     try {
       const status = await kvmGetStatus();
-      const currentTopology = get().topology;
-      const updatedComputers = mergePeers(currentTopology.computers, status.peers);
+      set((state) => {
+        const currentTopology = state.topology;
+        const primary =
+          currentTopology.computers.find((c) => c.is_local) ||
+          currentTopology.computers[0];
+        const localMonitors = status.monitors ?? primary.monitors ?? [];
+        const localUnion =
+          localMonitors.length > 0
+            ? unionRect(localMonitors)
+            : primary.bounds;
+        const updatedPrimary: ComputerNode = {
+          ...primary,
+          id: status.local_id || primary.id,
+          name: status.local_name
+            ? `${status.local_name} (This PC)`
+            : primary.name,
+          bounds: localUnion,
+          monitors: localMonitors,
+        };
+        const updatedComputers = mergePeers(
+          [updatedPrimary, ...currentTopology.computers.filter((c) => !c.is_local)],
+          status.peers
+        );
+        const updatedLinks = pruneLinks(currentTopology.links, updatedComputers);
+        const selectedStillPresent =
+          state.selectedPeer &&
+          updatedComputers.some(
+            (c) => !c.is_local && c.id === state.selectedPeer?.id
+          );
 
-      set({
-        status,
-        error: null,
-        topology: {
-          ...currentTopology,
-          computers: updatedComputers,
-        },
+        return {
+          status,
+          error: null,
+          selectedPeer: selectedStillPresent ? state.selectedPeer : null,
+          topology: {
+            computers: updatedComputers,
+            links: updatedLinks,
+          },
+        };
       });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+
+  setAllowControl: async (enabled: boolean) => {
+    saveAllowControl(enabled);
+    set({ isLoading: true, error: null });
+    try {
+      const status = await kvmSetAllowControl(enabled);
+      set({ status, isLoading: false });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e), isLoading: false });
     }
   },
 
@@ -329,6 +406,15 @@ export const useKvmStore = create<KvmState>((set, get) => ({
     try {
       const peers = await kvmGetDiscoveredPeers();
       set({ discoveredPeers: peers });
+    } catch {
+      // silent
+    }
+  },
+
+  refreshTrusted: async () => {
+    try {
+      const trustedPeers = await kvmListTrusted();
+      set({ trustedPeers });
     } catch {
       // silent
     }
@@ -364,6 +450,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       const savedPlacement = loadSavedPlacement();
       const peerId = matchedRemote?.id || peer.id;
       const peerName = matchedRemote?.name || peer.name;
+      const peerOrigin = computePeerOrigin(primary.bounds, peerUnion, savedPlacement, 0);
 
       const peerNode: ComputerNode = {
         id: peerId,
@@ -371,11 +458,8 @@ export const useKvmStore = create<KvmState>((set, get) => ({
         is_local: false,
         address: peerIp,
         bounds: {
-          x:
-            savedPlacement === "right"
-              ? primary.bounds.x + primary.bounds.width
-              : primary.bounds.x - peerUnion.width,
-          y: 0,
+          x: peerOrigin.x,
+          y: peerOrigin.y,
           width: peerUnion.width,
           height: peerUnion.height,
         },
@@ -398,7 +482,9 @@ export const useKvmStore = create<KvmState>((set, get) => ({
             from_id: primaryId,
             from_edge: savedPlacement,
             to_id: peerId,
-            to_edge: savedPlacement === "right" ? "left" : "right",
+            to_edge: oppositeEdge(savedPlacement),
+            offset_x: 0,
+            offset_y: 0,
             deadzone_px: settings.cornerDeadzonePx,
             resistance_ms: settings.edgeResistanceMs,
           },
@@ -445,12 +531,49 @@ export const useKvmStore = create<KvmState>((set, get) => ({
             computers: [primary],
             links: [],
           };
-      await kvmUpdateTopology(resetTopology);
-      set({ selectedPeer: null, topology: resetTopology, cursorPos: null, isLoading: false });
+      if (currentTopology.links.length > 0) {
+        await kvmUpdateTopology(resetTopology).catch(() => {});
+      }
+      const freshStatus = await kvmGetStatus().catch(() => null);
+      set((state) => ({
+        status: freshStatus ?? {
+          ...state.status,
+          linked_peer: null,
+          controller_edge: null,
+          is_input_trapped: false,
+          receiver_entered: false,
+          connected_peers: [],
+          peers: [],
+        },
+        selectedPeer: null,
+        topology: resetTopology,
+        cursorPos: null,
+        isLoading: false,
+      }));
       logActivity({
         kind: "kvm",
-        title: prevPeer ? `Disconnected KVM peer ${prevPeer.name}` : "Disconnected KVM peer",
+        title: prevPeer ? `Unlinked ${prevPeer.name}` : "Unlinked PC",
       });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e), isLoading: false });
+    }
+  },
+
+  forgetPeer: async (computerId: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await kvmForgetPeer(computerId);
+      const [freshStatus, trustedPeers] = await Promise.all([
+        kvmGetStatus().catch(() => null),
+        kvmListTrusted().catch(() => get().trustedPeers),
+      ]);
+      set((state) => ({
+        ...(freshStatus ? { status: freshStatus } : {}),
+        trustedPeers,
+        selectedPeer: state.selectedPeer?.id === computerId ? null : state.selectedPeer,
+        isLoading: false,
+      }));
+      await get().refreshStatus();
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e), isLoading: false });
     }
@@ -459,10 +582,14 @@ export const useKvmStore = create<KvmState>((set, get) => ({
   setTopology: async (topology: TopologyConfig) => {
     set({ topology });
     if (topology.links[0]?.from_edge) {
-      savePlacement(topology.links[0].from_edge as "left" | "right");
+      savePlacement(topology.links[0].from_edge);
     }
     try {
       await kvmUpdateTopology(topology);
+      const status = await kvmGetStatus().catch(() => null);
+      if (status) {
+        set({ status });
+      }
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     }
@@ -498,6 +625,22 @@ export const useKvmStore = create<KvmState>((set, get) => ({
     const next = { ...get().settings, ...partial };
     set({ settings: next });
     saveSettings(next);
+
+    if (
+      partial.syncClipboardText !== undefined ||
+      partial.syncClipboardImage !== undefined ||
+      partial.syncFileTransfer !== undefined
+    ) {
+      void kvmSetSyncSettings(
+        next.syncClipboardText,
+        next.syncClipboardImage,
+        next.syncFileTransfer
+      ).catch(() => {});
+    }
+
+    if (partial.debugLog !== undefined) {
+      void kvmSetDebugLog(Boolean(next.debugLog)).catch(() => {});
+    }
 
     const currentTopology = get().topology;
     if (currentTopology.links.length > 0) {
@@ -536,6 +679,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
     set({
       status: defaultStatus,
       discoveredPeers: [],
+      trustedPeers: [],
       topology: defaultTopology,
       selectedPeer: null,
       isPairingModalOpen: false,

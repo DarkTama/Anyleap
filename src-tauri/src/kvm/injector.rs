@@ -43,7 +43,7 @@ pub fn set_cursor_position(x: i32, y: i32) {
     }
 }
 
-pub fn inject_mouse_button(button: u8, is_down: bool) {
+pub fn inject_mouse_button(button: u8, is_down: bool) -> (u32, u32) {
     #[cfg(windows)]
     unsafe {
         let flag = match (button, is_down) {
@@ -53,7 +53,7 @@ pub fn inject_mouse_button(button: u8, is_down: bool) {
             (2, false) => MOUSEEVENTF_RIGHTUP,
             (3, true) => MOUSEEVENTF_MIDDLEDOWN,
             (3, false) => MOUSEEVENTF_MIDDLEUP,
-            _ => return,
+            _ => return (0, 0),
         };
 
         let input = INPUT {
@@ -69,7 +69,18 @@ pub fn inject_mouse_button(button: u8, is_down: bool) {
                 },
             },
         };
-        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        let err = if sent == 0 {
+            windows::Win32::Foundation::GetLastError().0
+        } else {
+            0
+        };
+        (sent, err)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (button, is_down);
+        (0, 0)
     }
 }
 
@@ -93,7 +104,7 @@ pub fn inject_mouse_wheel(delta: i32) {
     }
 }
 
-pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) {
+pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) -> (u32, u32) {
     #[cfg(windows)]
     unsafe {
         let mut flags = KEYBD_EVENT_FLAGS(0);
@@ -119,6 +130,17 @@ pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) 
                 },
             },
         };
-        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        let err = if sent == 0 {
+            windows::Win32::Foundation::GetLastError().0
+        } else {
+            0
+        };
+        (sent, err)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (key_code, scan_code, is_down, extended);
+        (0, 0)
     }
 }

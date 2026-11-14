@@ -36,6 +36,7 @@ struct ServerContext {
     outgoing_tx: broadcast::Sender<Outbound>,
     mouse_delta_tx: broadcast::Sender<UdpMouseDelta>,
     transfer_tx: broadcast::Sender<TransferEvent>,
+    disconnect_tx: broadcast::Sender<Option<String>>,
 }
 
 impl ServerContext {
@@ -71,12 +72,18 @@ pub struct KvmServerHandle {
     pub outgoing_tx: broadcast::Sender<Outbound>,
     pub mouse_delta_tx: broadcast::Sender<UdpMouseDelta>,
     pub transfer_tx: broadcast::Sender<TransferEvent>,
+    pub disconnect_tx: broadcast::Sender<Option<String>>,
     pub shutdown_tx: watch::Sender<bool>,
 }
 
 impl KvmServerHandle {
     pub fn pin(&self) -> String {
         self.security_pin.lock().unwrap().clone()
+    }
+
+    /// Close every active incoming session (`None`) or a specific peer (`Some(id)`).
+    pub fn disconnect_sessions(&self, computer_id: Option<&str>) {
+        let _ = self.disconnect_tx.send(computer_id.map(str::to_string));
     }
 }
 
@@ -93,6 +100,7 @@ pub async fn start_kvm_server(
     let (outgoing_tx, _) = broadcast::channel(512);
     let (mouse_delta_tx, _) = broadcast::channel(1024);
     let (transfer_tx, _) = broadcast::channel(64);
+    let (disconnect_tx, _) = broadcast::channel(32);
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let security_pin = Arc::new(Mutex::new(generate_pin()));
     let is_running = Arc::new(AtomicBool::new(true));
@@ -115,6 +123,7 @@ pub async fn start_kvm_server(
         outgoing_tx: outgoing_tx.clone(),
         mouse_delta_tx: mouse_delta_tx.clone(),
         transfer_tx: transfer_tx.clone(),
+        disconnect_tx: disconnect_tx.clone(),
     };
 
     tokio::spawn(async move {
@@ -140,6 +149,7 @@ pub async fn start_kvm_server(
         outgoing_tx,
         mouse_delta_tx,
         transfer_tx,
+        disconnect_tx,
         shutdown_tx,
     })
 }
@@ -150,7 +160,9 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
         conn.close(1u32.into(), b"no certificate");
         return;
     };
-    let trusted = ctx.trust.contains(&fp);
+    let remote_ip = conn.remote_address().ip().to_string();
+    let trusted_entry = ctx.trust.by_fingerprint(&fp);
+    let trusted = trusted_entry.is_some();
 
     let Ok(Ok((mut send, mut recv))) = timeout(Duration::from_secs(10), conn.accept_bi()).await else {
         conn.close(1u32.into(), b"no control stream");
@@ -191,12 +203,18 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                 return;
             }
             peer_computer_id = Some(computer_id.clone());
-            if !trusted {
+            if let Some(mut entry) = trusted_entry {
+                if entry.address != remote_ip || entry.name != name {
+                    entry.address = remote_ip;
+                    entry.name = name.clone();
+                    ctx.trust.add(entry);
+                }
+            } else {
                 ctx.trust.add(TrustedPeer {
                     computer_id: computer_id.clone(),
                     name: name.clone(),
                     fingerprint: fp,
-                    address: conn.remote_address().ip().to_string(),
+                    address: remote_ip,
                 });
             }
             let _ = ctx.incoming_tx.send(KvmPacket::Pair {
@@ -207,7 +225,13 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
             });
         }
         other if trusted => {
-            peer_computer_id = ctx.trust.by_fingerprint(&fp).map(|p| p.computer_id);
+            peer_computer_id = trusted_entry.as_ref().map(|p| p.computer_id.clone());
+            if let Some(mut entry) = trusted_entry {
+                if entry.address != remote_ip {
+                    entry.address = remote_ip;
+                    ctx.trust.add(entry);
+                }
+            }
             if matches!(other, KvmPacket::SessionDisconnect) {
                 disconnected_early = true;
             } else if !matches!(other, KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }) {
@@ -223,22 +247,48 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
     if !disconnected_early {
         // Authorised session from here on.
         let mut tasks = Vec::new();
+        let mut disc_rx = ctx.disconnect_tx.subscribe();
+        let mut out_disc_rx = ctx.disconnect_tx.subscribe();
+        let (disc_done_tx, mut disc_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let out_peer_id = peer_computer_id.clone();
 
         let mut out_rx = ctx.outgoing_tx.subscribe();
         let out_conn = conn.clone();
         tasks.push(tokio::spawn(async move {
+            let mut disc_done_tx = Some(disc_done_tx);
             loop {
-                match out_rx.recv().await {
-                    Ok(Outbound::Packet(p)) => {
-                        if write_frame(&mut send, &p).await.is_err() {
-                            break;
+                tokio::select! {
+                    res = out_rx.recv() => match res {
+                        Ok(Outbound::Packet(p)) => {
+                            if write_frame(&mut send, &p).await.is_err() {
+                                break;
+                            }
                         }
+                        Ok(Outbound::Image { format, data }) => {
+                            let _ = send_image(&out_conn, format, data).await;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(_) => break,
+                    },
+                    res = out_disc_rx.recv() => match res {
+                        Ok(target) => {
+                            let matches = match (&target, &out_peer_id) {
+                                (None, _) => true,
+                                (Some(tid), Some(pid)) => tid == pid,
+                                (Some(_), None) => false,
+                            };
+                            if matches {
+                                let _ = write_frame(&mut send, &KvmPacket::SessionDisconnect).await;
+                                let _ = send.finish();
+                                if let Some(tx) = disc_done_tx.take() {
+                                    let _ = tx.send(());
+                                }
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(_) => break,
                     }
-                    Ok(Outbound::Image { format, data }) => {
-                        let _ = send_image(&out_conn, format, data).await;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(_) => break,
                 }
             }
         }));
@@ -267,18 +317,44 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
             }
         }));
 
-        while let Ok(Some(packet)) = read_frame::<_, KvmPacket>(&mut recv).await {
-            if matches!(packet, KvmPacket::SessionDisconnect) {
-                break;
-            }
-            if !matches!(
-                packet,
-                KvmPacket::Pair { .. } | KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }
-            ) {
-                let _ = ctx.incoming_tx.send(packet);
+        let mut disconnected_by_server = false;
+        loop {
+            tokio::select! {
+                res = read_frame::<_, KvmPacket>(&mut recv) => match res {
+                    Ok(Some(packet)) => {
+                        if matches!(packet, KvmPacket::SessionDisconnect) {
+                            break;
+                        }
+                        if !matches!(
+                            packet,
+                            KvmPacket::Pair { .. } | KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }
+                        ) {
+                            let _ = ctx.incoming_tx.send(packet);
+                        }
+                    }
+                    _ => break,
+                },
+                res = disc_rx.recv() => match res {
+                    Ok(target) => {
+                        let matches = match (&target, &peer_computer_id) {
+                            (None, _) => true,
+                            (Some(tid), Some(pid)) => tid == pid,
+                            (Some(_), None) => false,
+                        };
+                        if matches {
+                            disconnected_by_server = true;
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
             }
         }
 
+        if disconnected_by_server {
+            let _ = timeout(Duration::from_millis(100), &mut disc_done_rx).await;
+        }
         for t in tasks {
             t.abort();
         }
@@ -571,12 +647,14 @@ mod tests {
         c1.send_packet(KvmPacket::CursorEnter {
             edge: "left".into(),
             relative_y: 0.5,
+            dwell_ms: 0,
+            deadzone_px: 0,
         })
         .await
         .unwrap();
 
         let (entry_edge, mut cursor_pos) = match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
-            KvmPacket::CursorEnter { edge, relative_y } => {
+            KvmPacket::CursorEnter { edge, relative_y, .. } => {
                 let e = Edge::from_str(&edge).unwrap();
                 let pos = map_cursor_enter(&srv_mons, e, relative_y);
                 (e, pos)
@@ -639,6 +717,34 @@ mod tests {
         c2.send_packet(key(77)).await.unwrap();
         assert_eq!(next_key(&mut srv_in_rx).await, Some(77));
 
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn fingerprint_reconnect_succeeds_when_ip_changes_and_updates_address() {
+        let r = rig("fp-ip-change").await;
+        let mut rx = r.srv.incoming_tx.subscribe();
+        let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+        c.send_packet(key(65)).await.unwrap();
+        assert_eq!(next_key(&mut rx).await, Some(65));
+        drop(c);
+
+        // Simulate both sides having a stale IP for the paired peer while keeping its fingerprint.
+        let mut cli_entry = r.cli_trust.list().into_iter().next().unwrap();
+        cli_entry.address = "10.99.99.1".into();
+        r.cli_trust.add(cli_entry);
+
+        let mut srv_entry = r.srv_trust.list().into_iter().next().unwrap();
+        srv_entry.address = "10.99.99.2".into();
+        r.srv_trust.add(srv_entry);
+
+        // Reconnect without PIN at the new address (127.0.0.1); fingerprint match must succeed and update address.
+        let c2 = connect(&r, None).await.expect("reconnect by fingerprint after IP change");
+        c2.send_packet(key(66)).await.unwrap();
+        assert_eq!(next_key(&mut rx).await, Some(66));
+
+        assert_eq!(r.cli_trust.list()[0].address, "127.0.0.1");
+        assert_eq!(r.srv_trust.list()[0].address, "127.0.0.1");
         let _ = std::fs::remove_dir_all(&r.dir);
     }
 }

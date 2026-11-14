@@ -48,10 +48,6 @@ pub async fn handshake(
     identity: &Identity,
     trust: &TrustStore,
 ) -> Result<(quinn::Endpoint, quinn::Connection, quinn::SendStream, quinn::RecvStream, PeerInfo), String> {
-    let stored = trust.by_address(ip);
-    if stored.is_none() && pin.is_none() {
-        return Err("Peer not paired — enter its PIN first".into());
-    }
     let addr: SocketAddr = format!("{ip}:{port}")
         .parse()
         .map_err(|e| format!("Invalid peer address: {e}"))?;
@@ -65,9 +61,14 @@ pub async fn handshake(
         .map_err(|e| format!("Failed to connect to peer at {addr}: {e}"))?;
 
     let fp = peer_fingerprint(&conn).ok_or("Peer presented no certificate")?;
-    if pin.is_none() && stored.is_some_and(|s| s.fingerprint != fp) {
-        conn.close(4u32.into(), b"identity changed");
-        return Err("Peer identity changed — re-pair".into());
+    let known = trust.by_fingerprint(&fp);
+    if pin.is_none() && known.is_none() {
+        if trust.by_address(ip).is_some() {
+            conn.close(4u32.into(), b"identity changed");
+            return Err("Peer identity changed — re-pair".into());
+        }
+        conn.close(4u32.into(), b"not paired");
+        return Err("Peer not paired — enter its PIN first".into());
     }
 
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
@@ -86,7 +87,7 @@ pub async fn handshake(
             name,
             monitors,
         }))) => {
-            if pin.is_some() {
+            if pin.is_some() || known.is_some() {
                 trust.add(TrustedPeer {
                     computer_id: computer_id.clone(),
                     name: name.clone(),
@@ -106,7 +107,13 @@ pub async fn handshake(
                 },
             ))
         }
-        Ok(Ok(Some(KvmPacket::PairAck { .. }))) => Err("Incorrect PIN".into()),
+        Ok(Ok(Some(KvmPacket::PairAck { .. }))) => {
+            if pin.is_none() {
+                Err("Peer not paired — enter its PIN first".into())
+            } else {
+                Err("Incorrect PIN".into())
+            }
+        }
         _ => Err("Peer closed the connection during pairing".into()),
     }
 }
