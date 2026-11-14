@@ -44,6 +44,7 @@ import { buildCommands } from "@/lib/commandPalette";
 import type { StudioMode } from "@/components/deck/LaunchMatrix";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 
 function App() {
   const error = useAppStore((s) => s.error);
@@ -71,6 +72,8 @@ function App() {
   const seededNotifSerialRef = useRef<string | null>(null);
   const [pairOpen, setPairOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const devices = useAppStore((s) => s.devices);
   const selectedSerial = useAppStore((s) => s.selectedSerial);
@@ -194,6 +197,11 @@ function App() {
         setErrorDetails(e.payload.stderr || null);
         setShowDetails(false);
       }),
+      listen<{ reason?: string; proc?: string }>("kvm-leap-blocked", () => {
+        setToast("Can't move to the Linked PC while an administrator window is focused");
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+      }),
     ];
     listDevices()
       .then(setDevices)
@@ -202,6 +210,7 @@ function App() {
       .then(setSessions)
       .catch(() => {});
     return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       unlisteners.forEach((p) => p.then((un) => un()));
     };
   }, [setDevices, setSessions, upsertSession, removeSession, setError]);
@@ -622,6 +631,14 @@ function App() {
       <ConnectionDoctor />
       <TimelineDrawer />
       <UpdateModal />
+      {toast && (
+        <div
+          className="popover-panel pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 z-50 whitespace-nowrap rounded-lg bg-ink-800 border border-gold-400/50 px-3 py-1.5 text-xs text-gold-400 shadow-elevated"
+          style={{ "--transform-origin": "bottom center" } as React.CSSProperties}
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
