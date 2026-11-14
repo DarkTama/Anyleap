@@ -1017,8 +1017,14 @@ pub async fn kvm_update_topology(
 
         tokio::spawn(async move {
             while let Some(packet) = packet_rx.recv().await {
-                if let KvmPacket::CursorEnter { ref edge, .. } = packet {
-                    let _ = app_h.emit("kvm-cursor-enter", edge);
+                match &packet {
+                    KvmPacket::CursorEnter { edge, .. } => {
+                        let _ = app_h.emit("kvm-cursor-enter", edge);
+                    }
+                    KvmPacket::EmergencyRelease => {
+                        let _ = app_h.emit("kvm-cursor-return", "");
+                    }
+                    _ => {}
                 }
                 let _ = client_sender.send(packet).await;
             }
@@ -1032,7 +1038,18 @@ pub async fn kvm_update_topology(
             }
         });
 
-        kvm.hooks.start_hooks(topology, packet_tx, delta_tx);
+        let app_for_blocked = app_handle.clone();
+        let on_leap_blocked: super::hooks::LeapBlockedCallback = Arc::new(move |proc_name: &str| {
+            let _ = app_for_blocked.emit(
+                "kvm-leap-blocked",
+                serde_json::json!({
+                    "reason": "elevated_foreground",
+                    "proc": proc_name,
+                }),
+            );
+        });
+        kvm.hooks
+            .start_hooks(topology, packet_tx, delta_tx, Some(on_leap_blocked));
     }
 
     Ok(())
