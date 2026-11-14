@@ -19,6 +19,7 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | 8 | "Ink & Gold" app theme + interaction polish | SPEC-26 | shipped | Replaces Graphite palette (SPEC-17); flat tokens + design-engineering interaction polish. |
 | 9 | Per-monitor layout mapping | SPEC-24 | shipped | Backend (`spec24/backend`) + Frontend (`spec24/frontend`) in parallel. |
 | — | **Release v1.0.0** | — | shipped | Version bump + release after pre-release polish. |
+| — | **Release v1.0.1 (notification parser fix, stable phone identity + auto reconnect)** | — | shipped | Version bump + patch release (#17, #18). |
 | 10 | Pointer scheme sync | SPEC-25 | queued | Optional toggle; uses `SetSystemCursor` + `SPI_SETCURSORS` restore, registry untouched. |
 | 11 | New app icons from the Ink & Gold logo kit | — | review | Brand assets (`assets/brand/`), app/tray/web icons, header logo, and README refresh (`feat/brand-ink-gold`). |
 | 12 | Cross-platform Linux/macOS input adapters | — | queued | Blocked on testers; Windows first. |
