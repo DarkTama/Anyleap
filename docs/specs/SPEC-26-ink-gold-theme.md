@@ -1,6 +1,6 @@
 # SPEC-26: "Ink & Gold" App Theme & Interaction Polish
 
-> **Status:** Implemented (merged to main 2026-11-14; ships in next release)
+> **Status:** Implemented / Shipped in v1.0.0
 > **Scope:** `(settings)` — Replaces the Minimalist Graphite palette (`SPEC-17`) with a flat Ink & Gold design system and design-engineering interaction polish.
 
 ## 1. Objective

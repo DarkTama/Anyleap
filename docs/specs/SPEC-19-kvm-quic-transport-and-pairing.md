@@ -1,6 +1,6 @@
 # SPEC-19: KVM QUIC Transport & Authenticated Pairing
 
-> **Status:** Implemented (merged to main 2026-11-13; ships in next release) | Target Version: `v1.0.1`
+> **Status:** Implemented / Shipped in v1.0.0
 > Supersedes the WebSocket + raw UDP transport of SPEC-12. Decision record: ADR-0003.
 
 ## 1. Problem
