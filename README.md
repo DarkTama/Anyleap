@@ -15,6 +15,8 @@
 
 AnyLeap connects your Android phone and Windows PCs over USB or local Wi-Fi in a single desktop workstation. Mirror and control your phone, browse device files, photos, and notifications without a companion app, and glide one physical mouse and keyboard across multiple Windows PCs. Everything runs directly between your devices—local-first, encrypted, and with no cloud accounts or relays.
 
+> **Nothing to install on your phone** — AnyLeap uses Android's built-in USB/Wireless debugging.
+
 ## Features
 
 ### Phone

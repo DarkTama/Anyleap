@@ -12,6 +12,9 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  DetailPrint "Refreshing Windows icon cache..."
+  nsExec::Exec '"$SYSDIR\ie4uinit.exe" -show'
+  Pop $0
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

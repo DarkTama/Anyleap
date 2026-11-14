@@ -1,6 +1,6 @@
 # SPEC-23: Shared Mouse & Keyboard — Streamlined UX, Role-Aware Link Lifecycle & Offset-Aware Edge Mapping
 
-> **Status:** Approved (`2026-11-14`)
+> **Status:** Implemented (merged to main 2026-11-14; ships in next release)
 > **Scope:** `(kvm)` — Follows SPEC-19 (QUIC transport & pairing) and SPEC-22 (input fidelity & fixes).
 
 ## 1. Naming & Roles (User-Facing Text Only)

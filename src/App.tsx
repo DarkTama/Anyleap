@@ -74,6 +74,10 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [hudNotice, setHudNotice] = useState<string | null>(null);
+  const hudNoticeRef = useRef<string | null>(null);
+  const hudNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasHudNoticeRef = useRef(false);
 
   const devices = useAppStore((s) => s.devices);
   const selectedSerial = useAppStore((s) => s.selectedSerial);
@@ -198,9 +202,22 @@ function App() {
         setShowDetails(false);
       }),
       listen<{ reason?: string; proc?: string }>("kvm-leap-blocked", () => {
-        setToast("Can't move to the Linked PC while an administrator window is focused");
+        const kvmState = useKvmStore.getState();
+        const linkedName =
+          kvmState.status.linked_peer?.name ||
+          kvmState.topology.computers.find((c) => !c.is_local)?.name ||
+          "Linked PC";
+        const msg = `Can't move to ${linkedName} while an administrator window is focused`;
+        setToast(msg);
         if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
         toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+        hudNoticeRef.current = msg;
+        setHudNotice(msg);
+        if (hudNoticeTimerRef.current) clearTimeout(hudNoticeTimerRef.current);
+        hudNoticeTimerRef.current = setTimeout(() => {
+          hudNoticeRef.current = null;
+          setHudNotice(null);
+        }, 4000);
       }),
     ];
     listDevices()
@@ -211,6 +228,7 @@ function App() {
       .catch(() => {});
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (hudNoticeTimerRef.current) clearTimeout(hudNoticeTimerRef.current);
       unlisteners.forEach((p) => p.then((un) => un()));
     };
   }, [setDevices, setSessions, upsertSession, removeSession, setError]);
@@ -387,41 +405,31 @@ function App() {
     (s) => !!s.status.receiver_entered || (!!s.status.controller_edge && !s.status.is_input_trapped)
   );
 
-  // Transient toast: appears on the machine that just received the cursor,
-  // stays ~1.8 s, is click-through, and never lingers over the user's work.
-  useEffect(() => {
-    const HUD_W = 200;
-    const HUD_H = 36;
-    const MARGIN = 16;
-    let closeTimer: ReturnType<typeof setTimeout> | undefined;
-    const closeHud = async () => {
-      const w = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
-      if (w) {
-        await w.close().catch(() => {});
-        void kvmDebugNote("HUD_CLOSE").catch(() => {});
-      }
-    };
-
-    if (!(kvmIndicatorHud && kvmHasPeers && kvmOwnsCursor)) {
-      void closeHud();
-      return;
+  const closeHudWindow = useCallback(async () => {
+    const w = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
+    if (w) {
+      await w.close().catch(() => {});
+      void kvmDebugNote("HUD_CLOSE").catch(() => {});
     }
+  }, []);
 
-    (async () => {
+  const openHudWindow = useCallback(
+    async (opts: { width: number; height: number; url: string }) => {
+      const MARGIN = 16;
       const screenW = window.screen.availWidth || 1920;
       const screenH = window.screen.availHeight || 1080;
       const right = kvmHudCorner === "top-right" || kvmHudCorner === "bottom-right";
       const bottom = kvmHudCorner === "bottom-left" || kvmHudCorner === "bottom-right";
-      const x = right ? Math.max(MARGIN, screenW - HUD_W - MARGIN) : MARGIN;
-      const y = bottom ? Math.max(MARGIN, screenH - HUD_H - MARGIN) : MARGIN;
+      const x = right ? Math.max(MARGIN, screenW - opts.width - MARGIN) : MARGIN;
+      const y = bottom ? Math.max(MARGIN, screenH - opts.height - MARGIN) : MARGIN;
 
-      await closeHud();
+      await closeHudWindow();
       try {
         const w = new WebviewWindow("kvm-hud", {
-          url: "index.html?kvm_hud=1",
+          url: opts.url,
           title: "AnyLeap KVM HUD",
-          width: HUD_W,
-          height: HUD_H,
+          width: opts.width,
+          height: opts.height,
           x,
           y,
           resizable: false,
@@ -440,13 +448,50 @@ function App() {
       } catch (e) {
         console.error("Failed to spawn native desktop HUD overlay:", e);
       }
-      closeTimer = setTimeout(() => void closeHud(), 1800);
+    },
+    [kvmHudCorner, closeHudWindow]
+  );
+
+  // Transient toast: appears on the machine that just received the cursor,
+  // stays ~1.8 s, is click-through, and never lingers over the user's work.
+  useEffect(() => {
+    if (hudNoticeRef.current) return;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+    if (!(kvmIndicatorHud && kvmHasPeers && kvmOwnsCursor)) {
+      void closeHudWindow();
+      return;
+    }
+
+    (async () => {
+      await openHudWindow({
+        width: 200,
+        height: 36,
+        url: "index.html?kvm_hud=1",
+      });
+      closeTimer = setTimeout(() => void closeHudWindow(), 1800);
     })();
 
     return () => {
       if (closeTimer) clearTimeout(closeTimer);
     };
-  }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmOwnsCursor]);
+  }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmOwnsCursor, openHudWindow, closeHudWindow]);
+
+  // Show admin-window leap-blocked notice in the floating HUD overlay even if
+  // the main window is hidden behind the elevated window.
+  useEffect(() => {
+    if (hudNotice) {
+      wasHudNoticeRef.current = true;
+      void openHudWindow({
+        width: 460,
+        height: 44,
+        url: `index.html?kvm_hud=1&notice=${encodeURIComponent(hudNotice)}`,
+      });
+    } else if (wasHudNoticeRef.current) {
+      wasHudNoticeRef.current = false;
+      void closeHudWindow();
+    }
+  }, [hudNotice, openHudWindow, closeHudWindow]);
 
   const paletteCommands = useMemo(() => {
     const hasOnlineDevice = Boolean(

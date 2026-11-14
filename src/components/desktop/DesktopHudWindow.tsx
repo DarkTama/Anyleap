@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import { Laptop, Monitor } from "lucide-react";
+import { AlertTriangle, Laptop, Monitor } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { kvmGetStatus } from "@/services/kvmService";
 import type { KvmStatus } from "@/types/kvm";
 
 export function DesktopHudWindow() {
   const [status, setStatus] = useState<KvmStatus | null>(null);
+  const [notice, setNotice] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("notice");
+  });
 
   useEffect(() => {
     void kvmGetStatus().then(setStatus).catch(() => {});
@@ -26,6 +30,14 @@ export function DesktopHudWindow() {
       void kvmGetStatus().then(setStatus).catch(() => {});
     });
 
+    const unlistenBlocked = listen<{ reason?: string; proc?: string }>("kvm-leap-blocked", () => {
+      setStatus((cur) => {
+        const linkedName = cur?.linked_peer?.name || "Linked PC";
+        setNotice(`Can't move to ${linkedName} while an administrator window is focused`);
+        return cur;
+      });
+    });
+
     const timer = setInterval(() => {
       void kvmGetStatus().then(setStatus).catch(() => {});
     }, 1200);
@@ -36,8 +48,20 @@ export function DesktopHudWindow() {
       void unlistenDisconnected.then((f) => f());
       void unlistenLeap.then((f) => f());
       void unlistenReturn.then((f) => f());
+      void unlistenBlocked.then((f) => f());
     };
   }, []);
+
+  if (notice) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center select-none overflow-hidden bg-transparent pointer-events-none px-2">
+        <div className="hud-pill flex max-w-full items-center gap-1.5 rounded-full border border-status-warning/60 bg-ink-900 px-3 py-1.5 text-[11px] text-status-warning pointer-events-none shadow-elevated">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+          <span className="truncate font-medium">{notice}</span>
+        </div>
+      </div>
+    );
+  }
 
   // This window is only shown on the machine that currently owns the cursor.
   const isRemote = status?.receiver_entered ?? false; // driven by a remote controller

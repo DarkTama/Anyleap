@@ -42,6 +42,8 @@ const WATCHDOG_INTERVAL_MS: u32 = 250;
 #[cfg(any(windows, test))]
 const WATCHDOG_BLIND_THRESHOLD_MS: u32 = 1000;
 const BLOCKED_NOTICE_COOLDOWN_MS: u64 = 1000;
+#[cfg(any(windows, test))]
+const TIMER_BLOCKED_NOTICE_COOLDOWN_MS: u64 = 5000;
 const SECURITY_MANDATORY_MEDIUM_RID: u32 = 0x2000;
 const SECURITY_MANDATORY_HIGH_RID: u32 = 0x3000;
 
@@ -102,6 +104,8 @@ static EDGE_DWELL_START: AtomicU64 = AtomicU64::new(0);
 static EDGE_DWELL_SEAM_IDX: AtomicI32 = AtomicI32::new(-1);
 #[cfg(windows)]
 static LAST_BLOCKED_NOTICE_MS: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static LAST_TIMER_BLOCKED_NOTICE_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static LAST_HOOK_TICK_MS: AtomicU32 = AtomicU32::new(0);
 #[cfg(windows)]
@@ -482,6 +486,7 @@ impl HookController {
         #[cfg(windows)]
         {
             LAST_BLOCKED_NOTICE_MS.store(0, Ordering::Relaxed);
+            LAST_TIMER_BLOCKED_NOTICE_MS.store(0, Ordering::Relaxed);
             HAS_LAST_HOOK_TICK.store(false, Ordering::Release);
             LAST_HOOK_TICK_MS.store(0, Ordering::Release);
             LAST_MOUSE_HOOK_US.store(0, Ordering::Relaxed);
@@ -497,10 +502,11 @@ impl HookController {
 
             let tid = GetCurrentThreadId();
             HOOK_THREAD_ID.store(tid, Ordering::Release);
+            let our_pid = GetCurrentProcessId();
 
             let h_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0);
             let h_kbd = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
-            let mut watchdog_timer_id: usize = 0;
+            let mut watchdog_timer_id: usize = SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None);
 
             while HOOK_ACTIVE.load(Ordering::Relaxed) {
                 let res = GetMessageW(&mut msg, None, 0, 0);
@@ -509,10 +515,6 @@ impl HookController {
                 }
                 if msg.message == WM_KVM_RESTORE_CURSOR {
                     restore_cursor_visibility();
-                    if !IS_TRAPPED.load(Ordering::Acquire) && watchdog_timer_id != 0 {
-                        let _ = KillTimer(None, watchdog_timer_id);
-                        watchdog_timer_id = 0;
-                    }
                     continue;
                 }
                 if msg.message == WM_KVM_ENGAGE {
@@ -525,23 +527,22 @@ impl HookController {
                     && watchdog_timer_id != 0
                     && msg.wParam.0 == watchdog_timer_id
                 {
-                    if !IS_TRAPPED.load(Ordering::Acquire) {
-                        let _ = KillTimer(None, watchdog_timer_id);
-                        watchdog_timer_id = 0;
-                    } else if let Some(last_input_tick) = query_last_input_tick() {
-                        let hook_tick = HAS_LAST_HOOK_TICK
-                            .load(Ordering::Acquire)
-                            .then(|| LAST_HOOK_TICK_MS.load(Ordering::Acquire));
-                        if let Some(gap_ms) = evaluate_capture_watchdog(
-                            true,
-                            hook_tick,
-                            last_input_tick,
-                            WATCHDOG_BLIND_THRESHOLD_MS,
-                        ) {
-                            let _ = KillTimer(None, watchdog_timer_id);
-                            watchdog_timer_id = 0;
-                            perform_watchdog_release(gap_ms);
+                    if IS_TRAPPED.load(Ordering::Acquire) {
+                        if let Some(last_input_tick) = query_last_input_tick() {
+                            let hook_tick = HAS_LAST_HOOK_TICK
+                                .load(Ordering::Acquire)
+                                .then(|| LAST_HOOK_TICK_MS.load(Ordering::Acquire));
+                            if let Some(gap_ms) = evaluate_capture_watchdog(
+                                true,
+                                hook_tick,
+                                last_input_tick,
+                                WATCHDOG_BLIND_THRESHOLD_MS,
+                            ) {
+                                perform_watchdog_release(gap_ms);
+                            }
                         }
+                    } else if HAS_ACTIVE_LINK.load(Ordering::Acquire) {
+                        check_timer_elevated_leap_block(our_pid);
                     }
                     continue;
                 }
@@ -1356,6 +1357,90 @@ unsafe fn check_foreground_blocks_leap(our_pid: u32) -> Option<(HWND, String)> {
     }
 }
 
+#[cfg(any(windows, test))]
+fn should_emit_timer_blocked_notice(
+    has_active_link: bool,
+    is_trapped: bool,
+    elevated_foreground: bool,
+    at_leap_edge: bool,
+    now_ms: u64,
+    last_emitted_ms: u64,
+    cooldown_ms: u64,
+) -> bool {
+    has_active_link
+        && !is_trapped
+        && elevated_foreground
+        && at_leap_edge
+        && (last_emitted_ms == 0 || now_ms.saturating_sub(last_emitted_ms) >= cooldown_ms)
+}
+
+#[cfg(windows)]
+fn is_point_at_active_leap_edge(pt: (i32, i32)) -> bool {
+    let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
+    let deadzone = DEADZONE_PX.load(Ordering::Relaxed);
+    let Ok(layout) = controller_layout().try_lock() else {
+        return false;
+    };
+    if let Some(origin) = layout.remote_origin {
+        detect_controller_edge_seams(
+            pt,
+            &layout.main_monitors,
+            &layout.linked_monitors,
+            origin,
+            &layout.seams,
+            deadzone,
+        )
+        .is_some()
+    } else {
+        detect_controller_edge(pt, &layout.main_monitors, link_edge, deadzone).is_some()
+    }
+}
+
+#[cfg(windows)]
+unsafe fn check_timer_elevated_leap_block(our_pid: u32) {
+    let has_active_link = HAS_ACTIVE_LINK.load(Ordering::Acquire);
+    let is_trapped = IS_TRAPPED.load(Ordering::Acquire);
+    if !has_active_link || is_trapped {
+        return;
+    }
+    let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) else {
+        return;
+    };
+    let mut pt = POINT::default();
+    if GetCursorPos(&mut pt).is_err() {
+        return;
+    }
+    let at_edge = is_point_at_active_leap_edge((pt.x, pt.y));
+    let now = now_millis();
+    let prev = LAST_TIMER_BLOCKED_NOTICE_MS.load(Ordering::Relaxed);
+    if !should_emit_timer_blocked_notice(
+        has_active_link,
+        is_trapped,
+        true,
+        at_edge,
+        now,
+        prev,
+        TIMER_BLOCKED_NOTICE_COOLDOWN_MS,
+    ) {
+        return;
+    }
+    LAST_TIMER_BLOCKED_NOTICE_MS.store(now, Ordering::Relaxed);
+    if debug_log::is_enabled() {
+        debug_log::record_event(DebugEvent::Note {
+            ts_us: debug_log::now_us(),
+            hwnd: fg.0 as isize,
+            text: format!(
+                "LEAP_BLOCKED reason=elevated_foreground source=timer proc={proc_name}"
+            ),
+        });
+    }
+    if let Ok(guard) = leap_blocked_callback_slot().try_lock() {
+        if let Some(ref cb) = *guard {
+            cb(&proc_name);
+        }
+    }
+}
+
 #[cfg(windows)]
 unsafe fn perform_watchdog_release(gap_ms: u32) {
     if debug_log::is_enabled() {
@@ -1932,5 +2017,43 @@ mod tests {
             evaluate_capture_watchdog(true, Some(10), u32::MAX - 5, th),
             None
         );
+    }
+
+    #[test]
+    fn timer_blocked_notice_checks_conditions_and_5s_throttle() {
+        let cd = TIMER_BLOCKED_NOTICE_COOLDOWN_MS;
+        assert_eq!(cd, 5000);
+
+        // First trigger emits even when now_ms < cooldown (last_emitted_ms == 0).
+        assert!(should_emit_timer_blocked_notice(
+            true, false, true, true, 250, 0, cd
+        ));
+
+        // Throttled for 5 seconds after last emission.
+        assert!(!should_emit_timer_blocked_notice(
+            true, false, true, true, 500, 250, cd
+        ));
+        assert!(!should_emit_timer_blocked_notice(
+            true, false, true, true, 5249, 250, cd
+        ));
+
+        // Emits again once 5000 ms have elapsed.
+        assert!(should_emit_timer_blocked_notice(
+            true, false, true, true, 5250, 250, cd
+        ));
+
+        // Suppressed if link inactive, already trapped, foreground not elevated, or cursor not at edge.
+        assert!(!should_emit_timer_blocked_notice(
+            false, false, true, true, 10_000, 0, cd
+        ));
+        assert!(!should_emit_timer_blocked_notice(
+            true, true, true, true, 10_000, 0, cd
+        ));
+        assert!(!should_emit_timer_blocked_notice(
+            true, false, false, true, 10_000, 0, cd
+        ));
+        assert!(!should_emit_timer_blocked_notice(
+            true, false, true, false, 10_000, 0, cd
+        ));
     }
 }
