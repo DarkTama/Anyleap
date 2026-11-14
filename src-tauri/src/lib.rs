@@ -22,6 +22,16 @@ fn show_main(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // --- SPEC-25c ---
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            if let Some(raw_path) = kvm::open_on_linked::parse_open_on_linked_arg(&args) {
+                let resolved = kvm::open_on_linked::resolve_cli_file_path(&raw_path, &cwd);
+                kvm::open_on_linked::handle_cli_open_on_linked(app, resolved);
+            } else {
+                show_main(app);
+            }
+        }))
+        // --- end SPEC-25c ---
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
@@ -88,6 +98,12 @@ pub fn run() {
             kvm::commands::kvm_open_debug_log_folder,
             kvm::commands::kvm_debug_note,
             kvm::clipboard::kvm_set_sync_settings,
+            // --- SPEC-25c ---
+            kvm::commands::kvm_set_session_settings,
+            kvm::commands::kvm_open_url_on_linked,
+            kvm::commands::kvm_open_file_on_linked,
+            kvm::commands::kvm_cancel_transfer,
+            // --- end SPEC-25c ---
             phone_files::list_device_dir,
             phone_files::pull_device_file,
             phone_files::push_to_device,
@@ -99,6 +115,20 @@ pub fn run() {
         .setup(|app| {
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
             wheel_swipe::init(app.handle());
+            // --- SPEC-25c ---
+            kvm::session_sync::init(app.handle());
+            let _ = kvm::open_on_linked::sync_context_menu(
+                kvm::open_on_linked::open_on_linked_menu_enabled(),
+            );
+            let cli_args: Vec<String> = std::env::args().collect();
+            if let Some(raw_path) = kvm::open_on_linked::parse_open_on_linked_arg(&cli_args) {
+                let cwd = std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let resolved = kvm::open_on_linked::resolve_cli_file_path(&raw_path, &cwd);
+                kvm::open_on_linked::handle_cli_open_on_linked(app.handle(), resolved);
+            }
+            // --- end SPEC-25c ---
 
             // System-tray icon: left-click restores the window; the menu offers
             // Show / Quit. Pairs with the frontend's close-to-tray handler.

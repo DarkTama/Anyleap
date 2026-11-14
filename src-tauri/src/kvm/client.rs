@@ -1,4 +1,3 @@
-use super::files::receive;
 use super::identity::{client_config, peer_fingerprint, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
 use super::protocol::{encode_delta, read_frame, write_frame, KvmPacket, TransferEvent, UdpMouseDelta};
@@ -148,9 +147,28 @@ impl KvmClientHandle {
             }
         });
 
-        let (in_tx, in_connected) = (incoming_tx.clone(), Arc::clone(&is_connected));
+        let (in_tx, in_connected, in_xfer_tx, in_conn_id) = (
+            incoming_tx.clone(),
+            Arc::clone(&is_connected),
+            transfer_tx.clone(),
+            conn.stable_id(),
+        );
         tokio::spawn(async move {
             while let Ok(Some(packet)) = read_frame::<_, KvmPacket>(&mut recv).await {
+                if let KvmPacket::TransferCancel { ref id } = packet {
+                    super::debug_log::note(|| format!("TRANSFER_CANCEL_RECV id={id}"));
+                    if let Some(meta) =
+                        super::files::global_cancel_registry().cancel_for_conn(in_conn_id, id)
+                    {
+                        let _ = in_xfer_tx.send(TransferEvent::Cancelled {
+                            id: meta.id,
+                            kind: meta.kind,
+                            name: meta.name,
+                            size_bytes: meta.size_bytes,
+                        });
+                    }
+                    super::open_on_linked::cancel_pending_open(id);
+                }
                 let _ = in_tx.send(packet);
             }
             in_connected.store(false, Ordering::Relaxed);
@@ -159,14 +177,28 @@ impl KvmClientHandle {
 
         let (uni_conn, tx) = (conn.clone(), transfer_tx.clone());
         tokio::spawn(async move {
+            let conn_id = uni_conn.stable_id();
             while let Ok(mut s) = uni_conn.accept_uni().await {
                 let (tx, dir) = (tx.clone(), download_dir.clone());
                 tokio::spawn(async move {
-                    match receive(&mut s, &dir).await {
+                    match super::files::receive_with_events_for_conn(
+                        &mut s,
+                        &dir,
+                        Some(&tx),
+                        conn_id,
+                    )
+                    .await
+                    {
                         Ok(ev) => {
                             let _ = tx.send(ev);
                         }
-                        Err(e) => eprintln!("[KVM-Client] transfer rejected: {e}"),
+                        Err(e) if e == super::files::TRANSFER_CANCELLED_ERR => {
+                            let _ = s.stop(super::files::quic_cancel_varint());
+                        }
+                        Err(e) => {
+                            super::debug_log::note(|| format!("STAGING_FAIL side=client err={e}"));
+                            eprintln!("[KVM-Client] transfer rejected: {e}");
+                        }
                     }
                 });
             }

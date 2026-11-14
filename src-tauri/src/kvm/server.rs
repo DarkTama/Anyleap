@@ -1,4 +1,4 @@
-use super::files::{receive, send_image};
+use super::files::send_image;
 use super::identity::{ct_eq, peer_fingerprint, server_config, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
 use super::protocol::{decode_delta, read_frame, read_frame_capped, write_frame, KvmPacket, Outbound, TransferEvent, UdpMouseDelta};
@@ -254,6 +254,8 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
 
         let mut out_rx = ctx.outgoing_tx.subscribe();
         let out_conn = conn.clone();
+        let out_xfer_tx = ctx.transfer_tx.clone();
+        let out_pkt_tx = ctx.outgoing_tx.clone();
         tasks.push(tokio::spawn(async move {
             let mut disc_done_tx = Some(disc_done_tx);
             loop {
@@ -265,8 +267,32 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                             }
                         }
                         Ok(Outbound::Image { format, data }) => {
-                            let _ = send_image(&out_conn, format, data).await;
+                            let c = out_conn.clone();
+                            tokio::spawn(async move {
+                                let _ = send_image(&c, format, data).await;
+                            });
                         }
+                        // --- SPEC-25c ---
+                        Ok(Outbound::OpenFile { transfer_id, path }) => {
+                            let c = out_conn.clone();
+                            let xfer_tx = out_xfer_tx.clone();
+                            let pkt_tx = out_pkt_tx.clone();
+                            tokio::spawn(async move {
+                                if super::open_on_linked::send_open_file_with_events(
+                                    &c,
+                                    &path,
+                                    &transfer_id,
+                                    None,
+                                    Some(&xfer_tx),
+                                )
+                                .await
+                                .is_ok()
+                                {
+                                    let _ = pkt_tx.send(Outbound::Packet(KvmPacket::OpenFile { transfer_id }));
+                                }
+                            });
+                        }
+                        // --- end SPEC-25c ---
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                         Err(_) => break,
                     },
@@ -304,19 +330,34 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
 
         let (uni_conn, transfer_tx, dir) = (conn.clone(), ctx.transfer_tx.clone(), ctx.download_dir.clone());
         tasks.push(tokio::spawn(async move {
+            let conn_id = uni_conn.stable_id();
             while let Ok(mut s) = uni_conn.accept_uni().await {
                 let (tx, dir) = (transfer_tx.clone(), dir.clone());
                 tokio::spawn(async move {
-                    match receive(&mut s, &dir).await {
+                    match super::files::receive_with_events_for_conn(
+                        &mut s,
+                        &dir,
+                        Some(&tx),
+                        conn_id,
+                    )
+                    .await
+                    {
                         Ok(ev) => {
                             let _ = tx.send(ev);
                         }
-                        Err(e) => eprintln!("[KVM-Server] transfer rejected: {e}"),
+                        Err(e) if e == super::files::TRANSFER_CANCELLED_ERR => {
+                            let _ = s.stop(super::files::quic_cancel_varint());
+                        }
+                        Err(e) => {
+                            super::debug_log::note(|| format!("STAGING_FAIL side=server err={e}"));
+                            eprintln!("[KVM-Server] transfer rejected: {e}");
+                        }
                     }
                 });
             }
         }));
 
+        let conn_id = conn.stable_id();
         let mut disconnected_by_server = false;
         loop {
             tokio::select! {
@@ -324,6 +365,20 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                     Ok(Some(packet)) => {
                         if matches!(packet, KvmPacket::SessionDisconnect) {
                             break;
+                        }
+                        if let KvmPacket::TransferCancel { ref id } = packet {
+                            super::debug_log::note(|| format!("TRANSFER_CANCEL_RECV id={id}"));
+                            if let Some(meta) =
+                                super::files::global_cancel_registry().cancel_for_conn(conn_id, id)
+                            {
+                                let _ = ctx.transfer_tx.send(TransferEvent::Cancelled {
+                                    id: meta.id,
+                                    kind: meta.kind,
+                                    name: meta.name,
+                                    size_bytes: meta.size_bytes,
+                                });
+                            }
+                            super::open_on_linked::cancel_pending_open(id);
                         }
                         if !matches!(
                             packet,
@@ -1001,4 +1056,249 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // --- SPEC-25c ---
+    #[tokio::test]
+    async fn loopback_session_lock_open_url_and_open_file() {
+        let r = rig("spec25c").await;
+        let mut srv_in_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_trx = r.srv.transfer_tx.subscribe();
+        let srv_out_tx = r.srv.outgoing_tx.clone();
+
+        let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+        let mut cli_in_rx = c.incoming_tx.subscribe();
+
+        // Drain initial Pair packet
+        let _ = timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap();
+
+        // 1. SessionLock (client -> server)
+        c.send_packet(KvmPacket::SessionLock).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::SessionLock
+        );
+
+        // 2. OpenUrl (client -> server, and server -> client)
+        let url = "https://example.com/anyleap".to_string();
+        c.send_packet(KvmPacket::OpenUrl { url: url.clone() }).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::OpenUrl { url: url.clone() }
+        );
+        srv_out_tx
+            .send(Outbound::Packet(KvmPacket::OpenUrl { url: url.clone() }))
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), cli_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::OpenUrl { url }
+        );
+
+        let open_dir = crate::kvm::open_on_linked::open_staging_dir_for(
+            &crate::kvm::open_on_linked::open_staging_root(),
+            "tid-1",
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&open_dir);
+
+        // 3. OpenFile stream + OpenFile packet (client -> server)
+        let src = r.dir.join("note.txt");
+        std::fs::write(&src, b"hello linked pc").unwrap();
+        crate::kvm::open_on_linked::send_open_file(&c.conn, &src, "tid-1", None)
+            .await
+            .unwrap();
+        c.send_packet(KvmPacket::OpenFile {
+            transfer_id: "tid-1".into(),
+        })
+        .await
+        .unwrap();
+
+        let mut saw_100 = false;
+        loop {
+            match timeout(Duration::from_secs(3), srv_trx.recv()).await.unwrap().unwrap() {
+                TransferEvent::Progress {
+                    id,
+                    kind,
+                    pct,
+                    state,
+                    size_bytes,
+                    ..
+                } => {
+                    assert_eq!(id, "tid-1");
+                    assert_eq!(kind, "open");
+                    assert!(pct <= 100);
+                    assert_eq!(size_bytes, 15);
+                    if pct == 100 {
+                        assert_eq!(state, "done");
+                        saw_100 = true;
+                    } else {
+                        assert_eq!(state, "active");
+                    }
+                }
+                TransferEvent::OpenFile {
+                    transfer_id,
+                    name,
+                    size,
+                    saved_path,
+                } => {
+                    assert_eq!(transfer_id, "tid-1");
+                    assert_eq!(name, "note.txt");
+                    assert_eq!(size, 15);
+                    assert!(saved_path.starts_with(&open_dir));
+                    assert_eq!(std::fs::read(&saved_path).unwrap(), b"hello linked pc");
+                    break;
+                }
+                other => panic!("expected TransferEvent::OpenFile, got {other:?}"),
+            }
+        }
+        assert!(saw_100);
+        assert_eq!(
+            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::OpenFile {
+                transfer_id: "tid-1".into(),
+            }
+        );
+
+        let _ = std::fs::remove_dir_all(&open_dir);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn open_file_transfer_cancels_cleanly_from_both_sides() {
+        let r = rig("open-cancel").await;
+        let pin = r.srv.security_pin.lock().unwrap().clone();
+        let c = connect(&r, Some(pin)).await.unwrap();
+        let mut srv_trx = r.srv.transfer_tx.subscribe();
+        let mut cli_trx = c.transfer_tx.subscribe();
+
+        // Large enough payload that the transfer is still running when cancelled.
+        let src = r.dir.join("big-open.bin");
+        let payload = vec![0xABu8; 48 * 1024 * 1024];
+        std::fs::write(&src, &payload).unwrap();
+
+        // Case 1: Receiver initiates cancel mid-transfer.
+        let id_rx = format!("tid-rx-cancel-{}", std::process::id());
+        let open_dir_rx = crate::kvm::open_on_linked::open_staging_dir_for(
+            &crate::kvm::open_on_linked::open_staging_root(),
+            &id_rx,
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&open_dir_rx);
+
+        let send_conn = c.conn.clone();
+        let send_path = src.clone();
+        let send_tx = c.transfer_tx.clone();
+        let send_id = id_rx.clone();
+        let send_task = tokio::spawn(async move {
+            crate::kvm::open_on_linked::send_open_file_with_events(
+                &send_conn,
+                &send_path,
+                &send_id,
+                None,
+                Some(&send_tx),
+            )
+            .await
+        });
+
+        // Wait until receiver starts receiving progress.
+        loop {
+            match timeout(Duration::from_secs(5), srv_trx.recv()).await.unwrap().unwrap() {
+                TransferEvent::Progress { id, .. } if id == id_rx => break,
+                _ => {}
+            }
+        }
+        // Simulate receiver cancelling locally on server (conn != client conn) + sending TransferCancel to client.
+        let srv_conns = crate::kvm::files::global_cancel_registry()
+            .cancel_except_conn(c.conn.stable_id(), &id_rx);
+        for (_, meta) in &srv_conns {
+            let _ = r.srv.transfer_tx.send(TransferEvent::Cancelled {
+                id: meta.id.clone(),
+                kind: meta.kind.clone(),
+                name: meta.name.clone(),
+                size_bytes: meta.size_bytes,
+            });
+        }
+        assert!(!srv_conns.is_empty(), "server must have active receiver registration");
+        r.srv
+            .outgoing_tx
+            .send(Outbound::Packet(KvmPacket::TransferCancel { id: id_rx.clone() }))
+            .unwrap();
+
+        let send_res = timeout(Duration::from_secs(5), send_task).await.unwrap().unwrap();
+        assert!(send_res.is_err(), "sender must abort on cancel");
+
+        // Both sides must observe TransferEvent::Cancelled, and no partial files remain.
+        let mut saw_cli_cancel = false;
+        while let Ok(Ok(ev)) = timeout(Duration::from_millis(500), cli_trx.recv()).await {
+            if matches!(ev, TransferEvent::Cancelled { ref id, .. } if id == &id_rx) {
+                saw_cli_cancel = true;
+                break;
+            }
+        }
+        assert!(saw_cli_cancel, "sender (client) must observe Cancelled");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!open_dir_rx.exists(), "partial open staging dir must be removed");
+
+        // Case 2: Sender initiates cancel mid-transfer.
+        let id_tx = format!("tid-tx-cancel-{}", std::process::id());
+        let open_dir_tx = crate::kvm::open_on_linked::open_staging_dir_for(
+            &crate::kvm::open_on_linked::open_staging_root(),
+            &id_tx,
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&open_dir_tx);
+
+        let send_conn2 = c.conn.clone();
+        let send_path2 = src.clone();
+        let send_tx2 = c.transfer_tx.clone();
+        let send_id2 = id_tx.clone();
+        let send_task2 = tokio::spawn(async move {
+            crate::kvm::open_on_linked::send_open_file_with_events(
+                &send_conn2,
+                &send_path2,
+                &send_id2,
+                None,
+                Some(&send_tx2),
+            )
+            .await
+        });
+
+        loop {
+            match timeout(Duration::from_secs(5), srv_trx.recv()).await.unwrap().unwrap() {
+                TransferEvent::Progress { id, .. } if id == id_tx => break,
+                _ => {}
+            }
+        }
+        if let Some(meta) = crate::kvm::files::global_cancel_registry()
+            .cancel_for_conn(c.conn.stable_id(), &id_tx)
+        {
+            let _ = c.transfer_tx.send(TransferEvent::Cancelled {
+                id: meta.id,
+                kind: meta.kind,
+                name: meta.name,
+                size_bytes: meta.size_bytes,
+            });
+        }
+        c.send_packet(KvmPacket::TransferCancel { id: id_tx.clone() })
+            .await
+            .unwrap();
+
+        let send_res2 = timeout(Duration::from_secs(5), send_task2).await.unwrap().unwrap();
+        assert!(send_res2.is_err());
+
+        let mut saw_srv_cancel = false;
+        while let Ok(Ok(ev)) = timeout(Duration::from_millis(500), srv_trx.recv()).await {
+            if matches!(ev, TransferEvent::Cancelled { ref id, .. } if id == &id_tx) {
+                saw_srv_cancel = true;
+                break;
+            }
+        }
+        assert!(saw_srv_cancel, "receiver (server) must observe Cancelled");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!open_dir_tx.exists(), "partial open staging dir must be removed on sender cancel");
+
+        let _ = std::fs::remove_dir_all(&open_dir_rx);
+        let _ = std::fs::remove_dir_all(&open_dir_tx);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+    // --- end SPEC-25c ---
 }

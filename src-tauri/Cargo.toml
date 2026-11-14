@@ -27,6 +27,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
+# --- SPEC-25c ---
+tauri-plugin-single-instance = "2"
+# --- end SPEC-25c ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
@@ -52,4 +55,12 @@ windows = { version = "0.61", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_Security",
+    # --- SPEC-25c ---
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Shutdown",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_Shell",
+    # --- end SPEC-25c ---
 ] }

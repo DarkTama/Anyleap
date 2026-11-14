@@ -151,6 +151,28 @@ fn emit_clipboard_text(app: &AppHandle, text: &str) {
     );
 }
 
+fn emit_transfer_progress(
+    app: &AppHandle,
+    id: &str,
+    kind: &str,
+    name: &str,
+    pct: u8,
+    state: &str,
+    size_bytes: u64,
+) {
+    let _ = app.emit(
+        "kvm-transfer-progress",
+        serde_json::json!({
+            "id": id,
+            "kind": kind,
+            "name": name,
+            "pct": pct.min(100),
+            "state": state,
+            "sizeBytes": size_bytes,
+        }),
+    );
+}
+
 fn emit_transfer(app: &AppHandle, ev: TransferEvent) {
     let item = match ev {
         TransferEvent::ClipboardImage { data } => {
@@ -178,6 +200,60 @@ fn emit_transfer(app: &AppHandle, ev: TransferEvent) {
             "status": "completed",
             "savedPath": get_download_dir().display().to_string()
         }),
+        // --- SPEC-25c ---
+        TransferEvent::OpenFile {
+            transfer_id,
+            name,
+            size,
+            saved_path,
+        } => {
+            super::open_on_linked::handle_open_file_transfer_ready(
+                app,
+                &transfer_id,
+                saved_path.clone(),
+            );
+            serde_json::json!({
+                "id": transfer_id,
+                "timestamp": now_ms(),
+                "type": "file",
+                "name": name,
+                "sizeBytes": size,
+                "progressPercent": 100,
+                "status": "completed",
+                "savedPath": saved_path.display().to_string()
+            })
+        }
+        TransferEvent::Progress {
+            id,
+            kind,
+            name,
+            pct,
+            state,
+            size_bytes,
+        } => {
+            emit_transfer_progress(app, &id, &kind, &name, pct, &state, size_bytes);
+            return;
+        }
+        TransferEvent::Cancelled {
+            id,
+            kind,
+            name,
+            size_bytes,
+        } => {
+            emit_transfer_progress(app, &id, &kind, &name, 0, "cancelled", size_bytes);
+            return;
+        }
+        TransferEvent::Failed { id, kind, name, reason } => {
+            emit_transfer_progress(app, &id, &kind, &name, 0, "failed", 0);
+            if kind == "open" {
+                super::open_on_linked::emit_continuity_notice(
+                    app,
+                    format!("Open-on-Linked transfer failed ({name}): {reason}"),
+                );
+            }
+            return;
+        }
+        // --- end SPEC-25c ---
     };
     let _ = app.emit("kvm-activity", item);
 }
@@ -444,6 +520,13 @@ async fn start_server_inner(
         }
     }
     let (identity, trust) = get_security(app_handle, state)?;
+    // --- SPEC-25c ---
+    super::open_on_linked::cleanup_expired_open_staging(
+        &super::open_on_linked::open_staging_root(),
+        super::open_on_linked::OPEN_TEMP_MAX_AGE,
+        std::time::SystemTime::now(),
+    );
+    // --- end SPEC-25c ---
 
     let server_handle = start_kvm_server(
         port.unwrap_or(KVM_PORT),
@@ -574,6 +657,7 @@ async fn start_server_inner(
                     // screen edge (desktop/taskbar), so focusing the window under it would
                     // send typed keys to the desktop until the user clicks something.
                     injector::set_cursor_position(pos.0, pos.1);
+                    super::injector::ensure_cursor_visible_with_nudge("receiver_cursor_enter");
 
                     let _ = pkt_out_tx.send(Outbound::Packet(KvmPacket::CursorPosition {
                         norm_x,
@@ -688,6 +772,22 @@ async fn start_server_inner(
                     }
                 }
                 KvmPacket::ClipboardText { text } => emit_clipboard_text(&app_h, &text),
+                // --- SPEC-25c ---
+                KvmPacket::SessionLock => {
+                    release_receiver_inputs(&rx_state_pkt, "session_lock");
+                    super::session_sync::handle_inbound_session_packet(&app_h, true);
+                }
+                KvmPacket::SessionSleep => {
+                    release_receiver_inputs(&rx_state_pkt, "session_sleep");
+                    super::session_sync::handle_inbound_session_packet(&app_h, false);
+                }
+                KvmPacket::OpenUrl { url } => {
+                    super::open_on_linked::handle_open_url_packet(&app_h, &url);
+                }
+                KvmPacket::OpenFile { transfer_id } => {
+                    super::open_on_linked::handle_open_file_packet(&app_h, &transfer_id);
+                }
+                // --- end SPEC-25c ---
                 _ => {}
             }
         }
@@ -838,6 +938,7 @@ async fn start_server_inner(
                 DeltaAction::Ignore => {}
                 DeltaAction::Move { pos, emit_pos } => {
                     injector::set_cursor_position(pos.0, pos.1);
+                    injector::maybe_nudge_first_delta_after_unlock();
                     if let Some((norm_x, norm_y)) = emit_pos {
                         let _ = delta_out_tx.send(Outbound::Packet(KvmPacket::CursorPosition {
                             norm_x,
@@ -985,6 +1086,13 @@ pub async fn kvm_connect_peer(
 ) -> Result<(), String> {
     let (id, name, _sw, _sh, monitors) = get_local_machine_info(&app_handle, &state)?;
     let (identity, trust) = get_security(&app_handle, &state)?;
+    // --- SPEC-25c ---
+    super::open_on_linked::cleanup_expired_open_staging(
+        &super::open_on_linked::open_staging_root(),
+        super::open_on_linked::OPEN_TEMP_MAX_AGE,
+        std::time::SystemTime::now(),
+    );
+    // --- end SPEC-25c ---
 
     let client = KvmClientHandle::connect(
         &ip,
@@ -1012,6 +1120,9 @@ pub async fn kvm_connect_peer(
                 Outbound::Image { format, data } => {
                     let _ = send_image(&clip_conn, format, data).await;
                 }
+                // --- SPEC-25c ---
+                Outbound::OpenFile { .. } => {}
+                // --- end SPEC-25c ---
             }
         }
     });
@@ -1070,6 +1181,20 @@ pub async fn kvm_connect_peer(
                     }
                     let _ = app_h.emit("kvm-peer-disconnected", &peer_id_for_rx);
                 }
+                // --- SPEC-25c ---
+                KvmPacket::SessionLock => {
+                    super::session_sync::handle_inbound_session_packet(&app_h, true);
+                }
+                KvmPacket::SessionSleep => {
+                    super::session_sync::handle_inbound_session_packet(&app_h, false);
+                }
+                KvmPacket::OpenUrl { url } => {
+                    super::open_on_linked::handle_open_url_packet(&app_h, &url);
+                }
+                KvmPacket::OpenFile { transfer_id } => {
+                    super::open_on_linked::handle_open_file_packet(&app_h, &transfer_id);
+                }
+                // --- end SPEC-25c ---
                 _ => {}
             }
         }
@@ -1457,6 +1582,76 @@ pub async fn kvm_debug_note(text: String) -> Result<(), String> {
     });
     Ok(())
 }
+
+// --- SPEC-25c ---
+#[tauri::command]
+pub fn kvm_set_session_settings(
+    lock_together: bool,
+    sleep_together: bool,
+    open_on_linked_menu: bool,
+) -> Result<(), String> {
+    super::session_sync::set_session_sync_settings(lock_together, sleep_together);
+    super::open_on_linked::set_open_on_linked_menu_enabled(open_on_linked_menu);
+    super::open_on_linked::sync_context_menu(open_on_linked_menu)
+}
+
+#[tauri::command]
+pub async fn kvm_open_url_on_linked(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    super::open_on_linked::send_open_url_from_state(&state, &url)
+}
+
+#[tauri::command]
+pub async fn kvm_open_file_on_linked(
+    path: String,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    super::open_on_linked::send_and_open_file_from_app(&app_handle, std::path::PathBuf::from(path))
+        .await
+}
+
+#[tauri::command]
+pub async fn kvm_cancel_transfer(
+    id: String,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    super::debug_log::note(|| format!("TRANSFER_CANCEL_SEND id={id}"));
+    let cancelled_entries = super::files::global_cancel_registry().cancel_any_conn(&id);
+    for (_, meta) in &cancelled_entries {
+        emit_transfer_progress(
+            &app_handle,
+            &meta.id,
+            &meta.kind,
+            &meta.name,
+            0,
+            "cancelled",
+            meta.size_bytes,
+        );
+    }
+    super::open_on_linked::cancel_pending_open(&id);
+    let kvm = state.kvm.lock().map_err(|e| format!("Mutex lock poisoned: {e}"))?;
+    if let Some(ref client) = kvm.client {
+        if client.is_connected.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = client
+                .send_packet_tx
+                .try_send(KvmPacket::TransferCancel { id });
+            return Ok(());
+        }
+    }
+    if let Some(ref server) = kvm.server {
+        if server.is_running.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = server
+                .outgoing_tx
+                .send(Outbound::Packet(KvmPacket::TransferCancel { id }));
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+// --- end SPEC-25c ---
 
 #[cfg(test)]
 mod tests {
