@@ -133,4 +133,59 @@ export interface KvmSettingsConfig {
   syncClipboardImage: boolean;
   syncFileTransfer: boolean;
   debugLog?: boolean;
+  // SPEC-25a: Files & Pointer
+  continuityDragDropExperimental: boolean;
+  continuityFileClipboard: boolean;
+  continuityStagingLimitMb: number;
+  continuityClipPrefetchLimitMb: number;
+  continuityPointerScheme: boolean;
+  // SPEC-25b: Audio & Media Keys
+  continuityAudioBridge: boolean;
+  continuityAudioVolume: number;
+  continuityMediaKeysFollowAudio: boolean;
+  continuityMuteLinkedWhileBridging: boolean;
+  // SPEC-25c: Session & Open on Linked PC
+  continuityLockTogether: boolean;
+  continuitySleepTogether: boolean;
+  continuityOpenOnLinkedMenu: boolean;
+}
+
+export type TransferKind = "drag" | "clip" | "open";
+
+export type TransferProgressState =
+  | "awaiting_fetch"
+  | "active"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface KvmTransferProgressPayload {
+  id: string;
+  kind: TransferKind;
+  name: string;
+  pct: number;
+  state?: TransferProgressState;
+  sizeBytes?: number;
+}
+
+export type LinkedMuteState =
+  | "unsupported"
+  | "muted"
+  | "unmuted"
+  | "unknown";
+
+export interface KvmAudioStatePayload {
+  streaming: boolean;
+  level: number;
+  linkedMute?: LinkedMuteState;
+}
+
+export interface KvmContinuityNoticePayload {
+  text: string;
+}
+
+export interface ContinuityNotice {
+  id: string;
+  text: string;
+  timestamp: number;
 }

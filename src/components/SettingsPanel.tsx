@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FolderOpen, LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
+import { ArrowLeftRight, FolderOpen, LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
 import { getSystemResolution } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
@@ -448,6 +448,7 @@ export function SettingsPanel() {
     </Card>
 
     <KvmSettingsCard />
+    <ContinuitySettingsCard />
     </div>
   );
 }
@@ -680,6 +681,192 @@ function KvmSettingsCard() {
   );
 }
 
+function ContinuitySettingsCard() {
+  const kvmSettings = useKvmStore((s) => s.settings);
+  const updateKvmSettings = useKvmStore((s) => s.updateSettings);
+  const audioState = useKvmStore((s) => s.audioState);
+
+  return (
+    <Card className="rounded-xl border border-ink-700 bg-ink-900">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm font-semibold text-text-strong">
+          <ArrowLeftRight className="h-4 w-4 text-gold-400" />
+          Continuity
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Files & Pointer (SPEC-25a) */}
+        <div className="space-y-2.5">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
+            Files &amp; Pointer
+          </span>
+          <div className="space-y-2">
+            <Toggle
+              label="Drag & drop files across PCs"
+              tag="Experimental"
+              hint="Drag files across the seam. May not work with every app — copy and paste is more reliable."
+              checked={kvmSettings.continuityDragDropExperimental}
+              onChange={(checked) =>
+                updateKvmSettings({ continuityDragDropExperimental: checked })
+              }
+            />
+            <Toggle
+              label="Copy-paste files across PCs"
+              checked={kvmSettings.continuityFileClipboard}
+              onChange={(checked) =>
+                updateKvmSettings({ continuityFileClipboard: checked })
+              }
+            />
+            <Toggle
+              label="Sync pointer scheme to Linked PC"
+              checked={kvmSettings.continuityPointerScheme}
+              onChange={(checked) =>
+                updateKvmSettings({ continuityPointerScheme: checked })
+              }
+            />
+          </div>
+          <div className="grid max-w-xl grid-cols-1 gap-4 pt-1 sm:grid-cols-2">
+            <NumberField
+              label="Staging size limit (MB)"
+              hint="Files above this limit are saved to Downloads\AnyLeap_Transfers."
+              value={kvmSettings.continuityStagingLimitMb}
+              onChange={(v) =>
+                updateKvmSettings({
+                  continuityStagingLimitMb: Math.max(64, v),
+                })
+              }
+            />
+            <NumberField
+              label="Clipboard prefetch limit (MB)"
+              hint="Larger copied files wait until you click Fetch"
+              value={kvmSettings.continuityClipPrefetchLimitMb}
+              onChange={(v) =>
+                updateKvmSettings({
+                  continuityClipPrefetchLimitMb: Math.max(0, v),
+                })
+              }
+            />
+          </div>
+        </div>
+
+        {/* Audio & Media Keys (SPEC-25b) */}
+        <div className="space-y-2.5 pt-2 border-t border-ink-700">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
+              Audio &amp; Media Keys
+            </span>
+            {audioState.streaming && (
+              <span className="rounded border border-status-success/40 bg-status-success-bg px-1.5 py-0.5 font-mono text-[10px] text-status-success">
+                Streaming
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+              <Toggle
+                label="Audio bridge (Linked PC → Main PC)"
+                checked={kvmSettings.continuityAudioBridge}
+                onChange={(checked) =>
+                  updateKvmSettings({ continuityAudioBridge: checked })
+                }
+              />
+              <Toggle
+                label="Mute Linked PC while bridging"
+                checked={kvmSettings.continuityMuteLinkedWhileBridging}
+                disabled={audioState.linkedMute === "unsupported"}
+                hint={
+                  audioState.linkedMute === "unsupported"
+                    ? "Not supported on the Linked PC"
+                    : undefined
+                }
+                onChange={(checked) =>
+                  updateKvmSettings({ continuityMuteLinkedWhileBridging: checked })
+                }
+              />
+            </div>
+            {audioState.streaming && (
+              <div className="space-y-1 pl-6">
+                <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-ink-950 border border-ink-700">
+                  <div
+                    className="progress-bar-fill h-full w-full bg-gold-400"
+                    style={{
+                      transform: `scaleX(${Math.max(0, Math.min(1, audioState.level))})`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs">
+                <label
+                  htmlFor="continuity-audio-volume"
+                  className="font-medium text-text"
+                >
+                  Bridged audio volume
+                </label>
+                <span className="font-mono text-gold-400 font-semibold">
+                  {kvmSettings.continuityAudioVolume}%
+                </span>
+              </div>
+              <input
+                id="continuity-audio-volume"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={kvmSettings.continuityAudioVolume}
+                onChange={(e) =>
+                  updateKvmSettings({
+                    continuityAudioVolume: Number(e.target.value),
+                  })
+                }
+                className="w-full accent-gold-400 cursor-pointer"
+              />
+            </div>
+            <Toggle
+              label="Media keys follow active audio"
+              checked={kvmSettings.continuityMediaKeysFollowAudio}
+              onChange={(checked) =>
+                updateKvmSettings({ continuityMediaKeysFollowAudio: checked })
+              }
+            />
+          </div>
+        </div>
+
+        {/* Session & Open on Linked PC (SPEC-25c) */}
+        <div className="space-y-2.5 pt-2 border-t border-ink-700">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
+            Session &amp; Open on Linked PC
+          </span>
+          <div className="space-y-2">
+            <Toggle
+              label="Lock together"
+              checked={kvmSettings.continuityLockTogether}
+              onChange={(checked) =>
+                updateKvmSettings({ continuityLockTogether: checked })
+              }
+            />
+            <Toggle
+              label="Sleep together"
+              checked={kvmSettings.continuitySleepTogether}
+              onChange={(checked) =>
+                updateKvmSettings({ continuitySleepTogether: checked })
+              }
+            />
+            <Toggle
+              label='Explorer "Open on Linked PC" menu'
+              checked={kvmSettings.continuityOpenOnLinkedMenu}
+              onChange={(checked) =>
+                updateKvmSettings({ continuityOpenOnLinkedMenu: checked })
+              }
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function NumberField({
   label,
   hint,
@@ -708,22 +895,41 @@ function NumberField({
 
 function Toggle({
   label,
+  tag,
   checked,
+  disabled = false,
+  hint,
   onChange,
 }: {
   label: string;
+  tag?: string;
   checked: boolean;
+  disabled?: boolean;
+  hint?: string;
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm text-text">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4 accent-gold-400"
-      />
-      {label}
-    </label>
+    <div className="space-y-0.5">
+      <label
+        className={`flex items-center gap-2 text-sm ${
+          disabled ? "cursor-not-allowed text-text-muted opacity-60" : "text-text cursor-pointer"
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="h-4 w-4 accent-gold-400"
+        />
+        <span>{label}</span>
+        {tag && (
+          <span className="rounded border border-gold-400/40 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-gold-400">
+            {tag}
+          </span>
+        )}
+      </label>
+      {hint && <p className="pl-6 text-[11px] text-text-muted">{hint}</p>}
+    </div>
   );
 }
