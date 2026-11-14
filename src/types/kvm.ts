@@ -5,13 +5,36 @@ export interface ScreenRect {
   height: number;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface MonitorDisplay {
   id: string;
+  device_name?: string;
   x: number;
   y: number;
   width: number;
   height: number;
   is_primary: boolean;
+}
+
+export interface Seam {
+  main_monitor_id: string;
+  linked_monitor_id: string;
+  side: EdgeSide;
+  start: number;
+  end: number;
+}
+
+export interface LinkedSeam {
+  linked_monitor_id: string;
+  side: EdgeSide;
+  start: number;
+  end: number;
+  main_monitor_id: string;
+  main_offset: number;
 }
 
 export interface ComputerNode {
@@ -39,6 +62,7 @@ export interface TopologyLink {
 export interface TopologyConfig {
   computers: ComputerNode[];
   links: TopologyLink[];
+  remote_origin?: Point | null;
 }
 
 export interface LinkedPeerInfo {
@@ -72,6 +96,10 @@ export interface KvmStatus {
   controller_edge?: string | null;
   /** True while a remote controller drives this PC's cursor. */
   receiver_entered?: boolean;
+  /** Active per-monitor seams if surfaced by backend status. */
+  seams?: Seam[];
+  /** Saved Linked PC origin in Main PC virtual-desktop coords if surfaced. */
+  remote_origin?: Point | null;
 }
 
 export interface DiscoveredPeer {

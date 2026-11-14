@@ -30,6 +30,7 @@ export function ComputersView() {
   const isLoading = useKvmStore((s) => s.isLoading);
   const error = useKvmStore((s) => s.error);
   const init = useKvmStore((s) => s.init);
+  const refreshStatus = useKvmStore((s) => s.refreshStatus);
   const setAllowControl = useKvmStore((s) => s.setAllowControl);
   const refreshDiscovered = useKvmStore((s) => s.refreshDiscovered);
   const refreshTrusted = useKvmStore((s) => s.refreshTrusted);
@@ -82,13 +83,27 @@ export function ComputersView() {
   const sections = getVisibleSections(role);
   const allowControl = status.allow_control ?? status.is_host_running;
 
+  useEffect(() => {
+    if (role !== "main") return;
+    const onFocus = () => {
+      void refreshStatus();
+    };
+    window.addEventListener("focus", onFocus);
+    const statusTimer = setInterval(() => {
+      void refreshStatus();
+    }, 4000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      clearInterval(statusTimer);
+    };
+  }, [role, refreshStatus]);
+
   const remotePeer = topology.computers.find((c) => !c.is_local);
   const peerName =
     status.linked_peer?.name ||
     remotePeer?.name ||
     status.connected_peers[0] ||
     "the other PC";
-  const edge = status.controller_edge;
 
   const [linkTone, linkMessage] =
     role === "main"
@@ -96,7 +111,7 @@ export function ComputersView() {
         ? ["bg-gold-400", `Controlling ${peerName} now.`]
         : [
             "bg-status-success",
-            `Linked to ${peerName} as Main PC. Move your cursor past the ${(edge || "right").toUpperCase()} edge to control it.`,
+            `Linked to ${peerName} as Main PC. Move your cursor across any highlighted gold seam to control it.`,
           ]
       : [
           "bg-text-muted",

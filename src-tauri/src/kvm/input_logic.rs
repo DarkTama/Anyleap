@@ -1,7 +1,8 @@
 use super::monitors::MonitorDisplay;
-use crate::kvm::protocol::ScreenRect;
+use crate::kvm::protocol::{LinkedSeam, Point, ScreenRect, TopologyConfig};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum Edge {
     Right = 0,
@@ -539,6 +540,844 @@ pub fn map_return_position(
     }
 }
 
+// ---------------------------------------------------------------------------
+// SPEC-24: Per-monitor seams & remote_origin mapping
+// ---------------------------------------------------------------------------
+
+/// A touching boundary between one Main PC monitor and one Linked PC monitor
+/// with positive overlap along the shared edge (`start < end` in Main PC coords).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Seam {
+    pub main_monitor_id: String,
+    pub linked_monitor_id: String,
+    /// Side of the MAIN monitor that touches the Linked monitor.
+    pub side: Edge,
+    /// Overlap span start in Main PC coordinates (`y` for Left/Right, `x` for Top/Bottom).
+    pub start: i32,
+    /// Overlap span end (exclusive) in Main PC coordinates.
+    pub end: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControllerSeamHit {
+    pub main_monitor_index: usize,
+    pub seam_index: usize,
+    pub seam: Seam,
+    pub target_monitor: String,
+    /// Position along the seam in the TARGET (Linked) monitor's coordinates.
+    pub along_px: i32,
+    /// Union-normalized fallback for legacy receivers.
+    pub relative_y: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReceiverSeamStep {
+    Move((i32, i32)),
+    Return {
+        edge: Edge,
+        relative_y: f32,
+        target_monitor: Option<String>,
+        along_px: Option<i32>,
+    },
+}
+
+/// Returns true iff two positive-area rectangles strictly overlap (touching edges return false).
+pub fn rects_overlap(a: &ScreenRect, b: &ScreenRect) -> bool {
+    if a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0 {
+        return false;
+    }
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+}
+
+fn shifted_monitor_rect(mon: &MonitorDisplay, origin: Point) -> ScreenRect {
+    ScreenRect {
+        x: origin.x + mon.x,
+        y: origin.y + mon.y,
+        width: mon.width,
+        height: mon.height,
+    }
+}
+
+/// Returns true if any Linked monitor (shifted by `remote_origin`) overlaps any Main monitor.
+pub fn has_any_overlap(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    remote_origin: Point,
+) -> bool {
+    for m in main_monitors {
+        let mr = ScreenRect {
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+        };
+        for l in linked_monitors {
+            let lr = shifted_monitor_rect(l, remote_origin);
+            if rects_overlap(&mr, &lr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Computes all per-monitor seams where a Main monitor edge touches a Linked monitor edge
+/// with positive overlap (`end > start`), given Linked PC's virtual-desktop origin `remote_origin`.
+pub fn compute_seams(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    remote_origin: Point,
+) -> Vec<Seam> {
+    let mut seams = Vec::new();
+    for m in main_monitors {
+        if m.width <= 0 || m.height <= 0 {
+            continue;
+        }
+        let mr = m.x + m.width;
+        let mb = m.y + m.height;
+        let m_id = m.effective_id().to_string();
+
+        for l in linked_monitors {
+            if l.width <= 0 || l.height <= 0 {
+                continue;
+            }
+            let lx = remote_origin.x + l.x;
+            let ly = remote_origin.y + l.y;
+            let lr = lx + l.width;
+            let lb = ly + l.height;
+            let l_id = l.effective_id().to_string();
+
+            if mr == lx {
+                let start = m.y.max(ly);
+                let end = mb.min(lb);
+                if end > start {
+                    seams.push(Seam {
+                        main_monitor_id: m_id.clone(),
+                        linked_monitor_id: l_id.clone(),
+                        side: Edge::Right,
+                        start,
+                        end,
+                    });
+                }
+            }
+            if m.x == lr {
+                let start = m.y.max(ly);
+                let end = mb.min(lb);
+                if end > start {
+                    seams.push(Seam {
+                        main_monitor_id: m_id.clone(),
+                        linked_monitor_id: l_id.clone(),
+                        side: Edge::Left,
+                        start,
+                        end,
+                    });
+                }
+            }
+            if mb == ly {
+                let start = m.x.max(lx);
+                let end = mr.min(lr);
+                if end > start {
+                    seams.push(Seam {
+                        main_monitor_id: m_id.clone(),
+                        linked_monitor_id: l_id.clone(),
+                        side: Edge::Bottom,
+                        start,
+                        end,
+                    });
+                }
+            }
+            if m.y == lb {
+                let start = m.x.max(lx);
+                let end = mr.min(lr);
+                if end > start {
+                    seams.push(Seam {
+                        main_monitor_id: m_id.clone(),
+                        linked_monitor_id: l_id.clone(),
+                        side: Edge::Top,
+                        start,
+                        end,
+                    });
+                }
+            }
+        }
+    }
+    seams
+}
+
+/// Converts Main-PC-coordinate seams into `LinkedSeam` packets for the Linked PC receiver.
+pub fn compute_linked_seams(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    remote_origin: Point,
+) -> Vec<LinkedSeam> {
+    compute_seams(main_monitors, linked_monitors, remote_origin)
+        .into_iter()
+        .filter_map(|s| {
+            let main_mon = main_monitors
+                .iter()
+                .find(|m| m.effective_id() == s.main_monitor_id)?;
+            let (start, end, main_offset) = match s.side {
+                Edge::Left | Edge::Right => (
+                    s.start - remote_origin.y,
+                    s.end - remote_origin.y,
+                    remote_origin.y - main_mon.y,
+                ),
+                Edge::Top | Edge::Bottom => (
+                    s.start - remote_origin.x,
+                    s.end - remote_origin.x,
+                    remote_origin.x - main_mon.x,
+                ),
+            };
+            Some(LinkedSeam {
+                linked_monitor_id: s.linked_monitor_id,
+                side: s.side.opposite().as_str().to_string(),
+                start,
+                end,
+                main_monitor_id: s.main_monitor_id,
+                main_offset,
+            })
+        })
+        .collect()
+}
+
+/// A placement is valid iff there are no monitor overlaps and at least one positive-overlap seam.
+pub fn is_valid_placement(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    remote_origin: Point,
+) -> bool {
+    !has_any_overlap(main_monitors, linked_monitors, remote_origin)
+        && !compute_seams(main_monitors, linked_monitors, remote_origin).is_empty()
+}
+
+/// Snaps `candidate` within `threshold_px` so at least one Linked monitor edge touches
+/// a Main monitor edge with positive overlap and zero rectangle overlaps.
+pub fn snap_remote_origin(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    candidate: Point,
+    threshold_px: i32,
+) -> Option<Point> {
+    let thresh = threshold_px.max(0) as i64;
+    let max_dist2 = thresh * thresh;
+    let mut best: Option<(i64, Point)> = None;
+
+    let mut consider = |p: Point| {
+        let dx = (p.x - candidate.x) as i64;
+        let dy = (p.y - candidate.y) as i64;
+        let dist2 = dx * dx + dy * dy;
+        if dist2 > max_dist2 {
+            return;
+        }
+        if !is_valid_placement(main_monitors, linked_monitors, p) {
+            return;
+        }
+        if best.is_none_or(|(bdist, _)| dist2 < bdist) {
+            best = Some((dist2, p));
+        }
+    };
+
+    for m in main_monitors {
+        if m.width <= 0 || m.height <= 0 {
+            continue;
+        }
+        for l in linked_monitors {
+            if l.width <= 0 || l.height <= 0 {
+                continue;
+            }
+            let min_y_for_overlap = m.y + 1 - (l.y + l.height);
+            let max_y_for_overlap = m.y + m.height - 1 - l.y;
+            let min_x_for_overlap = m.x + 1 - (l.x + l.width);
+            let max_x_for_overlap = m.x + m.width - 1 - l.x;
+
+            // Touch M's right or left edge
+            for snap_x in [(m.x + m.width) - l.x, m.x - l.width - l.x] {
+                if (snap_x - candidate.x).abs() as i64 <= thresh {
+                    consider(Point {
+                        x: snap_x,
+                        y: candidate.y,
+                    });
+                    if candidate.y < min_y_for_overlap {
+                        consider(Point {
+                            x: snap_x,
+                            y: min_y_for_overlap,
+                        });
+                    } else if candidate.y > max_y_for_overlap {
+                        consider(Point {
+                            x: snap_x,
+                            y: max_y_for_overlap,
+                        });
+                    }
+                }
+            }
+
+            // Touch M's bottom or top edge
+            for snap_y in [(m.y + m.height) - l.y, m.y - l.height - l.y] {
+                if (snap_y - candidate.y).abs() as i64 <= thresh {
+                    consider(Point {
+                        x: candidate.x,
+                        y: snap_y,
+                    });
+                    if candidate.x < min_x_for_overlap {
+                        consider(Point {
+                            x: min_x_for_overlap,
+                            y: snap_y,
+                        });
+                    } else if candidate.x > max_x_for_overlap {
+                        consider(Point {
+                            x: max_x_for_overlap,
+                            y: snap_y,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    best.map(|(_, p)| p)
+}
+
+/// Migrates a SPEC-23 `(link_edge, offset_x, offset_y)` into a SPEC-24 `remote_origin`.
+pub fn derive_remote_origin_from_link(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    link_edge: Edge,
+    offset_x: i32,
+    offset_y: i32,
+) -> Point {
+    let local_u = union_rect(main_monitors);
+    let linked_u = union_rect(linked_monitors);
+    let (placed_union_x, placed_union_y) = match link_edge {
+        Edge::Right => (local_u.x + local_u.width, local_u.y + offset_y),
+        Edge::Left => (local_u.x - linked_u.width, local_u.y + offset_y),
+        Edge::Bottom => (local_u.x + offset_x, local_u.y + local_u.height),
+        Edge::Top => (local_u.x + offset_x, local_u.y - linked_u.height),
+    };
+    Point {
+        x: placed_union_x - linked_u.x,
+        y: placed_union_y - linked_u.y,
+    }
+}
+
+/// Resolves the effective `remote_origin` from `TopologyConfig`:
+/// uses `topology.remote_origin` when present, otherwise migrates from the SPEC-23 link.
+pub fn resolve_remote_origin(
+    topology: &TopologyConfig,
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    local_id: Option<&str>,
+) -> Option<Point> {
+    if let Some(origin) = topology.remote_origin {
+        return Some(origin);
+    }
+    let link = if let Some(id) = local_id {
+        topology.links.iter().find(|l| l.from_id == id)
+    } else {
+        topology.links.first()
+    }?;
+    let edge = Edge::from_str(&link.from_edge).unwrap_or(Edge::Right);
+    Some(derive_remote_origin_from_link(
+        main_monitors,
+        linked_monitors,
+        edge,
+        link.offset_x.unwrap_or(0),
+        link.offset_y.unwrap_or(0),
+    ))
+}
+
+/// Computes a non-overlapping preset `remote_origin` on `side` of the Main PC
+/// that guarantees at least one positive-overlap seam when monitors are non-empty.
+pub fn preset_remote_origin(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    side: Edge,
+) -> Point {
+    let valid_main: Vec<&MonitorDisplay> = main_monitors
+        .iter()
+        .filter(|m| m.width > 0 && m.height > 0)
+        .collect();
+    if valid_main.is_empty() || linked_monitors.is_empty() {
+        return Point::default();
+    }
+    let linked_u = union_rect(linked_monitors);
+    let anchor = match side {
+        Edge::Right => valid_main
+            .iter()
+            .copied()
+            .max_by_key(|m| (m.x + m.width, m.is_primary, m.height))
+            .unwrap(),
+        Edge::Left => valid_main
+            .iter()
+            .copied()
+            .min_by_key(|m| (m.x, !m.is_primary, -m.height))
+            .unwrap(),
+        Edge::Bottom => valid_main
+            .iter()
+            .copied()
+            .max_by_key(|m| (m.y + m.height, m.is_primary, m.width))
+            .unwrap(),
+        Edge::Top => valid_main
+            .iter()
+            .copied()
+            .min_by_key(|m| (m.y, !m.is_primary, -m.width))
+            .unwrap(),
+    };
+
+    let candidate = match side {
+        Edge::Right => Point {
+            x: anchor.x + anchor.width - linked_u.x,
+            y: anchor.y - linked_u.y,
+        },
+        Edge::Left => Point {
+            x: anchor.x - linked_u.width - linked_u.x,
+            y: anchor.y - linked_u.y,
+        },
+        Edge::Bottom => Point {
+            x: anchor.x - linked_u.x,
+            y: anchor.y + anchor.height - linked_u.y,
+        },
+        Edge::Top => Point {
+            x: anchor.x - linked_u.x,
+            y: anchor.y - linked_u.height - linked_u.y,
+        },
+    };
+    if is_valid_placement(main_monitors, linked_monitors, candidate) {
+        return candidate;
+    }
+
+    let local_u = union_rect(main_monitors);
+    let fallback = match side {
+        Edge::Right => Point {
+            x: local_u.x + local_u.width - linked_u.x,
+            y: anchor.y - linked_u.y,
+        },
+        Edge::Left => Point {
+            x: local_u.x - linked_u.width - linked_u.x,
+            y: anchor.y - linked_u.y,
+        },
+        Edge::Bottom => Point {
+            x: anchor.x - linked_u.x,
+            y: local_u.y + local_u.height - linked_u.y,
+        },
+        Edge::Top => Point {
+            x: anchor.x - linked_u.x,
+            y: local_u.y - linked_u.height - linked_u.y,
+        },
+    };
+    fallback
+}
+
+/// Infers the dominant side (`Left | Right | Top | Bottom`) of Main PC where Linked PC sits.
+pub fn infer_placement_side(
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    remote_origin: Point,
+) -> Edge {
+    let seams = compute_seams(main_monitors, linked_monitors, remote_origin);
+    if let Some(best) = seams.iter().max_by_key(|s| s.end - s.start) {
+        return best.side;
+    }
+    let main_u = union_rect(main_monitors);
+    let linked_u = union_rect(linked_monitors);
+    let main_cx = main_u.x as f64 + main_u.width as f64 / 2.0;
+    let main_cy = main_u.y as f64 + main_u.height as f64 / 2.0;
+    let linked_cx = (remote_origin.x + linked_u.x) as f64 + linked_u.width as f64 / 2.0;
+    let linked_cy = (remote_origin.y + linked_u.y) as f64 + linked_u.height as f64 / 2.0;
+    let dx = (linked_cx - main_cx) / main_u.width.max(1) as f64;
+    let dy = (linked_cy - main_cy) / main_u.height.max(1) as f64;
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 {
+            Edge::Right
+        } else {
+            Edge::Left
+        }
+    } else if dy >= 0.0 {
+        Edge::Bottom
+    } else {
+        Edge::Top
+    }
+}
+
+/// Returns true if monitor count, device IDs, or any monitor's position/resolution changed.
+pub fn monitors_changed(prev: &[MonitorDisplay], next: &[MonitorDisplay]) -> bool {
+    if prev.len() != next.len() {
+        return true;
+    }
+    prev.iter().any(|p| {
+        let pid = p.effective_id();
+        !next.iter().any(|n| {
+            n.effective_id() == pid
+                && n.x == p.x
+                && n.y == p.y
+                && n.width == p.width
+                && n.height == p.height
+        })
+    })
+}
+
+/// If monitors changed on either PC, falls back to a preset placement on the previously used side.
+pub fn handle_monitor_change_fallback(
+    prev_main: &[MonitorDisplay],
+    next_main: &[MonitorDisplay],
+    prev_linked: &[MonitorDisplay],
+    next_linked: &[MonitorDisplay],
+    prev_origin: Point,
+    prev_side: Option<Edge>,
+) -> Option<(Point, Edge)> {
+    let main_changed = !prev_main.is_empty() && monitors_changed(prev_main, next_main);
+    let linked_changed = !prev_linked.is_empty() && monitors_changed(prev_linked, next_linked);
+    if !main_changed && !linked_changed {
+        return None;
+    }
+    let side = prev_side.unwrap_or_else(|| {
+        let ref_main = if prev_main.is_empty() { next_main } else { prev_main };
+        let ref_linked = if prev_linked.is_empty() { next_linked } else { prev_linked };
+        infer_placement_side(ref_main, ref_linked, prev_origin)
+    });
+    let new_origin = preset_remote_origin(next_main, next_linked, side);
+    Some((new_origin, side))
+}
+
+pub fn is_in_seam_deadzone(start: i32, end: i32, perp: i32, deadzone_px: i32) -> bool {
+    let len = (end - start).max(0);
+    let dz = deadzone_px.max(0).min((len - 1).max(0) / 2);
+    perp < start + dz || perp >= end - dz
+}
+
+/// Pure controller-side per-seam edge detection.
+/// Triggers only from Main-monitor edge segments covered by a seam (and outside per-seam deadzone).
+pub fn detect_controller_edge_seams(
+    pt: (i32, i32),
+    main_monitors: &[MonitorDisplay],
+    linked_monitors: &[MonitorDisplay],
+    remote_origin: Point,
+    seams: &[Seam],
+    deadzone_px: i32,
+) -> Option<ControllerSeamHit> {
+    if seams.is_empty() {
+        return None;
+    }
+    let (idx, main_mon) = monitor_at_point(main_monitors, pt.0, pt.1)
+        .or_else(|| nearest_monitor(main_monitors, pt.0, pt.1))?;
+    let right = main_mon.x + main_mon.width;
+    let bottom = main_mon.y + main_mon.height;
+    let clamped = (pt.0.clamp(main_mon.x, right - 1), pt.1.clamp(main_mon.y, bottom - 1));
+    let main_id = main_mon.effective_id();
+
+    let linked_union = union_rect(linked_monitors);
+
+    let overshoot = |side: Edge| -> i32 {
+        match side {
+            Edge::Right => (pt.0 - (right - 1)).max(0),
+            Edge::Left => (main_mon.x - pt.0).max(0),
+            Edge::Top => (main_mon.y - pt.1).max(0),
+            Edge::Bottom => (pt.1 - (bottom - 1)).max(0),
+        }
+    };
+
+    let mut best: Option<(i32, ControllerSeamHit)> = None;
+    for (seam_index, seam) in seams.iter().enumerate() {
+        if seam.main_monitor_id != main_id {
+            continue;
+        }
+        let (at_edge, perp, neighbor) = match seam.side {
+            Edge::Right => (clamped.0 >= right - 2, clamped.1, (right, clamped.1)),
+            Edge::Left => (clamped.0 < main_mon.x + 2, clamped.1, (main_mon.x - 1, clamped.1)),
+            Edge::Top => (clamped.1 < main_mon.y + 2, clamped.0, (clamped.0, main_mon.y - 1)),
+            Edge::Bottom => (clamped.1 >= bottom - 2, clamped.0, (clamped.0, bottom)),
+        };
+        if !at_edge {
+            continue;
+        }
+        if monitor_at_point(main_monitors, neighbor.0, neighbor.1).is_some() {
+            continue;
+        }
+        if perp < seam.start || perp >= seam.end {
+            continue;
+        }
+        if is_in_seam_deadzone(seam.start, seam.end, perp, deadzone_px) {
+            continue;
+        }
+        let Some(linked_mon) = linked_monitors
+            .iter()
+            .find(|l| l.effective_id() == seam.linked_monitor_id)
+        else {
+            continue;
+        };
+
+        let (along_px, relative_y) = match seam.side {
+            Edge::Left | Edge::Right => {
+                let l_top = remote_origin.y + linked_mon.y;
+                let along = (perp - l_top).clamp(0, (linked_mon.height - 1).max(0));
+                let rel = ((perp - (remote_origin.y + linked_union.y)) as f32
+                    / linked_union.height.max(1) as f32)
+                    .clamp(0.0, 1.0);
+                (along, rel)
+            }
+            Edge::Top | Edge::Bottom => {
+                let l_left = remote_origin.x + linked_mon.x;
+                let along = (perp - l_left).clamp(0, (linked_mon.width - 1).max(0));
+                let rel = ((perp - (remote_origin.x + linked_union.x)) as f32
+                    / linked_union.width.max(1) as f32)
+                    .clamp(0.0, 1.0);
+                (along, rel)
+            }
+        };
+
+        let score = overshoot(seam.side);
+        let hit = ControllerSeamHit {
+            main_monitor_index: idx,
+            seam_index,
+            seam: seam.clone(),
+            target_monitor: seam.linked_monitor_id.clone(),
+            along_px,
+            relative_y,
+        };
+        if best.as_ref().is_none_or(|(bscore, _)| score > *bscore) {
+            best = Some((score, hit));
+        }
+    }
+
+    best.map(|(_, h)| h)
+}
+
+/// Maps `CursorEnter` onto the receiver's coordinates: uses `(target_monitor, along_px)`
+/// when present and the target monitor exists, otherwise falls back to SPEC-23 `map_cursor_enter`.
+pub fn map_cursor_enter_spec24(
+    monitors: &[MonitorDisplay],
+    entry_edge: Edge,
+    relative_y: f32,
+    target_monitor: Option<&str>,
+    along_px: Option<i32>,
+) -> (i32, i32) {
+    if let (Some(mon_id), Some(along)) = (target_monitor, along_px) {
+        if let Some(chosen) = monitors.iter().find(|m| m.effective_id() == mon_id) {
+            let w = chosen.width.max(1);
+            let h = chosen.height.max(1);
+            return match entry_edge {
+                Edge::Left => (
+                    (chosen.x + 2).min(chosen.x + w - 1),
+                    (chosen.y + along).clamp(chosen.y, chosen.y + h - 1),
+                ),
+                Edge::Right => (
+                    (chosen.x + w - 3).max(chosen.x),
+                    (chosen.y + along).clamp(chosen.y, chosen.y + h - 1),
+                ),
+                Edge::Top => (
+                    (chosen.x + along).clamp(chosen.x, chosen.x + w - 1),
+                    (chosen.y + 2).min(chosen.y + h - 1),
+                ),
+                Edge::Bottom => (
+                    (chosen.x + along).clamp(chosen.x, chosen.x + w - 1),
+                    (chosen.y + h - 3).max(chosen.y),
+                ),
+            };
+        }
+    }
+    map_cursor_enter(monitors, entry_edge, relative_y)
+}
+
+/// Pure receiver-side authoritative cursor step using SPEC-24 `LinkedSeam`s.
+/// Returns only when crossing a Linked-monitor edge segment covered by a seam (after dwell/deadzone);
+/// crossing any non-seam edge clamps inside the monitor layout.
+#[allow(clippy::too_many_arguments)]
+pub fn receiver_step_with_seams(
+    cursor: (i32, i32),
+    delta: (i32, i32),
+    monitors: &[MonitorDisplay],
+    seams: &[LinkedSeam],
+    dwell_ms: u32,
+    deadzone_px: i32,
+    dwell_seam: &mut Option<usize>,
+    dwell_start_ms: &mut Option<u64>,
+    now_ms: u64,
+) -> ReceiverSeamStep {
+    let next = (cursor.0.saturating_add(delta.0), cursor.1.saturating_add(delta.1));
+    let Some((_, cur_mon)) = monitor_at_point(monitors, cursor.0, cursor.1)
+        .or_else(|| nearest_monitor(monitors, cursor.0, cursor.1))
+    else {
+        *dwell_seam = None;
+        *dwell_start_ms = None;
+        return ReceiverSeamStep::Move(next);
+    };
+
+    let cur_right = cur_mon.x + cur_mon.width;
+    let cur_bottom = cur_mon.y + cur_mon.height;
+    let cur_id = cur_mon.effective_id();
+
+    let mut crossings: [(Edge, i32, i32, bool); 4] = [
+        (
+            Edge::Left,
+            next.1.clamp(cur_mon.y, cur_bottom - 1),
+            cur_mon.x - next.0,
+            next.0 < cur_mon.x,
+        ),
+        (
+            Edge::Right,
+            next.1.clamp(cur_mon.y, cur_bottom - 1),
+            next.0 - (cur_right - 1),
+            next.0 >= cur_right,
+        ),
+        (
+            Edge::Top,
+            next.0.clamp(cur_mon.x, cur_right - 1),
+            cur_mon.y - next.1,
+            next.1 < cur_mon.y,
+        ),
+        (
+            Edge::Bottom,
+            next.0.clamp(cur_mon.x, cur_right - 1),
+            next.1 - (cur_bottom - 1),
+            next.1 >= cur_bottom,
+        ),
+    ];
+    // Prefer the axis with larger overshoot when crossing near a corner.
+    crossings.sort_by(|a, b| b.2.cmp(&a.2));
+
+    let mut matched_seam: Option<(usize, Edge, i32, &LinkedSeam)> = None;
+    for (edge, perp, _, is_crossed) in crossings {
+        if !is_crossed {
+            continue;
+        }
+        let has_beyond = match edge {
+            Edge::Left => monitors.iter().any(|m| {
+                m.width > 0 && m.height > 0 && m.x < cur_mon.x && perp >= m.y && perp < m.y + m.height
+            }),
+            Edge::Right => monitors.iter().any(|m| {
+                m.width > 0
+                    && m.height > 0
+                    && (m.x + m.width) > cur_right
+                    && m.x > cur_mon.x
+                    && perp >= m.y
+                    && perp < m.y + m.height
+            }),
+            Edge::Top => monitors.iter().any(|m| {
+                m.width > 0 && m.height > 0 && m.y < cur_mon.y && perp >= m.x && perp < m.x + m.width
+            }),
+            Edge::Bottom => monitors.iter().any(|m| {
+                m.width > 0
+                    && m.height > 0
+                    && (m.y + m.height) > cur_bottom
+                    && m.y > cur_mon.y
+                    && perp >= m.x
+                    && perp < m.x + m.width
+            }),
+        };
+        if has_beyond {
+            continue;
+        }
+
+        if let Some((idx, seam)) = seams.iter().enumerate().find(|(_, s)| {
+            s.linked_monitor_id == cur_id
+                && Edge::from_str(&s.side) == Some(edge)
+                && perp >= s.start
+                && perp < s.end
+        }) {
+            matched_seam = Some((idx, edge, perp, seam));
+            break;
+        }
+    }
+
+    if let Some((seam_idx, edge, perp, seam)) = matched_seam {
+        if !is_in_seam_deadzone(seam.start, seam.end, perp, deadzone_px) {
+            let ready = if dwell_ms == 0 {
+                true
+            } else {
+                if *dwell_seam != Some(seam_idx) {
+                    *dwell_seam = Some(seam_idx);
+                    *dwell_start_ms = Some(now_ms);
+                }
+                let start = *dwell_start_ms.get_or_insert(now_ms);
+                now_ms.saturating_sub(start) >= dwell_ms as u64
+            };
+            if ready {
+                *dwell_seam = None;
+                *dwell_start_ms = None;
+                let union = union_rect(monitors);
+                let relative_y = match edge {
+                    Edge::Left | Edge::Right => {
+                        ((perp - union.y) as f32 / union.height.max(1) as f32).clamp(0.0, 1.0)
+                    }
+                    Edge::Top | Edge::Bottom => {
+                        ((perp - union.x) as f32 / union.width.max(1) as f32).clamp(0.0, 1.0)
+                    }
+                };
+                return ReceiverSeamStep::Return {
+                    edge,
+                    relative_y,
+                    target_monitor: Some(seam.main_monitor_id.clone()),
+                    along_px: Some(perp + seam.main_offset),
+                };
+            }
+        } else {
+            *dwell_seam = None;
+            *dwell_start_ms = None;
+        }
+    } else {
+        *dwell_seam = None;
+        *dwell_start_ms = None;
+    }
+
+    let Some((_, target_mon)) = nearest_monitor(monitors, next.0, next.1) else {
+        return ReceiverSeamStep::Move(next);
+    };
+    let clamped_x = next.0.clamp(target_mon.x, target_mon.x + target_mon.width - 1);
+    let clamped_y = next.1.clamp(target_mon.y, target_mon.y + target_mon.height - 1);
+    ReceiverSeamStep::Move((clamped_x, clamped_y))
+}
+
+/// Maps `CursorReturn` back onto the Main PC controller cursor position.
+/// Uses `(target_monitor, along_px, return_edge.opposite())` when present,
+/// otherwise falls back to SPEC-23 `map_return_position`.
+#[allow(clippy::too_many_arguments)]
+pub fn map_controller_return_pos(
+    main_monitors: &[MonitorDisplay],
+    target_monitor: Option<&str>,
+    return_edge: Edge,
+    along_px: Option<i32>,
+    fallback_mon: &MonitorDisplay,
+    peer_union: &ScreenRect,
+    link_edge: Edge,
+    offset_x: i32,
+    offset_y: i32,
+    relative_y: f32,
+) -> (i32, i32) {
+    if let (Some(mon_id), Some(along)) = (target_monitor, along_px) {
+        if let Some(mon) = main_monitors.iter().find(|m| m.effective_id() == mon_id) {
+            let main_side = return_edge.opposite();
+            let w = mon.width.max(1);
+            let h = mon.height.max(1);
+            return match main_side {
+                Edge::Right => (
+                    (mon.x + w - 3).max(mon.x),
+                    (mon.y + along).clamp(mon.y, mon.y + h - 1),
+                ),
+                Edge::Left => (
+                    (mon.x + 2).min(mon.x + w - 1),
+                    (mon.y + along).clamp(mon.y, mon.y + h - 1),
+                ),
+                Edge::Top => (
+                    (mon.x + along).clamp(mon.x, mon.x + w - 1),
+                    (mon.y + 2).min(mon.y + h - 1),
+                ),
+                Edge::Bottom => (
+                    (mon.x + along).clamp(mon.x, mon.x + w - 1),
+                    (mon.y + h - 3).max(mon.y),
+                ),
+            };
+        }
+    }
+    map_return_position(
+        main_monitors,
+        fallback_mon,
+        peer_union,
+        link_edge,
+        offset_x,
+        offset_y,
+        relative_y,
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackedKey {
     pub key_code: u16,
@@ -633,6 +1472,7 @@ mod tests {
     fn mon(id: &str, x: i32, y: i32, w: i32, h: i32, primary: bool) -> MonitorDisplay {
         MonitorDisplay {
             id: id.to_string(),
+            device_name: id.to_string(),
             x,
             y,
             width: w,
@@ -1185,5 +2025,421 @@ mod tests {
         assert_eq!(detect_controller_edge((2100, 1079), &bottom_mons, Edge::Bottom, 48), None);
         // MonC bottom edge leaps.
         assert!(detect_controller_edge((960, 2165), &bottom_mons, Edge::Bottom, 48).is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // SPEC-24 tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spec24_seams_tamas_layout_left_bottom_and_under_both() {
+        // Main: landscape 1920x1080 at (0,0) + portrait D1 1080x1920 at (1920,-420)
+        let main_portrait = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1080, 1920, false),
+        ];
+        let linked = vec![mon(r"\\.\DISPLAY1", 0, 0, 1920, 1200, true)];
+
+        // 1) Linked placed left of Main landscape (-1920, 0)
+        let seams_left = compute_seams(&main_portrait, &linked, Point { x: -1920, y: 0 });
+        assert_eq!(
+            seams_left,
+            vec![Seam {
+                main_monitor_id: r"\\.\DISPLAY2".into(),
+                linked_monitor_id: r"\\.\DISPLAY1".into(),
+                side: Edge::Left,
+                start: 0,
+                end: 1080,
+            }]
+        );
+
+        // 2) Linked placed bottom of Main landscape (0, 1080):
+        // touches BOTH DISPLAY2 Bottom [0..1920] AND portrait DISPLAY1 Left [1080..1500]!
+        let seams_bottom = compute_seams(&main_portrait, &linked, Point { x: 0, y: 1080 });
+        assert_eq!(
+            seams_bottom,
+            vec![
+                Seam {
+                    main_monitor_id: r"\\.\DISPLAY2".into(),
+                    linked_monitor_id: r"\\.\DISPLAY1".into(),
+                    side: Edge::Bottom,
+                    start: 0,
+                    end: 1920,
+                },
+                Seam {
+                    main_monitor_id: r"\\.\DISPLAY1".into(),
+                    linked_monitor_id: r"\\.\DISPLAY1".into(),
+                    side: Edge::Left,
+                    start: 1080,
+                    end: 1500,
+                },
+            ]
+        );
+
+        // 3) Under-both: Main landscape (0,0,1920,1080) + landscape/aligned D1 (1920,-420,1920,1500)
+        // with Linked 1920x1200 spanning across x=960..2880 at y=1080 -> two Bottom seams!
+        let main_aligned_bottom = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1920, 1500, false),
+        ];
+        let seams_under_both = compute_seams(&main_aligned_bottom, &linked, Point { x: 960, y: 1080 });
+        assert_eq!(
+            seams_under_both,
+            vec![
+                Seam {
+                    main_monitor_id: r"\\.\DISPLAY2".into(),
+                    linked_monitor_id: r"\\.\DISPLAY1".into(),
+                    side: Edge::Bottom,
+                    start: 960,
+                    end: 1920,
+                },
+                Seam {
+                    main_monitor_id: r"\\.\DISPLAY1".into(),
+                    linked_monitor_id: r"\\.\DISPLAY1".into(),
+                    side: Edge::Bottom,
+                    start: 1920,
+                    end: 2880,
+                },
+            ]
+        );
+
+        // Also verify landscape D1 at (1920, -420, 1920, 1080) where bottom=660:
+        // Linked at (0, 1080) only touches DISPLAY2 Bottom (no gap seam to D1 at y=660).
+        let main_landscape_d1 = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1920, 1080, false),
+        ];
+        let seams_landscape_d1 = compute_seams(&main_landscape_d1, &linked, Point { x: 0, y: 1080 });
+        assert_eq!(seams_landscape_d1.len(), 1);
+        assert_eq!(seams_landscape_d1[0].main_monitor_id, r"\\.\DISPLAY2");
+
+        // Corner touch only (0 overlap) and 1px gap produce zero seams.
+        assert!(compute_seams(&main_portrait, &linked, Point { x: -1920, y: 1080 }).is_empty());
+        assert!(compute_seams(&main_portrait, &linked, Point { x: -1921, y: 0 }).is_empty());
+    }
+
+    #[test]
+    fn spec24_snapping_within_24px_and_rejecting_gaps_and_overlaps() {
+        let main_mons = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1080, 1920, false),
+        ];
+        let linked = vec![mon(r"\\.\DISPLAY1", 0, 0, 1920, 1200, true)];
+
+        // Within 24px of DISPLAY2's left edge -> snaps flush to x = -1920.
+        assert_eq!(
+            snap_remote_origin(&main_mons, &linked, Point { x: -1905, y: 50 }, 24),
+            Some(Point { x: -1920, y: 50 })
+        );
+        assert_eq!(
+            snap_remote_origin(&main_mons, &linked, Point { x: -1940, y: 50 }, 24),
+            Some(Point { x: -1920, y: 50 })
+        );
+
+        // Beyond 24px gap -> None.
+        assert_eq!(
+            snap_remote_origin(&main_mons, &linked, Point { x: -1950, y: 50 }, 24),
+            None
+        );
+
+        // Deep overlap inside Main -> None and has_any_overlap is true.
+        assert!(has_any_overlap(&main_mons, &linked, Point { x: 200, y: 200 }));
+        assert_eq!(
+            snap_remote_origin(&main_mons, &linked, Point { x: 200, y: 200 }, 24),
+            None
+        );
+
+        // Snapping to non-primary DISPLAY1 right edge (x = 3000) within 24px.
+        assert_eq!(
+            snap_remote_origin(&main_mons, &linked, Point { x: 3018, y: -200 }, 24),
+            Some(Point { x: 3000, y: -200 })
+        );
+    }
+
+    #[test]
+    fn spec24_controller_leap_and_enter_mapping_per_seam() {
+        let main_mons = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1080, 1920, false),
+        ];
+        // Linked has two monitors: L1 (0,0,1920,1080) and L2 (1920,0,1280,1024)
+        let linked_mons = vec![
+            mon("L1", 0, 0, 1920, 1080, true),
+            mon("L2", 1920, 0, 1280, 1024, false),
+        ];
+        // Place Linked below Main: origin = (0, 1080).
+        // Seams:
+        // - DISPLAY2 Bottom [0..1920] <-> L1 Top
+        // - DISPLAY1 Left [1080..1500] <-> L1 Right
+        // Wait: if we place Linked at (1000, 1500), L1 covers [1000..2920] and L2 covers [2920..4200]
+        // under DISPLAY1 (bottom=1500, x=[1920..3000]):
+        // - DISPLAY1 Bottom [1920..2920] <-> L1 Top
+        // - DISPLAY1 Bottom [2920..3000] <-> L2 Top (80px seam!)
+        let origin = Point { x: 1000, y: 1500 };
+        let seams = compute_seams(&main_mons, &linked_mons, origin);
+        assert_eq!(seams.len(), 2);
+
+        // 1) Non-seam edge on DISPLAY2 Bottom (y=1085) must NOT leap.
+        assert_eq!(
+            detect_controller_edge_seams((500, 1085), &main_mons, &linked_mons, origin, &seams, 48),
+            None
+        );
+
+        // 2) Seam 1 deadzone at both ends [1920..1968) and [2872..2920).
+        assert_eq!(
+            detect_controller_edge_seams((1950, 1505), &main_mons, &linked_mons, origin, &seams, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge_seams((2890, 1505), &main_mons, &linked_mons, origin, &seams, 48),
+            None
+        );
+
+        // 3) Crossing Seam 2 ([2920..3000], length=80 -> dz=39 -> active [2959..2961)) targets L2!
+        let hit = detect_controller_edge_seams((2960, 1505), &main_mons, &linked_mons, origin, &seams, 48)
+            .expect("should hit L2 seam");
+        assert_eq!(hit.target_monitor, "L2");
+        // In L2 coords (L2 starts at main x = 1000 + 1920 = 2920): along_px = 2960 - 2920 = 40.
+        assert_eq!(hit.along_px, 40);
+        assert_eq!(hit.seam.side, Edge::Bottom);
+
+        // Receiver enter mapping places cursor 2px inside L2's Top edge at x = 1920 + 40 = 1960.
+        let entered = map_cursor_enter_spec24(
+            &linked_mons,
+            hit.seam.side.opposite(),
+            hit.relative_y,
+            Some(&hit.target_monitor),
+            Some(hit.along_px),
+        );
+        assert_eq!(entered, (1960, 2));
+    }
+
+    #[test]
+    fn spec24_receiver_return_per_seam_and_controller_return_mapping() {
+        let main_mons = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1080, 1920, false),
+        ];
+        let linked_mons = vec![mon("L1", 0, 0, 1920, 1200, true)];
+        let origin = Point { x: 0, y: 1080 };
+        // Seams:
+        // - DISPLAY2 Bottom [0..1920] <-> L1 Top [0..1920]
+        // - DISPLAY1 Left [1080..1500] <-> L1 Right [0..420] (in Linked coords)
+        let linked_seams = compute_linked_seams(&main_mons, &linked_mons, origin);
+        assert_eq!(linked_seams.len(), 2);
+
+        let mut dwell_seam = None;
+        let mut dwell_start = None;
+
+        // Crossing L1 Left (no seam) clamps!
+        assert_eq!(
+            receiver_step_with_seams(
+                (5, 300),
+                (-20, 0),
+                &linked_mons,
+                &linked_seams,
+                0,
+                48,
+                &mut dwell_seam,
+                &mut dwell_start,
+                1000,
+            ),
+            ReceiverSeamStep::Move((0, 300))
+        );
+
+        // Crossing L1 Right below seam [0..420) (at y=600) clamps!
+        assert_eq!(
+            receiver_step_with_seams(
+                (1915, 600),
+                (20, 0),
+                &linked_mons,
+                &linked_seams,
+                0,
+                48,
+                &mut dwell_seam,
+                &mut dwell_start,
+                1000,
+            ),
+            ReceiverSeamStep::Move((1919, 600))
+        );
+
+        // Crossing L1 Right inside deadzone [0..48) or [372..420) clamps!
+        assert_eq!(
+            receiver_step_with_seams(
+                (1915, 400),
+                (20, 0),
+                &linked_mons,
+                &linked_seams,
+                0,
+                48,
+                &mut dwell_seam,
+                &mut dwell_start,
+                1000,
+            ),
+            ReceiverSeamStep::Move((1919, 400))
+        );
+
+        // Crossing L1 Right inside active seam [48..372) with dwell=100ms holds then returns to DISPLAY1!
+        assert_eq!(
+            receiver_step_with_seams(
+                (1915, 200),
+                (20, 0),
+                &linked_mons,
+                &linked_seams,
+                100,
+                48,
+                &mut dwell_seam,
+                &mut dwell_start,
+                1000,
+            ),
+            ReceiverSeamStep::Move((1919, 200))
+        );
+        let ret = receiver_step_with_seams(
+            (1919, 200),
+            (10, 0),
+            &linked_mons,
+            &linked_seams,
+            100,
+            48,
+            &mut dwell_seam,
+            &mut dwell_start,
+            1100,
+        );
+        let ReceiverSeamStep::Return {
+            edge,
+            target_monitor,
+            along_px,
+            relative_y,
+        } = ret
+        else {
+            panic!("expected Return, got {ret:?}");
+        };
+        assert_eq!(edge, Edge::Right);
+        assert_eq!(target_monitor.as_deref(), Some(r"\\.\DISPLAY1"));
+        // Linked y=200 -> Main y = 1080 + 200 = 1280 -> DISPLAY1 local y = 1280 - (-420) = 1700.
+        assert_eq!(along_px, Some(1700));
+
+        // Controller maps return onto DISPLAY1's Left edge at y = -420 + 1700 = 1280.
+        let pos = map_controller_return_pos(
+            &main_mons,
+            target_monitor.as_deref(),
+            edge,
+            along_px,
+            &main_mons[0],
+            &union_rect(&linked_mons),
+            Edge::Bottom,
+            0,
+            0,
+            relative_y,
+        );
+        assert_eq!(pos, (1922, 1280));
+    }
+
+    #[test]
+    fn spec24_migration_from_spec23_link_preserves_behavior() {
+        let main_mons = vec![mon("m1", 0, 0, 1920, 1080, true)];
+        let linked_mons = vec![
+            mon("l_left", -1280, 0, 1280, 720, false),
+            mon("l_primary", 0, 0, 1920, 1080, true),
+        ];
+
+        // SPEC-23 Right link with offset_y = 200: linked union starts at x=1920, y=200.
+        // Because linked_union.x == -1280, remote_origin.x must be 1920 - (-1280) = 3200.
+        let origin_r = derive_remote_origin_from_link(&main_mons, &linked_mons, Edge::Right, 0, 200);
+        assert_eq!(origin_r, Point { x: 3200, y: 200 });
+        let seams_r = compute_seams(&main_mons, &linked_mons, origin_r);
+        assert_eq!(
+            seams_r,
+            vec![Seam {
+                main_monitor_id: "m1".into(),
+                linked_monitor_id: "l_left".into(),
+                side: Edge::Right,
+                start: 200,
+                end: 920,
+            }]
+        );
+
+        // Explicit remote_origin supersedes link in TopologyConfig.
+        let topo = TopologyConfig {
+            computers: vec![],
+            links: vec![crate::kvm::protocol::TopologyLink {
+                from_id: "main".into(),
+                from_edge: "right".into(),
+                to_id: "linked".into(),
+                to_edge: "left".into(),
+                offset_x: Some(0),
+                offset_y: Some(200),
+                deadzone_px: None,
+                resistance_ms: None,
+            }],
+            remote_origin: Some(Point { x: 0, y: 1080 }),
+        };
+        assert_eq!(
+            resolve_remote_origin(&topo, &main_mons, &linked_mons, Some("main")),
+            Some(Point { x: 0, y: 1080 })
+        );
+
+        let legacy_topo = TopologyConfig {
+            remote_origin: None,
+            ..topo
+        };
+        assert_eq!(
+            resolve_remote_origin(&legacy_topo, &main_mons, &linked_mons, Some("main")),
+            Some(Point { x: 3200, y: 200 })
+        );
+    }
+
+    #[test]
+    fn spec24_monitor_change_fallback_resets_to_preset_on_previous_side() {
+        let prev_main = vec![
+            mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
+            mon(r"\\.\DISPLAY1", 1920, -420, 1080, 1920, false),
+        ];
+        let prev_linked = vec![mon("L1", 0, 0, 1920, 1200, true)];
+        let prev_origin = Point { x: 3000, y: -200 }; // placed on Right of DISPLAY1
+
+        // Unchanged -> None
+        assert_eq!(
+            handle_monitor_change_fallback(
+                &prev_main,
+                &prev_main,
+                &prev_linked,
+                &prev_linked,
+                prev_origin,
+                None,
+            ),
+            None
+        );
+
+        // Main disconnects DISPLAY1 -> falls back to preset on Right of remaining DISPLAY2!
+        let next_main = vec![mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true)];
+        let (new_origin, side) = handle_monitor_change_fallback(
+            &prev_main,
+            &next_main,
+            &prev_linked,
+            &prev_linked,
+            prev_origin,
+            None,
+        )
+        .expect("fallback on main monitor removal");
+        assert_eq!(side, Edge::Right);
+        assert_eq!(new_origin, Point { x: 1920, y: 0 });
+        assert!(is_valid_placement(&next_main, &prev_linked, new_origin));
+
+        // Linked resolution changes from 1920x1200 to 2560x1440 while placed on Top
+        let next_linked = vec![mon("L1", 0, 0, 2560, 1440, true)];
+        let top_origin = Point { x: 1920, y: -1620 }; // touching DISPLAY1 Top
+        let (top_fallback, top_side) = handle_monitor_change_fallback(
+            &prev_main,
+            &prev_main,
+            &prev_linked,
+            &next_linked,
+            top_origin,
+            None,
+        )
+        .expect("fallback on linked resolution change");
+        assert_eq!(top_side, Edge::Top);
+        assert_eq!(top_fallback, Point { x: 1920, y: -1860 });
+        assert!(is_valid_placement(&prev_main, &next_linked, top_fallback));
     }
 }

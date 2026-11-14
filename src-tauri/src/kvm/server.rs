@@ -387,6 +387,7 @@ mod tests {
     fn default_mons() -> Vec<MonitorDisplay> {
         vec![MonitorDisplay {
             id: "mon-1".into(),
+            device_name: "mon-1".into(),
             x: 0,
             y: 0,
             width: 1920,
@@ -649,6 +650,8 @@ mod tests {
             relative_y: 0.5,
             dwell_ms: 0,
             deadzone_px: 0,
+            target_monitor: None,
+            along_px: None,
         })
         .await
         .unwrap();
@@ -680,6 +683,8 @@ mod tests {
                     .send(Outbound::Packet(KvmPacket::CursorReturn {
                         edge: edge.as_str().to_string(),
                         relative_y,
+                        target_monitor: None,
+                        along_px: None,
                     }))
                     .unwrap();
             }
@@ -687,7 +692,7 @@ mod tests {
         }
 
         match timeout(Duration::from_secs(3), c1_in_rx.recv()).await.unwrap().unwrap() {
-            KvmPacket::CursorReturn { edge, relative_y } => {
+            KvmPacket::CursorReturn { edge, relative_y, .. } => {
                 assert_eq!(edge, "left");
                 assert!((relative_y - 0.5).abs() < 1e-4);
             }
@@ -746,5 +751,254 @@ mod tests {
         assert_eq!(r.cli_trust.list()[0].address, "127.0.0.1");
         assert_eq!(r.srv_trust.list()[0].address, "127.0.0.1");
         let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn loopback_seams_enter_specific_monitor_and_return_non_primary_seam() {
+        use crate::kvm::input_logic::{
+            compute_linked_seams, detect_controller_edge_seams, map_controller_return_pos,
+            map_cursor_enter_spec24, receiver_step_with_seams, ReceiverSeamStep,
+        };
+        use crate::kvm::protocol::Point;
+
+        let main_mons = vec![
+            MonitorDisplay {
+                id: "\\\\.\\DISPLAY1".into(),
+                device_name: "\\\\.\\DISPLAY1".into(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                is_primary: true,
+            },
+            MonitorDisplay {
+                id: "\\\\.\\DISPLAY2".into(),
+                device_name: "\\\\.\\DISPLAY2".into(),
+                x: 1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                is_primary: false,
+            },
+        ];
+        let linked_mons = vec![
+            MonitorDisplay {
+                id: "\\\\.\\DISPLAY_L1".into(),
+                device_name: "\\\\.\\DISPLAY_L1".into(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1200,
+                is_primary: true,
+            },
+            MonitorDisplay {
+                id: "\\\\.\\DISPLAY_L2".into(),
+                device_name: "\\\\.\\DISPLAY_L2".into(),
+                x: 1920,
+                y: 0,
+                width: 1280,
+                height: 1080,
+                is_primary: false,
+            },
+        ];
+        let origin = Point { x: 0, y: 1080 };
+
+        let dir = std::env::temp_dir().join(format!("anyleap-quic-spec24_seams-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let srv_id = Identity::load_or_create(&dir.join("srv")).unwrap();
+        let cli_id = Identity::load_or_create(&dir.join("cli")).unwrap();
+        let srv_trust = Arc::new(TrustStore::load(None));
+        let cli_trust = TrustStore::load(None);
+        let srv = start_kvm_server(
+            0,
+            &srv_id,
+            srv_trust,
+            "srv".into(),
+            "Server".into(),
+            linked_mons.clone(),
+            dir.join("dl-srv"),
+        )
+        .await
+        .unwrap();
+        let mut srv_in_rx = srv.incoming_tx.subscribe();
+        let mut srv_delta_rx = srv.mouse_delta_tx.subscribe();
+        let srv_out_tx = srv.outgoing_tx.clone();
+
+        let cli = KvmClientHandle::connect(
+            "127.0.0.1",
+            srv.port,
+            "cli".into(),
+            "Client".into(),
+            main_mons.clone(),
+            Some(srv.pin()),
+            &cli_id,
+            &cli_trust,
+            dir.join("dl-cli"),
+        )
+        .await
+        .unwrap();
+        let mut cli_in_rx = cli.incoming_tx.subscribe();
+
+        // 1. Main computes seams and delivers KvmPacket::Seams to Linked.
+        let seams = compute_linked_seams(&main_mons, &linked_mons, origin);
+        assert_eq!(seams.len(), 2);
+        cli.send_packet(KvmPacket::Seams {
+            seams: seams.clone(),
+        })
+        .await
+        .unwrap();
+
+        let rx_seams = loop {
+            match timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                KvmPacket::Seams { seams } => break seams,
+                _ => continue,
+            }
+        };
+        assert_eq!(rx_seams, seams);
+
+        // 2. Main leaps from non-primary monitor \\.\DISPLAY2 bottom edge (x=2400).
+        let main_seams = crate::kvm::input_logic::compute_seams(&main_mons, &linked_mons, origin);
+        let hit = detect_controller_edge_seams(
+            (2400, 1079),
+            &main_mons,
+            &linked_mons,
+            origin,
+            &main_seams,
+            0,
+        )
+        .expect("Main non-primary bottom edge should hit seam to L2");
+        assert_eq!(hit.target_monitor, "\\\\.\\DISPLAY_L2");
+        assert_eq!(hit.along_px, 480);
+
+        cli.send_packet(KvmPacket::CursorEnter {
+            edge: hit.seam.side.opposite().as_str().to_string(),
+            relative_y: hit.relative_y,
+            dwell_ms: 0,
+            deadzone_px: 0,
+            target_monitor: Some(hit.target_monitor.clone()),
+            along_px: Some(hit.along_px),
+        })
+        .await
+        .unwrap();
+
+        let (entry_edge, cursor_pos) = loop {
+            match timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                KvmPacket::CursorEnter {
+                    edge,
+                    relative_y,
+                    target_monitor,
+                    along_px,
+                    ..
+                } => {
+                    let e = Edge::from_str(&edge).unwrap();
+                    let pos = map_cursor_enter_spec24(
+                        &linked_mons,
+                        e,
+                        relative_y,
+                        target_monitor.as_deref(),
+                        along_px,
+                    );
+                    break (e, pos);
+                }
+                _ => continue,
+            }
+        };
+        assert_eq!(entry_edge, Edge::Top);
+        // Should enter specific non-primary monitor \\.\DISPLAY_L2 (x >= 1920), not L1!
+        assert_eq!(cursor_pos, (2400, 2));
+
+        // 3. Push past L2 top seam (which is on non-primary L2) -> returns to Main non-primary \\.\DISPLAY2!
+        let mut dwell_seam = None;
+        let mut dwell_start = None;
+        cli.send_mouse_delta(0, -10);
+        let d = timeout(Duration::from_secs(3), srv_delta_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        match receiver_step_with_seams(
+            cursor_pos,
+            (d.dx, d.dy),
+            &linked_mons,
+            &rx_seams,
+            0,
+            0,
+            &mut dwell_seam,
+            &mut dwell_start,
+            0,
+        ) {
+            ReceiverSeamStep::Return {
+                edge,
+                relative_y,
+                target_monitor,
+                along_px,
+            } => {
+                srv_out_tx
+                    .send(Outbound::Packet(KvmPacket::CursorReturn {
+                        edge: edge.as_str().to_string(),
+                        relative_y,
+                        target_monitor,
+                        along_px,
+                    }))
+                    .unwrap();
+            }
+            other => panic!("expected ReceiverSeamStep::Return, got {other:?}"),
+        }
+
+        // Also check non-seam edge clamping on L2 right edge (x = 3199).
+        assert_eq!(
+            receiver_step_with_seams(
+                (3195, 500),
+                (20, 0),
+                &linked_mons,
+                &rx_seams,
+                0,
+                0,
+                &mut None,
+                &mut None,
+                0,
+            ),
+            ReceiverSeamStep::Move((3199, 500))
+        );
+
+        let landed = match timeout(Duration::from_secs(3), cli_in_rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            KvmPacket::CursorReturn {
+                edge,
+                relative_y,
+                target_monitor,
+                along_px,
+            } => {
+                assert_eq!(edge, "top");
+                assert_eq!(target_monitor.as_deref(), Some("\\\\.\\DISPLAY2"));
+                assert_eq!(along_px, Some(480));
+                map_controller_return_pos(
+                    &main_mons,
+                    target_monitor.as_deref(),
+                    Edge::Top,
+                    along_px,
+                    &main_mons[0],
+                    &crate::kvm::input_logic::union_rect(&linked_mons),
+                    Edge::Bottom,
+                    0,
+                    0,
+                    relative_y,
+                )
+            }
+            other => panic!("expected CursorReturn, got {other:?}"),
+        };
+        assert_eq!(landed, (2400, 1077));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

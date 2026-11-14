@@ -6,13 +6,14 @@ use super::files::{send_file, send_image};
 use super::identity::{Identity, TrustStore};
 use super::injector;
 use super::input_logic::{
-    map_cursor_enter, normalize_in_union, receiver_step_with_dwell, union_rect, Edge,
-    PressedInputTracker, ReceiverStep,
+    compute_linked_seams, handle_monitor_change_fallback, has_any_overlap, map_cursor_enter_spec24,
+    monitors_changed, normalize_in_union, receiver_step_with_dwell, receiver_step_with_seams,
+    resolve_remote_origin, union_rect, Edge, PressedInputTracker, ReceiverSeamStep, ReceiverStep,
 };
 use super::monitors::{get_local_monitors, MonitorDisplay};
 use super::protocol::{
-    ComputerNode, KvmPacket, KvmStatus, LinkedPeerInfo, Outbound, ScreenRect, TopologyConfig,
-    TransferEvent, TrustedPeerInfo, UdpMouseDelta,
+    ComputerNode, KvmPacket, KvmStatus, LinkedPeerInfo, LinkedSeam, Outbound, ScreenRect,
+    TopologyConfig, TransferEvent, TrustedPeerInfo, UdpMouseDelta,
 };
 use super::server::start_kvm_server;
 use crate::state::{AppState, KvmState};
@@ -31,6 +32,9 @@ struct ReceiverSessionState {
     dwell_ms: u32,
     deadzone_px: i32,
     dwell_start_ms: Option<u64>,
+    dwell_seam: Option<usize>,
+    seams: Vec<LinkedSeam>,
+    has_seams: bool,
     session_epoch: Instant,
     monitors: Vec<MonitorDisplay>,
     union: ScreenRect,
@@ -47,6 +51,9 @@ impl ReceiverSessionState {
             dwell_ms: 0,
             deadzone_px: 0,
             dwell_start_ms: None,
+            dwell_seam: None,
+            seams: Vec::new(),
+            has_seams: false,
             session_epoch: Instant::now(),
             monitors,
             union,
@@ -361,12 +368,60 @@ pub async fn kvm_get_status(
     app_handle: AppHandle,
 ) -> Result<KvmStatus, String> {
     let (id, name, sw, sh, monitors) = get_local_machine_info(&app_handle, &state)?;
-    let kvm = state.kvm.lock().unwrap();
+    let mut kvm = state.kvm.lock().unwrap();
     let port = kvm.server.as_ref().map(|s| s.port).unwrap_or(KVM_PORT);
 
     // Auto-start discovery listener if not already running
     if !kvm.discovery.is_running() {
         kvm.discovery.start(id.clone(), name.clone(), port, sw, sh);
+    }
+
+    if let Some(prev_origin) = kvm.topology.remote_origin {
+        let prev_main = kvm
+            .topology
+            .computers
+            .iter()
+            .find(|c| c.is_local)
+            .map(|c| c.monitors.clone())
+            .unwrap_or_default();
+        if !prev_main.is_empty() && monitors_changed(&prev_main, &monitors) {
+            let linked_mons = kvm
+                .client
+                .as_ref()
+                .map(|c| c.peer_monitors.clone())
+                .or_else(|| {
+                    kvm.topology
+                        .computers
+                        .iter()
+                        .find(|c| !c.is_local)
+                        .map(|c| c.monitors.clone())
+                })
+                .unwrap_or_default();
+            if let Some((fallback_origin, side)) = handle_monitor_change_fallback(
+                &prev_main,
+                &monitors,
+                &linked_mons,
+                &linked_mons,
+                prev_origin,
+                None,
+            ) {
+                let mut updated = kvm.topology.clone();
+                if let Some(local_node) = updated.computers.iter_mut().find(|c| c.is_local) {
+                    local_node.monitors = monitors.clone();
+                    local_node.bounds = union_rect(&monitors);
+                }
+                updated.remote_origin = Some(fallback_origin);
+                let _ = app_handle.emit(
+                    "kvm-layout-notice",
+                    serde_json::json!({
+                        "reason": "monitors_changed",
+                        "side": side.as_str(),
+                        "remoteOrigin": fallback_origin,
+                    }),
+                );
+                apply_controller_topology(&mut kvm, updated, &app_handle);
+            }
+        }
     }
 
     Ok(build_status(id, name, sw, sh, monitors, &kvm))
@@ -459,15 +514,35 @@ async fn start_server_inner(
                         let _ = app_h.emit("kvm-peer-connected", &peer_name);
                     }
                 }
+                KvmPacket::Seams { seams } => {
+                    let fresh_monitors = get_local_monitors();
+                    let union = union_rect(&fresh_monitors);
+                    if let Ok(mut st) = rx_state_pkt.lock() {
+                        st.seams = seams;
+                        st.has_seams = true;
+                        st.dwell_seam = None;
+                        st.dwell_start_ms = None;
+                        st.monitors = fresh_monitors;
+                        st.union = union;
+                    }
+                }
                 KvmPacket::CursorEnter {
                     edge,
                     relative_y,
                     dwell_ms,
                     deadzone_px,
+                    target_monitor,
+                    along_px,
                 } => {
                     let fresh_monitors = get_local_monitors();
                     let entry_edge = Edge::from_str(&edge).unwrap_or(Edge::Left);
-                    let pos = map_cursor_enter(&fresh_monitors, entry_edge, relative_y);
+                    let pos = map_cursor_enter_spec24(
+                        &fresh_monitors,
+                        entry_edge,
+                        relative_y,
+                        target_monitor.as_deref(),
+                        along_px,
+                    );
                     let union = union_rect(&fresh_monitors);
                     let (norm_x, norm_y) = normalize_in_union(pos, &union);
 
@@ -489,6 +564,7 @@ async fn start_server_inner(
                         st.dwell_ms = dwell_ms;
                         st.deadzone_px = deadzone_px;
                         st.dwell_start_ms = None;
+                        st.dwell_seam = None;
                         st.monitors = fresh_monitors;
                         st.union = union;
                         st.last_pos_emit = None;
@@ -515,6 +591,11 @@ async fn start_server_inner(
                 }
                 KvmPacket::PeerDisconnected { computer_id } => {
                     release_receiver_inputs(&rx_state_pkt, "peer_disconnected");
+                    if let Ok(mut st) = rx_state_pkt.lock() {
+                        st.seams.clear();
+                        st.has_seams = false;
+                        st.dwell_seam = None;
+                    }
                     if let Some(app_state) = app_h.try_state::<AppState>() {
                         if let Ok(mut kvm) = app_state.kvm.lock() {
                             let removed_name = kvm
@@ -633,6 +714,8 @@ async fn start_server_inner(
                 Return {
                     edge: Edge,
                     relative_y: f32,
+                    target_monitor: Option<String>,
+                    along_px: Option<i32>,
                     keys: Vec<super::input_logic::TrackedKey>,
                     buttons: Vec<u8>,
                 },
@@ -651,42 +734,98 @@ async fn start_server_inner(
                         dwell_ms,
                         deadzone_px,
                         ref mut dwell_start_ms,
+                        ref mut dwell_seam,
+                        ref seams,
+                        has_seams,
                         ref monitors,
                         ..
                     } = *st;
-                    match receiver_step_with_dwell(
-                        cur,
-                        (delta.dx, delta.dy),
-                        monitors,
-                        entry_edge,
-                        dwell_ms,
-                        deadzone_px,
-                        dwell_start_ms,
-                        now_ms,
-                    ) {
-                        ReceiverStep::Move(pos) => {
-                            let emit_pos = if st
-                                .last_pos_emit
-                                .is_none_or(|t| t.elapsed() >= Duration::from_millis(50))
-                            {
-                                st.last_pos_emit = Some(Instant::now());
-                                Some(normalize_in_union(pos, &st.union))
-                            } else {
-                                None
-                            };
-                            DeltaAction::Move { pos, emit_pos }
-                        }
-                        ReceiverStep::Return { edge, relative_y } => {
-                            st.is_entered = false;
-                            RECEIVER_ENTERED.store(false, std::sync::atomic::Ordering::Relaxed);
-                            st.dwell_start_ms = None;
-                            st.last_pos_emit = None;
-                            let (keys, buttons) = st.tracker.release_all();
-                            DeltaAction::Return {
+                    if has_seams {
+                        match receiver_step_with_seams(
+                            cur,
+                            (delta.dx, delta.dy),
+                            monitors,
+                            seams,
+                            dwell_ms,
+                            deadzone_px,
+                            dwell_seam,
+                            dwell_start_ms,
+                            now_ms,
+                        ) {
+                            ReceiverSeamStep::Move(pos) => {
+                                let emit_pos = if st
+                                    .last_pos_emit
+                                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(50))
+                                {
+                                    st.last_pos_emit = Some(Instant::now());
+                                    Some(normalize_in_union(pos, &st.union))
+                                } else {
+                                    None
+                                };
+                                DeltaAction::Move { pos, emit_pos }
+                            }
+                            ReceiverSeamStep::Return {
                                 edge,
                                 relative_y,
-                                keys,
-                                buttons,
+                                target_monitor,
+                                along_px,
+                            } => {
+                                st.is_entered = false;
+                                RECEIVER_ENTERED
+                                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                                st.dwell_seam = None;
+                                st.dwell_start_ms = None;
+                                st.last_pos_emit = None;
+                                let (keys, buttons) = st.tracker.release_all();
+                                DeltaAction::Return {
+                                    edge,
+                                    relative_y,
+                                    target_monitor,
+                                    along_px,
+                                    keys,
+                                    buttons,
+                                }
+                            }
+                        }
+                    } else {
+                        match receiver_step_with_dwell(
+                            cur,
+                            (delta.dx, delta.dy),
+                            monitors,
+                            entry_edge,
+                            dwell_ms,
+                            deadzone_px,
+                            dwell_start_ms,
+                            now_ms,
+                        ) {
+                            ReceiverStep::Move(pos) => {
+                                let emit_pos = if st
+                                    .last_pos_emit
+                                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(50))
+                                {
+                                    st.last_pos_emit = Some(Instant::now());
+                                    Some(normalize_in_union(pos, &st.union))
+                                } else {
+                                    None
+                                };
+                                DeltaAction::Move { pos, emit_pos }
+                            }
+                            ReceiverStep::Return { edge, relative_y } => {
+                                st.is_entered = false;
+                                RECEIVER_ENTERED
+                                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                                st.dwell_seam = None;
+                                st.dwell_start_ms = None;
+                                st.last_pos_emit = None;
+                                let (keys, buttons) = st.tracker.release_all();
+                                DeltaAction::Return {
+                                    edge,
+                                    relative_y,
+                                    target_monitor: None,
+                                    along_px: None,
+                                    keys,
+                                    buttons,
+                                }
                             }
                         }
                     }
@@ -709,6 +848,8 @@ async fn start_server_inner(
                 DeltaAction::Return {
                     edge,
                     relative_y,
+                    target_monitor,
+                    along_px,
                     keys,
                     buttons,
                 } => {
@@ -719,6 +860,8 @@ async fn start_server_inner(
                     let _ = delta_out_tx.send(Outbound::Packet(KvmPacket::CursorReturn {
                         edge: edge_str.clone(),
                         relative_y,
+                        target_monitor,
+                        along_px,
                     }));
                     if debug_log::is_enabled() {
                         debug_log::record_event(debug_log::DebugEvent::ReturnSent {
@@ -881,10 +1024,20 @@ pub async fn kvm_connect_peer(
         while let Ok(pkt) = in_rx.recv().await {
             match pkt {
                 KvmPacket::ClipboardText { text } => emit_clipboard_text(&app_h, &text),
-                KvmPacket::CursorReturn { relative_y, .. } => {
+                KvmPacket::CursorReturn {
+                    edge,
+                    relative_y,
+                    target_monitor,
+                    along_px,
+                } => {
                     if let Some(app_state) = app_h.try_state::<AppState>() {
                         if let Ok(kvm) = app_state.kvm.lock() {
-                            kvm.hooks.handle_cursor_return(relative_y);
+                            kvm.hooks.handle_cursor_return(
+                                &edge,
+                                relative_y,
+                                target_monitor.as_deref(),
+                                along_px,
+                            );
                         }
                     }
                     let _ = app_h.emit("kvm-cursor-return", "");
@@ -943,6 +1096,43 @@ pub async fn kvm_connect_peer(
     if kvm.client.is_some() {
         disconnect_client_in_state(&mut kvm);
     }
+
+    let local_monitors = get_local_monitors();
+    if let Some(prev_origin) = kvm.topology.remote_origin {
+        let prev_main = kvm
+            .topology
+            .computers
+            .iter()
+            .find(|c| c.is_local)
+            .map(|c| c.monitors.clone())
+            .unwrap_or_else(|| local_monitors.clone());
+        let prev_linked = kvm
+            .topology
+            .computers
+            .iter()
+            .find(|c| !c.is_local && c.id == peer_node.id)
+            .map(|c| c.monitors.clone())
+            .unwrap_or_default();
+        if let Some((fallback_origin, side)) = handle_monitor_change_fallback(
+            &prev_main,
+            &local_monitors,
+            &prev_linked,
+            &peer_node.monitors,
+            prev_origin,
+            None,
+        ) {
+            kvm.topology.remote_origin = Some(fallback_origin);
+            let _ = app_handle.emit(
+                "kvm-layout-notice",
+                serde_json::json!({
+                    "reason": "monitors_changed",
+                    "side": side.as_str(),
+                    "remoteOrigin": fallback_origin,
+                }),
+            );
+        }
+    }
+
     if let Some(existing) = kvm
         .topology
         .computers
@@ -954,6 +1144,17 @@ pub async fn kvm_connect_peer(
         kvm.topology.computers.push(peer_node);
     }
     kvm.client = Some(client);
+
+    if kvm.topology.remote_origin.is_some() || !kvm.topology.links.is_empty() {
+        let mut updated = kvm.topology.clone();
+        if let Some(local_node) = updated.computers.iter_mut().find(|c| c.is_local) {
+            if !local_monitors.is_empty() {
+                local_node.monitors = local_monitors.clone();
+                local_node.bounds = union_rect(&local_monitors);
+            }
+        }
+        apply_controller_topology(&mut kvm, updated, &app_handle);
+    }
     Ok(())
 }
 
@@ -985,32 +1186,157 @@ pub async fn kvm_send_file(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn kvm_update_topology(
-    mut topology: TopologyConfig,
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
-) -> Result<(), String> {
-    let mut kvm = state.kvm.lock().unwrap();
-    if let Some(ref client) = kvm.client {
-        let peer_bounds = union_rect(&client.peer_monitors);
-        if let Some(node) = topology
+pub(crate) fn prepare_topology_update(
+    prev_topology: &TopologyConfig,
+    mut next_topology: TopologyConfig,
+    live_local_monitors: &[MonitorDisplay],
+    live_peer: Option<(&str, &[MonitorDisplay])>,
+) -> Result<(TopologyConfig, Option<serde_json::Value>), String> {
+    if let Some((peer_id, peer_monitors)) = live_peer {
+        let peer_bounds = union_rect(peer_monitors);
+        if let Some(node) = next_topology
             .computers
             .iter_mut()
-            .find(|c| !c.is_local && c.id == client.peer_id)
+            .find(|c| !c.is_local && c.id == peer_id)
         {
-            if node.monitors.is_empty() && !client.peer_monitors.is_empty() {
-                node.monitors = client.peer_monitors.clone();
+            if node.monitors.is_empty() && !peer_monitors.is_empty() {
+                node.monitors = peer_monitors.to_vec();
                 node.bounds = peer_bounds;
             }
         }
     }
+
+    let local_id = next_topology
+        .computers
+        .iter()
+        .find(|c| c.is_local)
+        .map(|c| c.id.clone());
+
+    let prev_main = prev_topology
+        .computers
+        .iter()
+        .find(|c| c.is_local)
+        .map(|c| c.monitors.clone())
+        .unwrap_or_default();
+    let prev_linked = prev_topology
+        .computers
+        .iter()
+        .find(|c| !c.is_local)
+        .map(|c| c.monitors.clone())
+        .unwrap_or_default();
+
+    let next_main: Vec<MonitorDisplay> = if !live_local_monitors.is_empty() {
+        live_local_monitors.to_vec()
+    } else {
+        next_topology
+            .computers
+            .iter()
+            .find(|c| c.is_local)
+            .map(|c| c.monitors.clone())
+            .unwrap_or_default()
+    };
+
+    let next_linked: Vec<MonitorDisplay> = if let Some((peer_id, peer_monitors)) = live_peer {
+        if !peer_monitors.is_empty() {
+            peer_monitors.to_vec()
+        } else {
+            next_topology
+                .computers
+                .iter()
+                .find(|c| !c.is_local && c.id == peer_id)
+                .map(|c| c.monitors.clone())
+                .unwrap_or_default()
+        }
+    } else {
+        next_topology
+            .computers
+            .iter()
+            .find(|c| !c.is_local)
+            .map(|c| c.monitors.clone())
+            .unwrap_or_default()
+    };
+
+    let mut notice = None;
+    let changed = (!prev_main.is_empty() && monitors_changed(&prev_main, &next_main))
+        || (!prev_linked.is_empty() && monitors_changed(&prev_linked, &next_linked));
+
+    if changed {
+        if let Some(prev_origin) = prev_topology.remote_origin.or(next_topology.remote_origin) {
+            if let Some((fallback_origin, side)) = handle_monitor_change_fallback(
+                &prev_main,
+                &next_main,
+                &prev_linked,
+                &next_linked,
+                prev_origin,
+                None,
+            ) {
+                next_topology.remote_origin = Some(fallback_origin);
+                notice = Some(serde_json::json!({
+                    "reason": "monitors_changed",
+                    "side": side.as_str(),
+                    "remoteOrigin": fallback_origin,
+                }));
+            }
+        }
+    } else if let Some(origin) = next_topology.remote_origin {
+        if !next_main.is_empty()
+            && !next_linked.is_empty()
+            && has_any_overlap(&next_main, &next_linked, origin)
+        {
+            return Err("Monitor layout has overlapping displays".to_string());
+        }
+    }
+
+    if next_topology.remote_origin.is_none() {
+        next_topology.remote_origin =
+            resolve_remote_origin(&next_topology, &next_main, &next_linked, local_id.as_deref());
+    }
+
+    if !next_main.is_empty() {
+        if let Some(local_node) = next_topology.computers.iter_mut().find(|c| c.is_local) {
+            local_node.monitors = next_main.clone();
+            local_node.bounds = union_rect(&next_main);
+        }
+    }
+
+    Ok((next_topology, notice))
+}
+
+fn apply_controller_topology(kvm: &mut KvmState, topology: TopologyConfig, app_handle: &AppHandle) {
     kvm.topology = topology.clone();
 
     let (packet_tx, mut packet_rx) = tokio::sync::mpsc::channel::<KvmPacket>(256);
     let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<(i32, i32)>(512);
 
     if let Some(ref client) = kvm.client {
+        let main_monitors = topology
+            .computers
+            .iter()
+            .find(|c| c.is_local)
+            .map(|c| c.monitors.clone())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(get_local_monitors);
+        let linked_monitors = topology
+            .computers
+            .iter()
+            .find(|c| !c.is_local && c.id == client.peer_id)
+            .map(|c| c.monitors.clone())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| client.peer_monitors.clone());
+        let local_id = topology
+            .computers
+            .iter()
+            .find(|c| c.is_local)
+            .map(|c| c.id.as_str());
+        let seams = resolve_remote_origin(&topology, &main_monitors, &linked_monitors, local_id)
+            .map(|origin| compute_linked_seams(&main_monitors, &linked_monitors, origin))
+            .unwrap_or_default();
+
+        let seam_tx = client.send_packet_tx.clone();
+        tokio::spawn(async move {
+            let _ = seam_tx.send(KvmPacket::Seams { seams }).await;
+        });
+
         let client_sender = client.send_packet_tx.clone();
         let conn = client.conn.clone();
         let app_h = app_handle.clone();
@@ -1051,6 +1377,36 @@ pub async fn kvm_update_topology(
         kvm.hooks
             .start_hooks(topology, packet_tx, delta_tx, Some(on_leap_blocked));
     }
+}
+
+#[tauri::command]
+pub async fn kvm_update_topology(
+    topology: TopologyConfig,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let live_local_monitors = get_local_monitors();
+    let mut kvm = state.kvm.lock().unwrap();
+    let live_peer_pair = kvm
+        .client
+        .as_ref()
+        .map(|c| (c.peer_id.clone(), c.peer_monitors.clone()));
+    let live_peer_ref = live_peer_pair
+        .as_ref()
+        .map(|(id, mons)| (id.as_str(), mons.as_slice()));
+
+    let (prepared, notice) = prepare_topology_update(
+        &kvm.topology,
+        topology,
+        &live_local_monitors,
+        live_peer_ref,
+    )?;
+
+    if let Some(payload) = notice {
+        let _ = app_handle.emit("kvm-layout-notice", payload);
+    }
+
+    apply_controller_topology(&mut kvm, prepared, &app_handle);
 
     Ok(())
 }
@@ -1110,6 +1466,7 @@ mod tests {
     fn test_mons() -> Vec<MonitorDisplay> {
         vec![MonitorDisplay {
             id: "mon-1".into(),
+            device_name: "mon-1".into(),
             x: 0,
             y: 0,
             width: 1920,
@@ -1356,5 +1713,112 @@ mod tests {
         assert!(saw_disc, "server must observe disconnect when Main PC forgets peer");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prepare_topology_update_rejects_overlaps() {
+        let main_mons = test_mons();
+        let linked_mons = vec![MonitorDisplay {
+            id: "\\\\.\\DISPLAY1".into(),
+            device_name: "\\\\.\\DISPLAY1".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1200,
+            is_primary: true,
+        }];
+        let topo = TopologyConfig {
+            computers: vec![
+                ComputerNode {
+                    id: "main".into(),
+                    name: "Main".into(),
+                    is_local: true,
+                    address: None,
+                    bounds: union_rect(&main_mons),
+                    monitors: main_mons.clone(),
+                },
+                ComputerNode {
+                    id: "linked".into(),
+                    name: "Linked".into(),
+                    is_local: false,
+                    address: None,
+                    bounds: union_rect(&linked_mons),
+                    monitors: linked_mons.clone(),
+                },
+            ],
+            links: vec![],
+            remote_origin: Some(super::super::protocol::Point { x: 1000, y: 0 }),
+        };
+        let err = prepare_topology_update(
+            &topo,
+            topo.clone(),
+            &main_mons,
+            Some(("linked", &linked_mons)),
+        )
+        .unwrap_err();
+        assert!(err.contains("overlapping"));
+    }
+
+    #[test]
+    fn prepare_topology_update_falls_back_on_monitor_change() {
+        let prev_main = test_mons();
+        let next_main = vec![MonitorDisplay {
+            id: "mon-1".into(),
+            device_name: "mon-1".into(),
+            x: 0,
+            y: 0,
+            width: 2560,
+            height: 1440,
+            is_primary: true,
+        }];
+        let linked_mons = vec![MonitorDisplay {
+            id: "\\\\.\\DISPLAY1".into(),
+            device_name: "\\\\.\\DISPLAY1".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1200,
+            is_primary: true,
+        }];
+        let prev_topo = TopologyConfig {
+            computers: vec![
+                ComputerNode {
+                    id: "main".into(),
+                    name: "Main".into(),
+                    is_local: true,
+                    address: None,
+                    bounds: union_rect(&prev_main),
+                    monitors: prev_main.clone(),
+                },
+                ComputerNode {
+                    id: "linked".into(),
+                    name: "Linked".into(),
+                    is_local: false,
+                    address: None,
+                    bounds: union_rect(&linked_mons),
+                    monitors: linked_mons.clone(),
+                },
+            ],
+            links: vec![],
+            remote_origin: Some(super::super::protocol::Point { x: 1920, y: 100 }),
+        };
+        let mut next_topo = prev_topo.clone();
+        next_topo.computers[0].monitors = next_main.clone();
+        next_topo.computers[0].bounds = union_rect(&next_main);
+
+        let (prepared, notice) = prepare_topology_update(
+            &prev_topo,
+            next_topo,
+            &next_main,
+            Some(("linked", &linked_mons)),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.remote_origin,
+            Some(super::super::protocol::Point { x: 2560, y: 0 })
+        );
+        let notice = notice.expect("should emit layout notice on monitor change");
+        assert_eq!(notice["reason"], "monitors_changed");
+        assert_eq!(notice["side"], "right");
     }
 }

@@ -1,10 +1,11 @@
 use super::debug_log::{self, DebugEvent, HookKind, KeyDecision, KeySnapshot};
 use super::input_logic::{
-    detect_controller_edge, map_leap_relative_y, map_return_position, union_rect, Edge,
-    PressedInputTracker,
+    compute_seams, detect_controller_edge, detect_controller_edge_seams,
+    map_controller_return_pos, map_leap_relative_y, resolve_remote_origin, union_rect, Edge,
+    PressedInputTracker, Seam,
 };
 use super::monitors::{get_local_monitors, MonitorDisplay};
-use super::protocol::{KvmPacket, ScreenRect, TopologyConfig};
+use super::protocol::{KvmPacket, Point, ScreenRect, TopologyConfig};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc;
@@ -50,7 +51,16 @@ static PACKET_SENDER: OnceLock<Mutex<Option<mpsc::Sender<KvmPacket>>>> = OnceLoc
 static MOUSE_DELTA_SENDER: OnceLock<Mutex<Option<mpsc::Sender<(i32, i32)>>>> = OnceLock::new();
 static LEAP_BLOCKED_CALLBACK: OnceLock<Mutex<Option<LeapBlockedCallback>>> = OnceLock::new();
 static LOCAL_MONITORS: OnceLock<Mutex<Vec<MonitorDisplay>>> = OnceLock::new();
+static CONTROLLER_LAYOUT: OnceLock<Mutex<ControllerLayout>> = OnceLock::new();
 static CONTROLLER_TRACKER: OnceLock<Mutex<PressedInputTracker>> = OnceLock::new();
+
+#[derive(Default)]
+struct ControllerLayout {
+    main_monitors: Vec<MonitorDisplay>,
+    linked_monitors: Vec<MonitorDisplay>,
+    remote_origin: Option<Point>,
+    seams: Vec<Seam>,
+}
 
 static HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static IS_TRAPPED: AtomicBool = AtomicBool::new(false);
@@ -65,6 +75,11 @@ static TRAP_MON_Y: AtomicI32 = AtomicI32::new(0);
 static TRAP_MON_W: AtomicI32 = AtomicI32::new(1920);
 static TRAP_MON_H: AtomicI32 = AtomicI32::new(1080);
 static PENDING_ENGAGE_REL_Y: AtomicU32 = AtomicU32::new(0);
+static PENDING_ENGAGE_ALONG_PX: AtomicI32 = AtomicI32::new(0);
+static PENDING_ENGAGE_ENTRY_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
+static PENDING_ENGAGE_LEAP_SIDE: AtomicU8 = AtomicU8::new(Edge::Right as u8);
+static PENDING_ENGAGE_HAS_SEAM: AtomicBool = AtomicBool::new(false);
+static PENDING_ENGAGE_TARGET_MON: OnceLock<Mutex<String>> = OnceLock::new();
 
 static LINK_FROM_EDGE: AtomicU8 = AtomicU8::new(Edge::Right as u8);
 static LINK_TO_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
@@ -84,6 +99,7 @@ static MOUSE_BUTTONS_DOWN: AtomicU8 = AtomicU8::new(0);
 static KEY_CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static KEY_ALT_DOWN: AtomicBool = AtomicBool::new(false);
 static EDGE_DWELL_START: AtomicU64 = AtomicU64::new(0);
+static EDGE_DWELL_SEAM_IDX: AtomicI32 = AtomicI32::new(-1);
 #[cfg(windows)]
 static LAST_BLOCKED_NOTICE_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
@@ -116,6 +132,14 @@ fn leap_blocked_callback_slot() -> &'static Mutex<Option<LeapBlockedCallback>> {
 
 fn local_monitors() -> &'static Mutex<Vec<MonitorDisplay>> {
     LOCAL_MONITORS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn controller_layout() -> &'static Mutex<ControllerLayout> {
+    CONTROLLER_LAYOUT.get_or_init(|| Mutex::new(ControllerLayout::default()))
+}
+
+fn pending_engage_target_mon() -> &'static Mutex<String> {
+    PENDING_ENGAGE_TARGET_MON.get_or_init(|| Mutex::new(String::new()))
 }
 
 fn controller_tracker() -> &'static Mutex<PressedInputTracker> {
@@ -228,7 +252,13 @@ impl HookController {
         }
     }
 
-    pub fn handle_cursor_return(&self, relative_y: f32) {
+    pub fn handle_cursor_return(
+        &self,
+        edge: &str,
+        relative_y: f32,
+        target_monitor: Option<&str>,
+        along_px: Option<i32>,
+    ) {
         let was_trapped = IS_TRAPPED.swap(false, Ordering::SeqCst);
         if debug_log::is_enabled() {
             debug_log::record_event(DebugEvent::Return {
@@ -244,10 +274,12 @@ impl HookController {
         CURSOR_CENTERED.store(false, Ordering::Release);
         ENGAGE_PENDING.store(false, Ordering::Release);
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         notify_hook_thread_restore();
 
         let fallback_mon = MonitorDisplay {
             id: String::new(),
+            device_name: String::new(),
             x: TRAP_MON_X.load(Ordering::Relaxed),
             y: TRAP_MON_Y.load(Ordering::Relaxed),
             width: TRAP_MON_W.load(Ordering::Relaxed),
@@ -261,11 +293,15 @@ impl HookController {
             height: PEER_UNION_H.load(Ordering::Relaxed),
         };
         let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
+        let return_edge = Edge::from_str(edge).unwrap_or_else(|| link_edge.opposite());
         let offset_x = LINK_OFFSET_X.load(Ordering::Relaxed);
         let offset_y = LINK_OFFSET_Y.load(Ordering::Relaxed);
         let (rx, ry) = if let Ok(mons) = local_monitors().try_lock() {
-            map_return_position(
+            map_controller_return_pos(
                 &mons,
+                target_monitor,
+                return_edge,
+                along_px,
                 &fallback_mon,
                 &peer_union,
                 link_edge,
@@ -274,8 +310,11 @@ impl HookController {
                 relative_y,
             )
         } else {
-            map_return_position(
+            map_controller_return_pos(
                 &[],
+                target_monitor,
+                return_edge,
+                along_px,
                 &fallback_mon,
                 &peer_union,
                 link_edge,
@@ -301,6 +340,7 @@ impl HookController {
         }
         self.set_trapped(false);
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
         KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
         KEY_ALT_DOWN.store(false, Ordering::Relaxed);
@@ -327,7 +367,7 @@ impl HookController {
         LOCAL_UNION_W.store(local_union.width, Ordering::Relaxed);
         LOCAL_UNION_H.store(local_union.height, Ordering::Relaxed);
         if let Ok(mut mons) = local_monitors().lock() {
-            *mons = monitors;
+            *mons = monitors.clone();
         }
 
         let local_id = topology
@@ -336,39 +376,94 @@ impl HookController {
             .find(|c| c.is_local)
             .map(|c| c.id.as_str());
 
-        if let Some(link) = local_id.and_then(|id| topology.links.iter().find(|l| l.from_id == id)) {
-            let from_edge = Edge::from_str(&link.from_edge).unwrap_or(Edge::Right);
-            let to_edge = Edge::from_str(&link.to_edge).unwrap_or_else(|| from_edge.opposite());
-            let peer_bounds = topology
-                .computers
-                .iter()
-                .find(|c| c.id == link.to_id)
-                .or_else(|| topology.computers.iter().find(|c| !c.is_local))
-                .map(|c| {
-                    if !c.monitors.is_empty() {
-                        union_rect(&c.monitors)
-                    } else {
-                        c.bounds.clone()
-                    }
-                })
-                .unwrap_or_else(|| ScreenRect {
-                    x: 0,
-                    y: 0,
-                    width: 0,
-                    height: 0,
-                });
+        let link = local_id
+            .and_then(|id| topology.links.iter().find(|l| l.from_id == id))
+            .or_else(|| topology.links.first());
+
+        let peer_node = link
+            .and_then(|l| topology.computers.iter().find(|c| c.id == l.to_id))
+            .or_else(|| topology.computers.iter().find(|c| !c.is_local));
+
+        let linked_monitors: Vec<MonitorDisplay> = peer_node
+            .map(|c| {
+                if !c.monitors.is_empty() {
+                    c.monitors.clone()
+                } else if c.bounds.width > 0 && c.bounds.height > 0 {
+                    vec![MonitorDisplay {
+                        id: "peer-1".into(),
+                        device_name: "peer-1".into(),
+                        x: c.bounds.x,
+                        y: c.bounds.y,
+                        width: c.bounds.width,
+                        height: c.bounds.height,
+                        is_primary: true,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            })
+            .unwrap_or_default();
+
+        let peer_bounds = if !linked_monitors.is_empty() {
+            union_rect(&linked_monitors)
+        } else {
+            peer_node.map(|c| c.bounds.clone()).unwrap_or_else(|| ScreenRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            })
+        };
+
+        let remote_origin = if !linked_monitors.is_empty() {
+            resolve_remote_origin(&topology, &monitors, &linked_monitors, local_id)
+        } else {
+            topology.remote_origin
+        };
+        let seams = match remote_origin {
+            Some(origin) if !linked_monitors.is_empty() => {
+                compute_seams(&monitors, &linked_monitors, origin)
+            }
+            _ => Vec::new(),
+        };
+
+        if let Ok(mut layout) = controller_layout().lock() {
+            layout.main_monitors = monitors;
+            layout.linked_monitors = linked_monitors;
+            layout.remote_origin = remote_origin;
+            layout.seams = seams.clone();
+        }
+
+        if link.is_some() || !seams.is_empty() {
+            let from_edge = link
+                .and_then(|l| Edge::from_str(&l.from_edge))
+                .or_else(|| seams.first().map(|s| s.side))
+                .unwrap_or(Edge::Right);
+            let to_edge = link
+                .and_then(|l| Edge::from_str(&l.to_edge))
+                .unwrap_or_else(|| from_edge.opposite());
             LINK_FROM_EDGE.store(from_edge as u8, Ordering::Relaxed);
             LINK_TO_EDGE.store(to_edge as u8, Ordering::Relaxed);
-            DEADZONE_PX.store(link.deadzone_px.unwrap_or(48), Ordering::Relaxed);
-            RESISTANCE_MS.store(link.resistance_ms.unwrap_or(120) as u64, Ordering::Relaxed);
-            LINK_OFFSET_X.store(link.offset_x.unwrap_or(0), Ordering::Relaxed);
-            LINK_OFFSET_Y.store(link.offset_y.unwrap_or(0), Ordering::Relaxed);
+            DEADZONE_PX.store(link.and_then(|l| l.deadzone_px).unwrap_or(48), Ordering::Relaxed);
+            RESISTANCE_MS.store(
+                link.and_then(|l| l.resistance_ms).unwrap_or(120) as u64,
+                Ordering::Relaxed,
+            );
+            LINK_OFFSET_X.store(link.and_then(|l| l.offset_x).unwrap_or(0), Ordering::Relaxed);
+            LINK_OFFSET_Y.store(link.and_then(|l| l.offset_y).unwrap_or(0), Ordering::Relaxed);
             PEER_UNION_W.store(peer_bounds.width, Ordering::Relaxed);
             PEER_UNION_H.store(peer_bounds.height, Ordering::Relaxed);
-            HAS_ACTIVE_LINK.store(true, Ordering::Release);
+            let active = if remote_origin.is_some() {
+                !seams.is_empty()
+            } else {
+                link.is_some()
+            };
+            HAS_ACTIVE_LINK.store(active, Ordering::Release);
         } else {
             HAS_ACTIVE_LINK.store(false, Ordering::Release);
         }
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
 
         if let Ok(mut g) = packet_sender().lock() {
             *g = Some(packet_tx);
@@ -474,6 +569,8 @@ impl HookController {
             self.emergency_release();
         }
         HAS_ACTIVE_LINK.store(false, Ordering::Release);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
+        PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
         if let Ok(mut g) = leap_blocked_callback_slot().try_lock() {
             *g = None;
         }
@@ -494,6 +591,7 @@ fn disarm_trapped_in_callback() {
     CURSOR_CENTERED.store(false, Ordering::Release);
     ENGAGE_PENDING.store(false, Ordering::Release);
     EDGE_DWELL_START.store(0, Ordering::Relaxed);
+    EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
     MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
 }
 
@@ -659,6 +757,7 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
 
     if MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) != 0 {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         return None;
     }
 
@@ -666,60 +765,126 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     let deadzone = DEADZONE_PX.load(Ordering::Relaxed);
     let resistance_ms = RESISTANCE_MS.load(Ordering::Relaxed);
 
-    let hit = {
-        let Ok(mons) = local_monitors().try_lock() else {
+    struct EdgeLeapCandidate {
+        mx: i32,
+        my: i32,
+        mw: i32,
+        mh: i32,
+        leap_side: Edge,
+        entry_edge: Edge,
+        relative_y: f32,
+        seam_info: Option<(i32, String, i32)>,
+    }
+
+    let hit: Option<EdgeLeapCandidate> = {
+        let Ok(layout) = controller_layout().try_lock() else {
             return None;
         };
-        detect_controller_edge((pt.x, pt.y), &mons, link_edge, deadzone).map(|(idx, _)| {
-            let m = &mons[idx];
-            let clamped = (
-                pt.x.clamp(m.x, m.x + m.width - 1),
-                pt.y.clamp(m.y, m.y + m.height - 1),
-            );
-            let local_union = ScreenRect {
-                x: LOCAL_UNION_X.load(Ordering::Relaxed),
-                y: LOCAL_UNION_Y.load(Ordering::Relaxed),
-                width: LOCAL_UNION_W.load(Ordering::Relaxed),
-                height: LOCAL_UNION_H.load(Ordering::Relaxed),
-            };
-            let peer_union = ScreenRect {
-                x: 0,
-                y: 0,
-                width: PEER_UNION_W.load(Ordering::Relaxed),
-                height: PEER_UNION_H.load(Ordering::Relaxed),
-            };
-            let rel = map_leap_relative_y(
-                clamped,
-                &local_union,
-                &peer_union,
-                link_edge,
-                LINK_OFFSET_X.load(Ordering::Relaxed),
-                LINK_OFFSET_Y.load(Ordering::Relaxed),
-            );
-            (m.x, m.y, m.width, m.height, rel)
-        })
+        if let Some(origin) = layout.remote_origin {
+            detect_controller_edge_seams(
+                (pt.x, pt.y),
+                &layout.main_monitors,
+                &layout.linked_monitors,
+                origin,
+                &layout.seams,
+                deadzone,
+            )
+            .map(|h| {
+                let m = &layout.main_monitors[h.main_monitor_index];
+                EdgeLeapCandidate {
+                    mx: m.x,
+                    my: m.y,
+                    mw: m.width,
+                    mh: m.height,
+                    leap_side: h.seam.side,
+                    entry_edge: h.seam.side.opposite(),
+                    relative_y: h.relative_y,
+                    seam_info: Some((h.seam_index as i32, h.target_monitor, h.along_px)),
+                }
+            })
+        } else {
+            detect_controller_edge((pt.x, pt.y), &layout.main_monitors, link_edge, deadzone).map(
+                |(idx, _)| {
+                    let m = &layout.main_monitors[idx];
+                    let clamped = (
+                        pt.x.clamp(m.x, m.x + m.width - 1),
+                        pt.y.clamp(m.y, m.y + m.height - 1),
+                    );
+                    let local_union = ScreenRect {
+                        x: LOCAL_UNION_X.load(Ordering::Relaxed),
+                        y: LOCAL_UNION_Y.load(Ordering::Relaxed),
+                        width: LOCAL_UNION_W.load(Ordering::Relaxed),
+                        height: LOCAL_UNION_H.load(Ordering::Relaxed),
+                    };
+                    let peer_union = ScreenRect {
+                        x: 0,
+                        y: 0,
+                        width: PEER_UNION_W.load(Ordering::Relaxed),
+                        height: PEER_UNION_H.load(Ordering::Relaxed),
+                    };
+                    let rel = map_leap_relative_y(
+                        clamped,
+                        &local_union,
+                        &peer_union,
+                        link_edge,
+                        LINK_OFFSET_X.load(Ordering::Relaxed),
+                        LINK_OFFSET_Y.load(Ordering::Relaxed),
+                    );
+                    EdgeLeapCandidate {
+                        mx: m.x,
+                        my: m.y,
+                        mw: m.width,
+                        mh: m.height,
+                        leap_side: link_edge,
+                        entry_edge: Edge::from_u8(LINK_TO_EDGE.load(Ordering::Relaxed)),
+                        relative_y: rel,
+                        seam_info: None,
+                    }
+                },
+            )
+        }
     };
 
-    let Some((mx, my, mw, mh, rel)) = hit else {
+    let Some(cand) = hit else {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         return None;
     };
 
-    // Double-check live OS monitor topology on the adjacent pixel beyond the link edge
-    let neighbor = match link_edge {
+    // Double-check live OS monitor topology on the adjacent pixel beyond the leap edge
+    let neighbor = match cand.leap_side {
         // pt may lie past the screen edge; clamp onto the edge monitor first.
-        Edge::Right => POINT { x: mx + mw, y: pt.y.clamp(my, my + mh - 1) },
-        Edge::Left => POINT { x: mx - 1, y: pt.y.clamp(my, my + mh - 1) },
-        Edge::Top => POINT { x: pt.x.clamp(mx, mx + mw - 1), y: my - 1 },
-        Edge::Bottom => POINT { x: pt.x.clamp(mx, mx + mw - 1), y: my + mh },
+        Edge::Right => POINT {
+            x: cand.mx + cand.mw,
+            y: pt.y.clamp(cand.my, cand.my + cand.mh - 1),
+        },
+        Edge::Left => POINT {
+            x: cand.mx - 1,
+            y: pt.y.clamp(cand.my, cand.my + cand.mh - 1),
+        },
+        Edge::Top => POINT {
+            x: pt.x.clamp(cand.mx, cand.mx + cand.mw - 1),
+            y: cand.my - 1,
+        },
+        Edge::Bottom => POINT {
+            x: pt.x.clamp(cand.mx, cand.mx + cand.mw - 1),
+            y: cand.my + cand.mh,
+        },
     };
     if !MonitorFromPoint(neighbor, MONITOR_DEFAULTTONULL).is_invalid() {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         return None;
     }
 
+    let seam_idx = cand.seam_info.as_ref().map(|(i, _, _)| *i).unwrap_or(-1);
+    let prev_seam = EDGE_DWELL_SEAM_IDX.swap(seam_idx, Ordering::Relaxed);
+    if prev_seam != seam_idx {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+    }
+
     if check_dwell_resistance(resistance_ms) {
-        request_engage_leap(mx, my, mw, mh, rel);
+        request_engage_leap(cand.mx, cand.my, cand.mw, cand.mh, cand.leap_side, cand.entry_edge, cand.relative_y, cand.seam_info.map(|(_, t, a)| (t, a)));
         return Some(LRESULT(1));
     }
 
@@ -746,7 +911,17 @@ fn check_dwell_resistance(resistance_ms: u64) -> bool {
 /// Callback-safe leap transition: updates atomics and posts `WM_KVM_ENGAGE` to
 /// the hook thread so Win32 cursor/SendInput work runs outside hook callbacks.
 #[cfg(windows)]
-fn request_engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
+#[allow(clippy::too_many_arguments)]
+fn request_engage_leap(
+    mx: i32,
+    my: i32,
+    mw: i32,
+    mh: i32,
+    leap_side: Edge,
+    entry_edge: Edge,
+    relative_y: f32,
+    seam_target: Option<(String, i32)>,
+) {
     IS_TRAPPED.store(true, Ordering::SeqCst);
     CURSOR_CENTERED.store(false, Ordering::Release);
 
@@ -759,9 +934,23 @@ fn request_engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
     CLAMP_CENTER_X.store(center_x, Ordering::Relaxed);
     CLAMP_CENTER_Y.store(center_y, Ordering::Relaxed);
     PENDING_ENGAGE_REL_Y.store(relative_y.to_bits(), Ordering::Relaxed);
+    PENDING_ENGAGE_LEAP_SIDE.store(leap_side as u8, Ordering::Relaxed);
+    PENDING_ENGAGE_ENTRY_EDGE.store(entry_edge as u8, Ordering::Relaxed);
+    if let Some((target_mon, along_px)) = seam_target {
+        if let Ok(mut guard) = pending_engage_target_mon().try_lock() {
+            *guard = target_mon;
+            PENDING_ENGAGE_ALONG_PX.store(along_px, Ordering::Relaxed);
+            PENDING_ENGAGE_HAS_SEAM.store(true, Ordering::Release);
+        } else {
+            PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
+        }
+    } else {
+        PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
+    }
     ENGAGE_PENDING.store(true, Ordering::Release);
 
     EDGE_DWELL_START.store(0, Ordering::Relaxed);
+    EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
     KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
     KEY_ALT_DOWN.store(false, Ordering::Relaxed);
 
@@ -769,7 +958,7 @@ fn request_engage_leap(mx: i32, my: i32, mw: i32, mh: i32, relative_y: f32) {
         debug_log::record_event(DebugEvent::Engage {
             ts_us: debug_log::now_us(),
             phase: "request",
-            edge: Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed)),
+            edge: leap_side,
             relative_y,
             hwnd: debug_log::foreground_hwnd_raw(),
         });
@@ -1358,7 +1547,7 @@ unsafe fn perform_engage_leap() -> bool {
     if log_enabled {
         debug_log::record_event(DebugEvent::EngagePerform {
             ts_us: debug_log::now_us(),
-            edge: Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed)),
+            edge: Edge::from_u8(PENDING_ENGAGE_LEAP_SIDE.load(Ordering::Relaxed)),
             relative_y,
             hwnd: fg_hwnd,
             tracker_before,
@@ -1367,14 +1556,27 @@ unsafe fn perform_engage_leap() -> bool {
         });
     }
 
-    let to_edge = Edge::from_u8(LINK_TO_EDGE.load(Ordering::Relaxed));
+    let to_edge = Edge::from_u8(PENDING_ENGAGE_ENTRY_EDGE.load(Ordering::Relaxed));
     let dwell_ms = RESISTANCE_MS.load(Ordering::Relaxed) as u32;
     let deadzone_px = DEADZONE_PX.load(Ordering::Relaxed);
+    let (target_monitor, along_px) = if PENDING_ENGAGE_HAS_SEAM.swap(false, Ordering::AcqRel) {
+        let mon = pending_engage_target_mon()
+            .try_lock()
+            .ok()
+            .map(|g| g.clone())
+            .filter(|s| !s.is_empty());
+        let along = mon.as_ref().map(|_| PENDING_ENGAGE_ALONG_PX.load(Ordering::Relaxed));
+        (mon, along)
+    } else {
+        (None, None)
+    };
     try_send_packet(KvmPacket::CursorEnter {
         edge: to_edge.as_str().to_string(),
         relative_y,
         dwell_ms,
         deadzone_px,
+        target_monitor,
+        along_px,
     });
     true
 }
