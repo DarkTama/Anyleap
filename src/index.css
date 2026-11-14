@@ -2,12 +2,53 @@
 
 :root {
   color-scheme: dark;
+  /* Surface (flat Ink hierarchy) */
+  --ink-950: #12141F;
+  --ink-900: #1B1E2E;
+  --ink-800: #2A2D40;
+  --ink-700: #3A3D52;
+  /* Text */
+  --text-strong: #ECEAE3;
+  --text: #C9CBD6;
+  --text-muted: #8B8FA3;
+  /* Accent (Gold used sparingly) */
+  --gold-400: #D8B46A;
+  --gold-600: #A9822F;
+  --mist-300: #B7C9D6;
+  /* Status (non-neon, >= 4.5:1 text contrast) */
+  --status-success: #6DB88B;
+  --status-success-bg: #1B2C28;
+  --status-warning: #E0A858;
+  --status-warning-bg: #2A231D;
+  --status-danger: #E48282;
+  --status-danger-bg: #2B1A22;
+  --status-danger-solid: #B83D3D;
+  /* Motion */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --canvas-bg: #0c0c0e;
-  --surface-card: #141417;
-  --surface-active: #1b1b20;
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-focus: #52525b;
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Subtle neutral elevation shadow (never coloured) */
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.36);
+}
+
+@theme {
+  --color-ink-950: var(--ink-950);
+  --color-ink-900: var(--ink-900);
+  --color-ink-800: var(--ink-800);
+  --color-ink-700: var(--ink-700);
+  --color-text-strong: var(--text-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-gold-400: var(--gold-400);
+  --color-gold-600: var(--gold-600);
+  --color-mist-300: var(--mist-300);
+  --color-status-success: var(--status-success);
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-bg: var(--status-danger-bg);
+  --color-status-danger-solid: var(--status-danger-solid);
 }
 
 html,
@@ -18,27 +59,184 @@ body,
 
 body {
   margin: 0;
-  background-color: var(--canvas-bg);
-  color: #f4f4f5;
+  background-color: var(--ink-950);
+  color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Emil Kowalski Tactile Button Physics */
+/* Keyboard focus ring — sparing Gold accent */
+:focus-visible {
+  outline: 2px solid var(--gold-400);
+  outline-offset: 2px;
+}
+
+/* Neutral elevation shadow (flat surfaces, no coloured glow) */
+.shadow-elevated {
+  box-shadow: var(--shadow-elevated);
+}
+
+/* Tactile pressable feedback: 160ms custom ease-out, subtle scale(0.97) */
 .btn-tactile {
-  transition: transform 140ms var(--ease-out), background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
   user-select: none;
 }
 
-.btn-tactile:active {
+.btn-tactile:active:not(:disabled) {
   transform: scale(0.97);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .btn-tactile {
-    transition: none;
+/* Modal & drawer overlays (<= 400ms; exit faster than enter) */
+.modal-backdrop {
+  opacity: 1;
+  transition: opacity 200ms var(--ease-out);
+}
+
+@starting-style {
+  .modal-backdrop {
+    opacity: 0;
   }
-  .btn-tactile:active {
+}
+
+.modal-backdrop[data-state="closing"] {
+  opacity: 0;
+  transition-duration: 140ms;
+}
+
+.modal-panel {
+  transform-origin: center;
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    transform 220ms var(--ease-out),
+    opacity 200ms var(--ease-out);
+}
+
+@starting-style {
+  .modal-panel {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+.modal-panel[data-state="closing"] {
+  opacity: 0;
+  transform: scale(0.96);
+  transition-duration: 140ms;
+}
+
+.drawer-panel {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    transform 240ms var(--ease-drawer),
+    opacity 200ms var(--ease-out);
+}
+
+@starting-style {
+  .drawer-panel {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+.drawer-panel[data-state="closing"] {
+  opacity: 0;
+  transform: translateX(20px);
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+
+/* Origin-aware popovers & inline action trays (never scale from 0) */
+.popover-panel {
+  transform-origin: var(--transform-origin, top left);
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    transform 160ms var(--ease-out),
+    opacity 140ms var(--ease-out);
+}
+
+@starting-style {
+  .popover-panel {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+/* Transient HUD pill fade */
+.hud-pill {
+  opacity: 1;
+  transition: opacity 150ms var(--ease-out);
+}
+
+@starting-style {
+  .hud-pill {
+    opacity: 0;
+  }
+}
+
+/* Pointer-fine gated hover interactions */
+.hover-reveal {
+  opacity: 0.7;
+  transition: opacity 150ms ease, color 150ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .hover-reveal {
+    opacity: 0;
+  }
+  .group:hover .hover-reveal,
+  .hover-reveal:focus-visible {
+    opacity: 1;
+  }
+
+  .photo-tile-img {
+    transition: transform 160ms var(--ease-out);
+  }
+  .group:hover .photo-tile-img {
+    transform: scale(1.04);
+  }
+}
+
+/* Honour reduced motion: keep opacity comprehension, drop movement */
+@media (prefers-reduced-motion: reduce) {
+  .btn-tactile,
+  .modal-backdrop,
+  .modal-panel,
+  .drawer-panel,
+  .popover-panel,
+  .hud-pill,
+  .photo-tile-img {
+    transition-property: opacity, background-color, border-color, color;
+    transition-duration: 120ms;
+  }
+
+  .btn-tactile:active:not(:disabled) {
+    transform: none;
+  }
+
+  .modal-panel,
+  .drawer-panel,
+  .popover-panel {
+    transform: none;
+  }
+
+  @starting-style {
+    .modal-panel,
+    .drawer-panel,
+    .popover-panel {
+      transform: none;
+    }
+  }
+
+  .modal-panel[data-state="closing"],
+  .drawer-panel[data-state="closing"] {
     transform: none;
   }
 }

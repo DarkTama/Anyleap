@@ -27,9 +27,9 @@ import type { DeviceInfo } from "@/lib/types";
 import { saveNickname } from "@/lib/settingsStore";
 
 const STATUS_STYLE: Record<DeviceStatus, string> = {
-  offline: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  connected: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-  mirroring: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+  offline: "bg-ink-800 text-text-muted border border-ink-700",
+  connected: "bg-status-success-bg text-status-success border border-status-success/40",
+  mirroring: "bg-ink-800 text-gold-400 border border-gold-400/50",
 };
 const STATUS_LABEL: Record<DeviceStatus, string> = {
   offline: "Offline",
@@ -40,7 +40,7 @@ const STATUS_LABEL: Record<DeviceStatus, string> = {
 function StatusBadge({ status, mode }: { status: DeviceStatus; mode?: string }) {
   if (status === "mirroring" && mode === "camera") {
     return (
-      <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+      <Badge className="bg-status-success-bg text-status-success border border-status-success/40">
         Camera Stream
       </Badge>
     );
@@ -128,13 +128,13 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   }
 
   return (
-    <div className="rounded-md border border-zinc-100 dark:border-zinc-800/60">
+    <div className="rounded-md border border-ink-700 bg-ink-900">
       <div className="flex items-center justify-between px-3 py-2 text-sm">
         <span className="flex items-center gap-2">
           {wireless ? (
-            <Wifi className="h-4 w-4 text-sky-500" />
+            <Wifi className="h-4 w-4 text-mist-300" />
           ) : (
-            <Usb className="h-4 w-4 text-zinc-400" />
+            <Usb className="h-4 w-4 text-text-muted" />
           )}
           {editing ? (
             <span className="flex items-center gap-1">
@@ -143,7 +143,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 placeholder={device.model ?? "Device name"}
-                className="h-6 w-28 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                className="h-6 w-28 rounded border border-ink-700 bg-ink-800 px-1.5 text-xs text-text-strong focus:outline-none focus:border-gold-400"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleSaveNickname();
                   if (e.key === "Escape") setEditing(false);
@@ -151,22 +151,22 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
                 autoFocus
               />
               <Button size="icon" variant="ghost" className="h-5 w-5" onClick={handleSaveNickname} title="Save">
-                <Check className="h-3 w-3 text-green-500" />
+                <Check className="h-3 w-3 text-status-success" />
               </Button>
               <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => setEditing(false)} title="Cancel">
-                <X className="h-3 w-3 text-zinc-400" />
+                <X className="h-3 w-3 text-text-muted" />
               </Button>
             </span>
           ) : (
             <span className="flex items-center gap-1.5">
-              <span>{nickname ? nickname : (device.model ?? "—")}</span>
+              <span className="text-text-strong">{nickname ? nickname : (device.model ?? "—")}</span>
               {nickname && (
-                <span className="text-xs text-zinc-400 font-normal">({device.model ?? "—"})</span>
+                <span className="text-xs text-text-muted font-normal">({device.model ?? "—"})</span>
               )}
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-5 w-5 p-0 text-zinc-400 hover:text-zinc-200"
+                className="h-5 w-5 p-0 text-text-muted hover:text-text-strong"
                 onClick={() => {
                   setEditName(nickname ?? "");
                   setEditing(true);
@@ -177,7 +177,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
               </Button>
             </span>
           )}
-          <span className="font-mono text-xs text-zinc-500">{device.serial}</span>
+          <span className="font-mono text-xs text-text-muted">{device.serial}</span>
           {status === "offline" ? (
             <DeviceStateBadge state={device.state} />
           ) : (
@@ -360,10 +360,10 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   }
 
   return (
-    <div className="rounded-md border border-zinc-100 dark:border-zinc-800/60">
+    <div className="rounded-md border border-ink-700 bg-ink-900">
       <div className="flex items-center justify-between px-3 py-2 text-sm">
         <span className="flex items-center gap-2">
-          <Wifi className="h-4 w-4 text-sky-500" />
+          <Wifi className="h-4 w-4 text-mist-300" />
           {editing ? (
             <span className="flex items-center gap-1">
               <input
@@ -371,7 +371,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 placeholder={saved.label}
-                className="h-6 w-28 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                className="h-6 w-28 rounded border border-ink-700 bg-ink-800 px-1.5 text-xs text-text-strong focus:outline-none focus:border-gold-400"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleSaveNickname();
                   if (e.key === "Escape") setEditing(false);
@@ -379,22 +379,22 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
                 autoFocus
               />
               <Button size="icon" variant="ghost" className="h-5 w-5" onClick={handleSaveNickname} title="Save">
-                <Check className="h-3 w-3 text-green-500" />
+                <Check className="h-3 w-3 text-status-success" />
               </Button>
               <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => setEditing(false)} title="Cancel">
-                <X className="h-3 w-3 text-zinc-400" />
+                <X className="h-3 w-3 text-text-muted" />
               </Button>
             </span>
           ) : (
             <span className="flex items-center gap-1.5">
-              <span>{nickname ? nickname : saved.label}</span>
+              <span className="text-text-strong">{nickname ? nickname : saved.label}</span>
               {nickname && (
-                <span className="text-xs text-zinc-400 font-normal">({saved.label})</span>
+                <span className="text-xs text-text-muted font-normal">({saved.label})</span>
               )}
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-5 w-5 p-0 text-zinc-400 hover:text-zinc-200"
+                className="h-5 w-5 p-0 text-text-muted hover:text-text-strong"
                 onClick={() => {
                   setEditName(nickname ?? "");
                   setEditing(true);
@@ -405,7 +405,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
               </Button>
             </span>
           )}
-          <span className="font-mono text-xs text-zinc-500">
+          <span className="font-mono text-xs text-text-muted">
             {serial ?? `${saved.host}:${saved.port}`}
           </span>
           <StatusBadge status={status} mode={session?.mode} />

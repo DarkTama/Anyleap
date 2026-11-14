@@ -40,10 +40,10 @@ export function PhoneView({
 
   if (!activeSerial) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center bg-[#0c0c0e] p-8 text-center">
-        <Smartphone className="mb-3 h-10 w-10 text-zinc-700" />
-        <p className="text-sm font-medium text-zinc-300">No phone connected</p>
-        <p className="mt-1 text-xs text-zinc-500">
+      <div className="flex flex-1 flex-col items-center justify-center bg-ink-950 p-8 text-center">
+        <Smartphone className="mb-3 h-10 w-10 text-ink-700" />
+        <p className="text-sm font-medium text-text-strong">No phone connected</p>
+        <p className="mt-1 text-xs text-text-muted">
           Connect an Android device via USB or wireless ADB to browse files, photos, and notifications.
         </p>
       </div>
@@ -51,17 +51,17 @@ export function PhoneView({
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-[#0c0c0e]">
+    <div className="flex flex-1 flex-col overflow-hidden bg-ink-950">
       {/* Sub-navigation & device selector */}
-      <div className="flex items-center justify-between border-b border-[#222226] bg-[#101013] px-4 py-2">
-        <div className="flex items-center gap-1 rounded-lg border border-[#222226] bg-[#141417] p-0.5">
+      <div className="flex items-center justify-between border-b border-ink-700 bg-ink-900 px-4 py-2">
+        <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-950 p-0.5">
           <button
             type="button"
             onClick={() => onSubTabChange("files")}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
+            className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
               subTab === "files"
-                ? "bg-[#222228] text-zinc-100 shadow-sm"
-                : "text-zinc-400 hover:text-zinc-200"
+                ? "bg-ink-800 text-gold-400"
+                : "text-text-muted hover:text-text-strong"
             }`}
           >
             <FolderOpen className="h-3.5 w-3.5" />
@@ -70,10 +70,10 @@ export function PhoneView({
           <button
             type="button"
             onClick={() => onSubTabChange("photos")}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
+            className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
               subTab === "photos"
-                ? "bg-[#222228] text-zinc-100 shadow-sm"
-                : "text-zinc-400 hover:text-zinc-200"
+                ? "bg-ink-800 text-gold-400"
+                : "text-text-muted hover:text-text-strong"
             }`}
           >
             <ImageIcon className="h-3.5 w-3.5" />
@@ -82,10 +82,10 @@ export function PhoneView({
           <button
             type="button"
             onClick={() => onSubTabChange("notifications")}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
+            className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
               subTab === "notifications"
-                ? "bg-[#222228] text-zinc-100 shadow-sm"
-                : "text-zinc-400 hover:text-zinc-200"
+                ? "bg-ink-800 text-gold-400"
+                : "text-text-muted hover:text-text-strong"
             }`}
           >
             <Bell className="h-3.5 w-3.5" />
@@ -94,7 +94,7 @@ export function PhoneView({
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-zinc-500">Device</span>
+          <span className="text-[11px] text-text-muted">Device</span>
           <select
             className={`${selectClass} !w-auto min-w-[180px] !py-1 text-xs`}
             value={activeSerial}

@@ -298,26 +298,26 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   };
 
   return (
-    <div className="flex h-full w-72 shrink-0 flex-col border-r border-[#222226] bg-[#0e0e11] select-none">
+    <div className="flex h-full w-72 shrink-0 flex-col border-r border-ink-700 bg-ink-900 select-none">
       {/* Rack Title Header */}
-      <div className="flex items-center justify-between border-b border-[#222226] px-4 py-3 bg-[#0e0e11]">
+      <div className="flex items-center justify-between border-b border-ink-700 px-4 py-3 bg-ink-900">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Device Rack
           </span>
-          <span className="rounded bg-[#1a1a20] px-1.5 py-0.5 text-[9px] font-mono text-zinc-400 border border-[#27272a]">
+          <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[9px] font-mono text-text-muted border border-ink-700">
             {devices.length + savedRows.filter((r) => !r.device).length}
           </span>
         </div>
-        <span className="font-mono text-[10px] text-zinc-500">USB / WI-FI</span>
+        <span className="font-mono text-[10px] text-text-muted">USB / WI-FI</span>
       </div>
 
       {/* Device Rack Items Scroll */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
         {savedRows.length === 0 && otherDevices.length === 0 && (
-          <div className="rounded-xl border border-dashed border-[#222226] p-5 text-center">
-            <p className="text-xs text-zinc-300 font-medium">No devices detected</p>
-            <p className="mt-1 text-[11px] text-zinc-500 leading-relaxed">
+          <div className="rounded-xl border border-dashed border-ink-700 p-5 text-center">
+            <p className="text-xs text-text font-medium">No devices detected</p>
+            <p className="mt-1 text-[11px] text-text-muted leading-relaxed">
               Connect via USB with USB Debugging enabled, or click Pair Device.
             </p>
           </div>
@@ -339,8 +339,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
               onClick={() => onSelectDevice(dev.serial)}
               className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
                 isSelected
-                  ? "border-[#52525b] bg-[#1a1a20] shadow-sm"
-                  : "border-[#222226] bg-[#131316] text-zinc-400 hover:border-zinc-700 hover:bg-[#16161a]"
+                  ? "border-gold-400 bg-ink-800"
+                  : "border-ink-700 bg-ink-950/60 text-text-muted hover:border-text-muted hover:bg-ink-800/60"
               }`}
             >
               {/* Header: Status Beacon & Hardware Identity */}
@@ -349,14 +349,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   <div
                     className={`h-2 w-2 rounded-full shrink-0 ${
                       status === "mirroring"
-                        ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse"
+                        ? "bg-gold-400"
                         : status === "connected"
-                        ? "bg-emerald-500"
-                        : "bg-rose-500"
+                        ? "bg-status-success"
+                        : "bg-status-danger"
                     }`}
                   />
                   <div className="min-w-0">
-                    <span className="font-semibold text-xs text-zinc-100 truncate block">
+                    <span className="font-semibold text-xs text-text-strong truncate block">
                       {dev.model || dev.product || dev.serial}
                     </span>
 
@@ -368,7 +368,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       >
                         <input
                           type="text"
-                          className="h-6 rounded bg-[#18181c] px-1.5 text-xs text-zinc-200 border border-zinc-500 outline-none w-28"
+                          className="h-6 rounded bg-ink-800 px-1.5 text-xs text-text-strong border border-gold-400 outline-none w-28"
                           value={editingName}
                           autoFocus
                           onChange={(e) => setEditingName(e.target.value)}
@@ -380,21 +380,21 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                         <button
                           type="button"
                           onClick={() => handleSaveNickname(dev.serial)}
-                          className="text-zinc-200 hover:text-white p-0.5"
+                          className="btn-tactile text-gold-400 hover:text-text-strong p-0.5"
                         >
                           <Check className="h-3 w-3" />
                         </button>
                         <button
                           type="button"
                           onClick={() => setEditingSerial(null)}
-                          className="text-zinc-500 hover:text-zinc-400 p-0.5"
+                          className="btn-tactile text-text-muted hover:text-text p-0.5"
                         >
                           <X className="h-3 w-3" />
                         </button>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1 mt-0.5">
-                        <span className="text-[11px] text-zinc-400 truncate">
+                        <span className="text-[11px] text-text-muted truncate">
                           {nickname ? `"${nickname}"` : dev.serial}
                         </span>
                         <button
@@ -403,7 +403,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                             e.stopPropagation();
                             handleStartNicknameEdit(dev.serial, nickname || "");
                           }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-zinc-300"
+                          className="hover-reveal text-text-muted hover:text-text-strong"
                         >
                           <Pencil className="h-2.5 w-2.5" />
                         </button>
@@ -413,15 +413,15 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 </div>
 
                 {/* Transport Badge */}
-                <div className="flex items-center gap-1 rounded bg-[#18181c] px-1.5 py-0.5 border border-[#27272a] text-[10px] font-mono text-zinc-400 shrink-0">
+                <div className="flex items-center gap-1 rounded bg-ink-800 px-1.5 py-0.5 border border-ink-700 text-[10px] font-mono text-text shrink-0">
                   {wireless ? (
                     <>
-                      <Wifi className="h-3 w-3 text-zinc-300" />
+                      <Wifi className="h-3 w-3 text-mist-300" />
                       <span>Wi-Fi</span>
                     </>
                   ) : (
                     <>
-                      <Usb className="h-3 w-3 text-zinc-400" />
+                      <Usb className="h-3 w-3 text-text-muted" />
                       <span>USB</span>
                     </>
                   )}
@@ -429,14 +429,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
               </div>
 
               {/* Hardware Telemetry Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-[#222226] pt-2 text-[10px] text-zinc-400 font-mono">
+              <div className="mt-2.5 flex items-center justify-between border-t border-ink-700 pt-2 text-[10px] text-text-muted font-mono">
                 <span className="truncate max-w-[120px]">{dev.serial}</span>
                 {batt?.level !== null && batt?.level !== undefined && (
-                  <div className="flex items-center gap-1 text-zinc-300">
+                  <div className="flex items-center gap-1 text-text">
                     {batt.charging ? (
-                      <BatteryCharging className="h-3 w-3 text-emerald-400" />
+                      <BatteryCharging className="h-3 w-3 text-status-success" />
                     ) : (
-                      <Battery className="h-3 w-3 text-zinc-400" />
+                      <Battery className="h-3 w-3 text-text-muted" />
                     )}
                     <span>{batt.level}%</span>
                   </div>
@@ -453,9 +453,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleStop(session.id, dev.serial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-rose-500/15 py-1 text-[11px] font-medium text-rose-300 border border-rose-500/30 hover:bg-rose-500/25"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-status-danger-bg py-1 text-[11px] font-medium text-status-danger border border-status-danger/40 hover:opacity-90"
                   >
-                    <Square className="h-3 w-3 fill-rose-300" />
+                    <Square className="h-3 w-3 fill-current" />
                     Stop
                   </button>
                 ) : (
@@ -463,9 +463,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleMirror(dev.serial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-[#222228] py-1 text-[11px] font-medium text-zinc-200 border border-[#2e2e36] hover:bg-[#282830]"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
                   >
-                    <Play className="h-3 w-3 fill-zinc-300" />
+                    <Play className="h-3 w-3 fill-current" />
                     Launch
                   </button>
                 )}
@@ -474,7 +474,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   <button
                     type="button"
                     onClick={() => openDoctor(dev.serial)}
-                    className="btn-tactile rounded-md bg-amber-500/15 p-1 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
+                    className="btn-tactile rounded-md bg-status-warning-bg p-1 text-status-warning border border-status-warning/40 hover:opacity-90"
                     title="Run Connection Doctor"
                   >
                     <Stethoscope className="h-3.5 w-3.5" />
@@ -486,7 +486,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleDisconnect(dev.serial)}
-                    className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-400 border border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                    className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-text-strong hover:border-text-muted"
                     title="Disconnect wireless"
                   >
                     <Unplug className="h-3.5 w-3.5" />
@@ -498,8 +498,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   onClick={() => void openQuickInput(dev.serial, "url")}
                   className={`btn-tactile rounded-md p-1 border ${
                     quickAction?.serial === dev.serial && quickAction.kind === "url"
-                      ? "bg-[#282830] text-zinc-100 border-zinc-500"
-                      : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                      ? "bg-ink-800 text-gold-400 border-gold-400"
+                      : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
                   }`}
                   title="Open link on phone"
                 >
@@ -511,8 +511,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   onClick={() => void openQuickInput(dev.serial, "call")}
                   className={`btn-tactile rounded-md p-1 border ${
                     quickAction?.serial === dev.serial && quickAction.kind === "call"
-                      ? "bg-[#282830] text-zinc-100 border-zinc-500"
-                      : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                      ? "bg-ink-800 text-gold-400 border-gold-400"
+                      : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
                   }`}
                   title="Call…"
                 >
@@ -521,7 +521,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
               </div>
               {quickAction?.serial === dev.serial && (
                 <div
-                  className="mt-2 flex items-center gap-1"
+                  className="popover-panel mt-2 flex items-center gap-1"
+                  style={{ "--transform-origin": "top right" } as React.CSSProperties}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <input
@@ -534,13 +535,13 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       if (e.key === "Escape") setQuickAction(null);
                     }}
                     placeholder={quickAction.kind === "url" ? "https://…" : "+1 555 123 4567"}
-                    className="h-7 min-w-0 flex-1 rounded-md border border-[#2e2e36] bg-[#18181c] px-2 text-[11px] text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-500 focus:outline-none"
+                    className="h-7 min-w-0 flex-1 rounded-md border border-ink-700 bg-ink-800 px-2 text-[11px] text-text-strong placeholder:text-text-muted focus:border-gold-400 focus:outline-none"
                   />
                   <button
                     type="button"
                     disabled={isBusy || !quickInput.trim()}
                     onClick={() => void submitQuickInput(dev.serial)}
-                    className="btn-tactile rounded-md border border-[#2e2e36] bg-[#222228] p-1.5 text-zinc-200 hover:bg-[#282830] disabled:opacity-40"
+                    className="btn-tactile rounded-md border border-gold-400 bg-gold-400 p-1.5 text-ink-950 hover:bg-gold-600 disabled:opacity-40"
                     title={quickAction.kind === "url" ? "Open on phone" : "Place call"}
                   >
                     <Send className="h-3 w-3" />
@@ -548,7 +549,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 </div>
               )}
               {quickNote?.serial === dev.serial && (
-                <div className="mt-1.5 text-[10px] text-amber-300">
+                <div className="mt-1.5 text-[10px] text-status-warning">
                   {quickNote.text}
                 </div>
               )}
@@ -574,10 +575,10 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
               onClick={() => onSelectDevice(targetSerial)}
               className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
                 isSelected
-                  ? "border-[#52525b] bg-[#1a1a20] shadow-sm"
+                  ? "border-gold-400 bg-ink-800"
                   : status === "offline"
-                  ? "border-[#222226]/60 bg-[#111114]/50 opacity-70 hover:opacity-100 hover:border-zinc-700"
-                  : "border-[#222226] bg-[#131316] text-zinc-400 hover:border-zinc-700 hover:bg-[#16161a]"
+                  ? "border-ink-700/60 bg-ink-950/40 opacity-75 hover:opacity-100 hover:border-text-muted"
+                  : "border-ink-700 bg-ink-950/60 text-text-muted hover:border-text-muted hover:bg-ink-800/60"
               }`}
             >
               {/* Header */}
@@ -586,14 +587,14 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   <div
                     className={`h-2 w-2 rounded-full shrink-0 ${
                       status === "mirroring"
-                        ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse"
+                        ? "bg-gold-400"
                         : status === "connected"
-                        ? "bg-emerald-500"
-                        : "bg-zinc-600"
+                        ? "bg-status-success"
+                        : "bg-text-muted"
                     }`}
                   />
                   <div className="min-w-0">
-                    <span className="font-semibold text-xs text-zinc-100 truncate block">
+                    <span className="font-semibold text-xs text-text-strong truncate block">
                       {saved.label || targetSerial}
                     </span>
 
@@ -605,7 +606,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       >
                         <input
                           type="text"
-                          className="h-6 rounded bg-[#18181c] px-1.5 text-xs text-zinc-200 border border-zinc-500 outline-none w-28"
+                          className="h-6 rounded bg-ink-800 px-1.5 text-xs text-text-strong border border-gold-400 outline-none w-28"
                           value={editingName}
                           autoFocus
                           onChange={(e) => setEditingName(e.target.value)}
@@ -617,21 +618,21 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                         <button
                           type="button"
                           onClick={() => handleSaveNickname(nicknameKey, serial)}
-                          className="text-zinc-200 hover:text-white p-0.5"
+                          className="btn-tactile text-gold-400 hover:text-text-strong p-0.5"
                         >
                           <Check className="h-3 w-3" />
                         </button>
                         <button
                           type="button"
                           onClick={() => setEditingSerial(null)}
-                          className="text-zinc-500 hover:text-zinc-400 p-0.5"
+                          className="btn-tactile text-text-muted hover:text-text p-0.5"
                         >
                           <X className="h-3 w-3" />
                         </button>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1 mt-0.5">
-                        <span className="text-[11px] text-zinc-400 truncate">
+                        <span className="text-[11px] text-text-muted truncate">
                           {nickname ? `"${nickname}"` : targetSerial}
                         </span>
                         <button
@@ -640,7 +641,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                             e.stopPropagation();
                             handleStartNicknameEdit(targetSerial, nickname || "");
                           }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-zinc-300"
+                          className="hover-reveal text-text-muted hover:text-text-strong"
                         >
                           <Pencil className="h-2.5 w-2.5" />
                         </button>
@@ -650,23 +651,23 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 </div>
 
                 {/* Wireless Badge */}
-                <div className="flex items-center gap-1 rounded bg-[#18181c] px-1.5 py-0.5 border border-[#27272a] text-[10px] font-mono text-zinc-400 shrink-0">
-                  <Wifi className="h-3 w-3 text-zinc-300" />
+                <div className="flex items-center gap-1 rounded bg-ink-800 px-1.5 py-0.5 border border-ink-700 text-[10px] font-mono text-text shrink-0">
+                  <Wifi className="h-3 w-3 text-mist-300" />
                   <span>Wi-Fi</span>
                 </div>
               </div>
 
               {/* Hardware Telemetry Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-[#222226] pt-2 text-[10px] text-zinc-400 font-mono">
+              <div className="mt-2.5 flex items-center justify-between border-t border-ink-700 pt-2 text-[10px] text-text-muted font-mono">
                 <span className="truncate max-w-[120px]">
                   {status === "offline" ? "Saved Device" : serial}
                 </span>
                 {batt?.level !== null && batt?.level !== undefined && (
-                  <div className="flex items-center gap-1 text-zinc-300">
+                  <div className="flex items-center gap-1 text-text">
                     {batt.charging ? (
-                      <BatteryCharging className="h-3 w-3 text-emerald-400" />
+                      <BatteryCharging className="h-3 w-3 text-status-success" />
                     ) : (
-                      <Battery className="h-3 w-3 text-zinc-400" />
+                      <Battery className="h-3 w-3 text-text-muted" />
                     )}
                     <span>{batt.level}%</span>
                   </div>
@@ -683,7 +684,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleConnect(saved)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-[#18181c] py-1 text-[11px] font-medium text-zinc-200 border border-[#27272a] hover:bg-[#202026]"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
                   >
                     <RefreshCw className={`h-3 w-3 ${isBusy ? "animate-spin" : ""}`} />
                     Connect
@@ -693,9 +694,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => handleStop(session.id, targetSerial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-rose-500/15 py-1 text-[11px] font-medium text-rose-300 border border-rose-500/30 hover:bg-rose-500/25"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-status-danger-bg py-1 text-[11px] font-medium text-status-danger border border-status-danger/40 hover:opacity-90"
                   >
-                    <Square className="h-3 w-3 fill-rose-300" />
+                    <Square className="h-3 w-3 fill-current" />
                     Stop
                   </button>
                 ) : (
@@ -703,9 +704,9 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                     type="button"
                     disabled={isBusy}
                     onClick={() => serial && handleMirror(serial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-[#222228] py-1 text-[11px] font-medium text-zinc-200 border border-[#2e2e36] hover:bg-[#282830]"
+                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
                   >
-                    <Play className="h-3 w-3 fill-zinc-300" />
+                    <Play className="h-3 w-3 fill-current" />
                     Launch
                   </button>
                 )}
@@ -714,7 +715,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   <button
                     type="button"
                     onClick={() => openDoctor(targetSerial)}
-                    className="btn-tactile rounded-md bg-amber-500/15 p-1 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
+                    className="btn-tactile rounded-md bg-status-warning-bg p-1 text-status-warning border border-status-warning/40 hover:opacity-90"
                     title="Run Connection Doctor"
                   >
                     <Stethoscope className="h-3.5 w-3.5" />
@@ -727,7 +728,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       type="button"
                       disabled={isBusy}
                       onClick={() => handleDisconnect(serial)}
-                      className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-400 border border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                      className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-text-strong hover:border-text-muted"
                       title="Disconnect wireless"
                     >
                       <Unplug className="h-3.5 w-3.5" />
@@ -738,8 +739,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       onClick={() => void openQuickInput(serial, "url")}
                       className={`btn-tactile rounded-md p-1 border ${
                         quickAction?.serial === serial && quickAction.kind === "url"
-                          ? "bg-[#282830] text-zinc-100 border-zinc-500"
-                          : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                          ? "bg-ink-800 text-gold-400 border-gold-400"
+                          : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
                       }`}
                       title="Open link on phone"
                     >
@@ -751,8 +752,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       onClick={() => void openQuickInput(serial, "call")}
                       className={`btn-tactile rounded-md p-1 border ${
                         quickAction?.serial === serial && quickAction.kind === "call"
-                          ? "bg-[#282830] text-zinc-100 border-zinc-500"
-                          : "bg-[#18181c] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:bg-[#202026]"
+                          ? "bg-ink-800 text-gold-400 border-gold-400"
+                          : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
                       }`}
                       title="Call…"
                     >
@@ -765,7 +766,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   type="button"
                   disabled={isBusy}
                   onClick={() => handleForget(saved.id)}
-                  className="btn-tactile rounded-md bg-[#18181c] p-1 text-zinc-500 border border-[#27272a] hover:text-rose-400 hover:bg-[#202026]"
+                  className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-status-danger hover:border-status-danger/40"
                   title="Forget device"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -773,7 +774,8 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
               </div>
               {serial && quickAction?.serial === serial && (
                 <div
-                  className="mt-2 flex items-center gap-1"
+                  className="popover-panel mt-2 flex items-center gap-1"
+                  style={{ "--transform-origin": "top right" } as React.CSSProperties}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <input
@@ -786,13 +788,13 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                       if (e.key === "Escape") setQuickAction(null);
                     }}
                     placeholder={quickAction.kind === "url" ? "https://…" : "+1 555 123 4567"}
-                    className="h-7 min-w-0 flex-1 rounded-md border border-[#2e2e36] bg-[#18181c] px-2 text-[11px] text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-500 focus:outline-none"
+                    className="h-7 min-w-0 flex-1 rounded-md border border-ink-700 bg-ink-800 px-2 text-[11px] text-text-strong placeholder:text-text-muted focus:border-gold-400 focus:outline-none"
                   />
                   <button
                     type="button"
                     disabled={isBusy || !quickInput.trim()}
                     onClick={() => void submitQuickInput(serial)}
-                    className="btn-tactile rounded-md border border-[#2e2e36] bg-[#222228] p-1.5 text-zinc-200 hover:bg-[#282830] disabled:opacity-40"
+                    className="btn-tactile rounded-md border border-gold-400 bg-gold-400 p-1.5 text-ink-950 hover:bg-gold-600 disabled:opacity-40"
                     title={quickAction.kind === "url" ? "Open on phone" : "Place call"}
                   >
                     <Send className="h-3 w-3" />
@@ -800,7 +802,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                 </div>
               )}
               {serial && quickNote?.serial === serial && (
-                <div className="mt-1.5 text-[10px] text-amber-300">
+                <div className="mt-1.5 text-[10px] text-status-warning">
                   {quickNote.text}
                 </div>
               )}

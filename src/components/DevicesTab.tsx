@@ -41,7 +41,7 @@ export function DevicesTab() {
       <CardContent className="space-y-4">
         {savedRows.length > 0 && (
           <section className="space-y-2">
-            <h4 className="text-xs font-medium text-zinc-500">Saved</h4>
+            <h4 className="text-xs font-medium text-text-muted">Saved</h4>
             {savedRows.map((r) => (
               <SavedDeviceRow key={r.saved.id} row={r} />
             ))}
@@ -49,9 +49,9 @@ export function DevicesTab() {
         )}
 
         <section className="space-y-2">
-          <h4 className="text-xs font-medium text-zinc-500">Other devices</h4>
+          <h4 className="text-xs font-medium text-text-muted">Other devices</h4>
           {otherDevices.length === 0 ? (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-text-muted">
               No other devices. Plug in a phone with USB debugging enabled, or add a
               wireless device.
             </p>

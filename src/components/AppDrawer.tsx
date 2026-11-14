@@ -99,19 +99,19 @@ export function AppDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs select-none"
+      className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4 select-none"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex h-[480px] w-full max-w-md flex-col rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-100 shadow-2xl">
+      <div className="modal-panel flex h-[480px] w-full max-w-md flex-col rounded-xl border border-ink-700 bg-ink-900 text-text shadow-elevated">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-ink-700 px-4 py-3">
           <div className="flex items-center gap-2">
-            <Rocket className="h-4 w-4 text-sky-400" />
-            <h2 className="text-sm font-semibold">Installed Apps</h2>
+            <Rocket className="h-4 w-4 text-gold-400" />
+            <h2 className="text-sm font-semibold text-text-strong">Installed Apps</h2>
             {!loading && (
-              <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
+              <span className="rounded-full bg-ink-800 border border-ink-700 px-2 py-0.5 text-[10px] text-text-muted">
                 {apps.length}
               </span>
             )}
@@ -120,7 +120,7 @@ export function AppDrawer({
             <Button
               size="icon"
               variant="ghost"
-              className="h-7 w-7 text-zinc-400 hover:text-zinc-200"
+              className="h-7 w-7 text-text-muted hover:text-text-strong"
               onClick={fetchApps}
               disabled={loading}
               title="Refresh app list"
@@ -130,7 +130,7 @@ export function AppDrawer({
             <Button
               size="icon"
               variant="ghost"
-              className="h-7 w-7 text-zinc-400 hover:text-zinc-200"
+              className="h-7 w-7 text-text-muted hover:text-text-strong"
               onClick={onClose}
               title="Close"
             >
@@ -140,21 +140,21 @@ export function AppDrawer({
         </div>
 
         {/* Search */}
-        <div className="border-b border-zinc-800/80 px-3 py-2">
+        <div className="border-b border-ink-700 px-3 py-2">
           <div className="relative flex items-center">
-            <Search className="absolute left-2.5 h-3.5 w-3.5 text-zinc-500" />
+            <Search className="absolute left-2.5 h-3.5 w-3.5 text-text-muted" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search apps..."
-              className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 pl-8 pr-8 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-sky-500 focus:outline-none"
+              className="h-8 w-full rounded-md border border-ink-700 bg-ink-950 pl-8 pr-8 text-xs text-text-strong placeholder:text-text-muted focus:border-gold-400 focus:outline-none"
               autoFocus
             />
             {search && (
               <button
                 onClick={() => setSearch("")}
-                className="absolute right-2.5 text-zinc-500 hover:text-zinc-300"
+                className="btn-tactile absolute right-2.5 text-text-muted hover:text-text-strong"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -164,7 +164,7 @@ export function AppDrawer({
 
         {/* Error message */}
         {error && (
-          <div className="border-b border-red-900/50 bg-red-950/40 px-3 py-1.5 text-xs text-red-300">
+          <div className="border-b border-status-danger/40 bg-status-danger-bg px-3 py-1.5 text-xs text-status-danger">
             {error}
           </div>
         )}
@@ -172,16 +172,16 @@ export function AppDrawer({
         {/* List Content */}
         <div className="flex-1 overflow-y-auto p-2">
           {loading ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-zinc-500">
-              <Loader2 className="h-5 w-5 animate-spin text-sky-500" />
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-text-muted">
+              <Loader2 className="h-5 w-5 animate-spin text-gold-400" />
               <span>Loading packages...</span>
             </div>
           ) : apps.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center text-xs text-zinc-500">
+            <div className="flex h-full flex-col items-center justify-center text-xs text-text-muted">
               No 3rd party apps found.
             </div>
           ) : filtered.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center text-xs text-zinc-500">
+            <div className="flex h-full flex-col items-center justify-center text-xs text-text-muted">
               No apps matching &ldquo;{search}&rdquo;
             </div>
           ) : (
@@ -191,32 +191,32 @@ export function AppDrawer({
                 return (
                   <div
                     key={pkg}
-                    className="group flex w-full items-center justify-between rounded-lg px-2.5 py-2 transition hover:bg-zinc-800/80"
+                    className="group flex w-full items-center justify-between rounded-lg px-2.5 py-2 transition-colors duration-150 hover:bg-ink-800"
                   >
                     <button
                       type="button"
                       onClick={() => handleLaunch(pkg)}
                       disabled={!!launching}
-                      className="min-w-0 flex-1 pr-2 text-left disabled:opacity-50"
+                      className="btn-tactile min-w-0 flex-1 pr-2 text-left disabled:opacity-50"
                       title="Launch on phone"
                     >
-                      <div className="truncate text-xs font-medium text-zinc-200">
+                      <div className="truncate text-xs font-medium text-text-strong">
                         {formatAppName(pkg)}
                       </div>
-                      <div className="truncate font-mono text-[10px] text-zinc-500">
+                      <div className="truncate font-mono text-[10px] text-text-muted">
                         {pkg}
                       </div>
                     </button>
-                    <div className="flex shrink-0 items-center gap-1.5 text-zinc-400">
+                    <div className="flex shrink-0 items-center gap-1.5 text-text-muted">
                       {isLaunching ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
+                        <Loader2 className="h-4 w-4 animate-spin text-gold-400" />
                       ) : (
                         <>
                           <button
                             type="button"
                             onClick={() => handleLaunch(pkg)}
                             disabled={!!launching}
-                            className="rounded p-1 text-zinc-400 hover:bg-zinc-700/60 hover:text-sky-400"
+                            className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-700 hover:text-gold-400"
                             title="Launch on phone"
                           >
                             <Play className="h-3.5 w-3.5" />
@@ -225,7 +225,7 @@ export function AppDrawer({
                             type="button"
                             onClick={() => handleLaunchWindow(pkg)}
                             disabled={!!launching}
-                            className="flex items-center gap-1 rounded border border-zinc-700/80 bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 hover:border-zinc-500 hover:bg-zinc-700 hover:text-white"
+                            className="btn-tactile flex items-center gap-1 rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-text hover:border-text-muted hover:text-text-strong"
                             title="Open in its own window"
                           >
                             <AppWindow className="h-3 w-3" />

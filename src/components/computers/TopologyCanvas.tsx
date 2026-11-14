@@ -263,14 +263,14 @@ export function TopologyCanvas() {
       : Math.min(24, Math.max(4, Math.round(deadzonePx * layout.scale)));
 
   return (
-    <div className="rounded-xl border border-[#1e2638] bg-[#090c14] p-5 space-y-4 select-none shadow-xl">
+    <div className="rounded-xl border border-ink-700 bg-ink-900 p-5 space-y-4 select-none">
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-sky-400">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-gold-400">
             Screen Layout (To Scale)
           </span>
           {peer && (
-            <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 font-mono text-[9px] font-semibold text-emerald-400 border border-emerald-500/20">
+            <span className="inline-flex items-center gap-1 rounded bg-status-success-bg px-2 py-0.5 font-mono text-[9px] font-semibold text-status-success border border-status-success/40">
               <ShieldCheck className="h-3 w-3" />
               LINKED ACTIVE
             </span>
@@ -278,17 +278,17 @@ export function TopologyCanvas() {
         </div>
 
         <div className="flex items-center gap-2.5">
-          <span className="text-[11px] text-zinc-400">Linked PC edge:</span>
-          <div className="flex rounded-lg border border-[#1e2638] bg-[#0e1320] p-0.5">
+          <span className="text-[11px] text-text-muted">Linked PC edge:</span>
+          <div className="flex rounded-lg border border-ink-700 bg-ink-950 p-0.5">
             {EDGE_OPTIONS.map(({ side, label }) => (
               <button
                 key={side}
                 type="button"
                 onClick={() => handleTogglePlacement(side)}
-                className={`btn-tactile rounded px-2.5 py-1 text-[10px] font-mono cursor-pointer transition-colors ${
+                className={`btn-tactile rounded px-2.5 py-1 text-[10px] font-mono cursor-pointer ${
                   placement === side
-                    ? "bg-sky-600 text-white font-bold shadow-sm"
-                    : "text-zinc-400 hover:text-zinc-200"
+                    ? "bg-gold-400 text-ink-950 font-bold"
+                    : "text-text-muted hover:text-text-strong"
                 }`}
               >
                 {label}
@@ -301,26 +301,28 @@ export function TopologyCanvas() {
       {/* Scaled Blueprint Grid Canvas */}
       <div
         ref={containerRef}
-        className={`relative h-72 w-full rounded-xl border overflow-hidden shadow-inner transition-colors ${
+        className={`relative h-72 w-full rounded-xl border overflow-hidden transition-colors duration-150 ${
           isHoveringDrop
-            ? "border-emerald-500/60 bg-[#071318]"
-            : "border-[#162034] bg-[#070a10]"
+            ? "border-status-success bg-status-success-bg/40"
+            : "border-ink-700 bg-ink-950"
         }`}
-        style={{
-          backgroundImage: `
-            linear-gradient(to right, rgba(30, 48, 77, 0.22) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(30, 48, 77, 0.22) 1px, transparent 1px)
-          `,
-          backgroundSize: "24px 24px",
-        }}
       >
+        <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true">
+          <defs>
+            <pattern id="topology-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+              <path d="M 24 0 L 0 0 0 24" fill="none" stroke="var(--ink-800)" strokeWidth="1" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#topology-grid)" />
+        </svg>
+
         {isHoveringDrop && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs text-emerald-400 space-y-2 pointer-events-none">
-            <UploadCloud className="h-10 w-10 animate-bounce" />
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-ink-950/90 text-status-success space-y-2 pointer-events-none">
+            <UploadCloud className="h-10 w-10" />
             <span className="font-mono text-xs font-bold uppercase tracking-wider">
               Drop files to transfer to {peer?.name || "Linked PC"}
             </span>
-            <span className="text-[10px] text-zinc-400">
+            <span className="text-[10px] text-text-muted">
               Saves to Downloads/AnyLeap_Transfers
             </span>
           </div>
@@ -334,18 +336,18 @@ export function TopologyCanvas() {
             width: `${layout.localUnionCanvas.width}px`,
             height: `${layout.localUnionCanvas.height}px`,
           }}
-          className={`absolute rounded-lg border transition-shadow ${
+          className={`absolute rounded-lg border transition-colors duration-150 ${
             isCursorLocal
-              ? "border-sky-400/70 shadow-[0_0_20px_rgba(56,189,248,0.2)]"
-              : "border-sky-500/30"
+              ? "border-mist-300"
+              : "border-ink-700"
           }`}
         >
           <div className="absolute -top-5 left-0 flex items-center gap-1.5 whitespace-nowrap">
-            <span className="font-mono text-[10px] font-bold text-sky-300">
+            <span className="font-mono text-[10px] font-bold text-mist-300">
               {status.local_name || "Main PC"}
             </span>
             {isCursorLocal && (
-              <span className="inline-flex items-center gap-0.5 rounded bg-sky-500 px-1.5 py-0.2 text-[8px] font-mono font-bold text-zinc-950">
+              <span className="inline-flex items-center gap-0.5 rounded bg-mist-300 px-1.5 py-0.2 text-[8px] font-mono font-bold text-ink-950">
                 <MousePointer className="h-2 w-2 fill-current" />
                 CURSOR
               </span>
@@ -385,10 +387,10 @@ export function TopologyCanvas() {
                     }
                     className={`${
                       isHorizontalSharedEdge ? "w-full" : "h-full"
-                    } rounded-sm bg-amber-500/80 shrink-0`}
+                    } rounded-sm bg-status-warning/85 shrink-0`}
                   />
                 )}
-                <div className="flex-1 bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+                <div className="flex-1 bg-gold-400" />
                 {dzPx > 0 && (
                   <div
                     style={
@@ -398,7 +400,7 @@ export function TopologyCanvas() {
                     }
                     className={`${
                       isHorizontalSharedEdge ? "w-full" : "h-full"
-                    } rounded-sm bg-amber-500/80 shrink-0`}
+                    } rounded-sm bg-status-warning/85 shrink-0`}
                   />
                 )}
               </div>
@@ -415,12 +417,12 @@ export function TopologyCanvas() {
               width: `${mon.canvas.width}px`,
               height: `${mon.canvas.height}px`,
             }}
-            className="absolute flex flex-col items-center justify-center rounded border border-sky-400/50 bg-[#17253d]/90 overflow-hidden pointer-events-none"
+            className="absolute flex flex-col items-center justify-center rounded border border-mist-300/50 bg-ink-800 overflow-hidden pointer-events-none"
           >
-            <span className="font-mono text-[9px] font-semibold text-sky-200 truncate max-w-full px-1">
+            <span className="font-mono text-[9px] font-semibold text-text-strong truncate max-w-full px-1">
               {mon.isPrimary ? "Main" : `D${idx + 1}`}
             </span>
-            <span className="font-mono text-[8px] text-sky-400/80 truncate max-w-full px-1">
+            <span className="font-mono text-[8px] text-mist-300 truncate max-w-full px-1">
               {mon.physical.width}×{mon.physical.height}
             </span>
           </div>
@@ -436,21 +438,21 @@ export function TopologyCanvas() {
               width: `${layout.peerUnionCanvas.width}px`,
               height: `${layout.peerUnionCanvas.height}px`,
             }}
-            className={`absolute rounded-lg border transition-shadow ${
+            className={`absolute rounded-lg border transition-colors duration-150 ${
               isDragging ? "cursor-grabbing opacity-90" : "cursor-grab"
             } ${
               isCursorRemote
-                ? "border-sky-400 shadow-[0_0_24px_rgba(56,189,248,0.35)]"
-                : "border-emerald-400/50 hover:border-emerald-300/80"
+                ? "border-gold-400"
+                : "border-status-success/60 hover:border-status-success"
             }`}
           >
             <div className="absolute -bottom-5 left-0 flex items-center gap-1.5 whitespace-nowrap">
-              <span className="font-mono text-[10px] font-bold text-emerald-300">
+              <span className="font-mono text-[10px] font-bold text-status-success">
                 {peer.name}
               </span>
               {isCursorRemote && (
-                <span className="inline-flex items-center gap-0.5 rounded bg-sky-500 px-1.5 py-0.2 text-[8px] font-mono font-bold text-zinc-950">
-                  <MousePointer className="h-2 w-2 fill-current animate-pulse" />
+                <span className="inline-flex items-center gap-0.5 rounded bg-gold-400 px-1.5 py-0.2 text-[8px] font-mono font-bold text-ink-950">
+                  <MousePointer className="h-2 w-2 fill-current" />
                   CURSOR
                 </span>
               )}
@@ -458,7 +460,7 @@ export function TopologyCanvas() {
 
             {isCursorRemote && cursorPos && settings.indicatorCanvasDot && (
               <div
-                className="absolute z-20 h-2.5 w-2.5 rounded-full bg-sky-300 ring-2 ring-white shadow-[0_0_8px_#38bdf8] transition-all duration-75 ease-out pointer-events-none"
+                className="absolute z-20 h-2.5 w-2.5 rounded-full bg-gold-400 ring-2 ring-text-strong transition-[left,top] duration-75 ease-out pointer-events-none"
                 style={{
                   left: `${(cursorPos.normX * 100).toFixed(1)}%`,
                   top: `${(cursorPos.normY * 100).toFixed(1)}%`,
@@ -480,19 +482,19 @@ export function TopologyCanvas() {
                 width: `${mon.canvas.width}px`,
                 height: `${mon.canvas.height}px`,
               }}
-              className="absolute flex flex-col items-center justify-center rounded border border-emerald-400/50 bg-[#122624]/90 overflow-hidden pointer-events-none"
+              className="absolute flex flex-col items-center justify-center rounded border border-status-success/50 bg-status-success-bg overflow-hidden pointer-events-none"
             >
-              <span className="font-mono text-[9px] font-semibold text-emerald-200 truncate max-w-full px-1">
+              <span className="font-mono text-[9px] font-semibold text-text-strong truncate max-w-full px-1">
                 {mon.isPrimary ? "Primary" : `D${idx + 1}`}
               </span>
-              <span className="font-mono text-[8px] text-emerald-400/80 truncate max-w-full px-1">
+              <span className="font-mono text-[8px] text-status-success truncate max-w-full px-1">
                 {mon.physical.width}×{mon.physical.height}
               </span>
             </div>
           ))}
 
         {peer && (
-          <div className="absolute bottom-2 right-3 flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 pointer-events-none">
+          <div className="absolute bottom-2 right-3 flex items-center gap-1.5 text-[10px] font-mono text-text-muted pointer-events-none">
             <Move className="h-3 w-3" />
             <span>
               Drag {peer.name} along edge (offset: {edgeOffset}px)
@@ -503,14 +505,14 @@ export function TopologyCanvas() {
 
       {/* Deadzone & Dwell Controls */}
       {peer && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#1e2638] bg-[#0e1320] px-4 py-2.5 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-700 bg-ink-950 px-4 py-2.5 text-xs">
           <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-1.5 text-zinc-300">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+            <div className="flex items-center gap-1.5 text-text">
+              <span className="h-2 w-2 rounded-full bg-gold-400" />
               <span className="font-mono text-[11px]">Active Edge</span>
             </div>
-            <div className="flex items-center gap-1.5 text-zinc-300">
-              <span className="h-2 w-2 rounded-sm bg-amber-400" />
+            <div className="flex items-center gap-1.5 text-text">
+              <span className="h-2 w-2 rounded-sm bg-status-warning" />
               <span className="font-mono text-[11px]">
                 Deadzone: {deadzonePx}px
               </span>
@@ -520,10 +522,10 @@ export function TopologyCanvas() {
                     key={val}
                     type="button"
                     onClick={() => updateSettings({ cornerDeadzonePx: val })}
-                    className={`rounded px-2 py-0.5 font-mono text-[10px] cursor-pointer ${
+                    className={`btn-tactile rounded px-2 py-0.5 font-mono text-[10px] cursor-pointer ${
                       deadzonePx === val
-                        ? "bg-sky-500 text-zinc-950 font-bold"
-                        : "bg-zinc-800 text-zinc-400 hover:text-white"
+                        ? "bg-gold-400 text-ink-950 font-bold"
+                        : "bg-ink-800 text-text-muted hover:text-text-strong"
                     }`}
                   >
                     {val}px
@@ -534,8 +536,8 @@ export function TopologyCanvas() {
           </div>
 
           <div className="flex items-center gap-2">
-            <AlertCircle className="h-3 w-3 text-sky-400" />
-            <span className="font-mono text-[11px] text-zinc-300">
+            <AlertCircle className="h-3 w-3 text-mist-300" />
+            <span className="font-mono text-[11px] text-text">
               Dwell: {settings.edgeResistanceMs}ms
             </span>
             <div className="flex items-center gap-1">
@@ -544,10 +546,10 @@ export function TopologyCanvas() {
                   key={ms}
                   type="button"
                   onClick={() => updateSettings({ edgeResistanceMs: ms })}
-                  className={`rounded px-2 py-0.5 font-mono text-[10px] cursor-pointer ${
+                  className={`btn-tactile rounded px-2 py-0.5 font-mono text-[10px] cursor-pointer ${
                     settings.edgeResistanceMs === ms
-                      ? "bg-sky-500 text-zinc-950 font-bold"
-                      : "bg-zinc-800 text-zinc-400 hover:text-white"
+                      ? "bg-gold-400 text-ink-950 font-bold"
+                      : "bg-ink-800 text-text-muted hover:text-text-strong"
                   }`}
                 >
                   {ms}ms

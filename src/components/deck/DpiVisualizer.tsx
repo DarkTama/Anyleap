@@ -39,15 +39,15 @@ export function DpiVisualizer({ dpi, onChange }: DpiVisualizerProps) {
   }, [dpi]);
 
   return (
-    <div className="space-y-3 rounded-xl border border-[#222226] bg-[#141417] p-4">
+    <div className="space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Monitor className="h-4 w-4 text-zinc-300" />
-          <span className="text-xs font-semibold text-zinc-200">Flex Display Density (DPI)</span>
+          <Monitor className="h-4 w-4 text-text" />
+          <span className="text-xs font-semibold text-text-strong">Flex Display Density (DPI)</span>
         </div>
         <div className="flex items-baseline gap-1 font-mono">
-          <span className="text-sm font-bold text-zinc-100">{dpi}</span>
-          <span className="text-[10px] text-zinc-500">DPI</span>
+          <span className="text-sm font-bold text-text-strong">{dpi}</span>
+          <span className="text-[10px] text-text-muted">DPI</span>
         </div>
       </div>
 
@@ -60,9 +60,9 @@ export function DpiVisualizer({ dpi, onChange }: DpiVisualizerProps) {
           step={10}
           value={dpi}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[#222226] accent-white"
+          className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-ink-800 accent-gold-400"
         />
-        <div className="flex justify-between text-[9px] font-mono text-zinc-500">
+        <div className="flex justify-between text-[9px] font-mono text-text-muted">
           <span>120 (Smallest)</span>
           <span>160 (Desktop)</span>
           <span>240 (Tablet)</span>
@@ -79,10 +79,10 @@ export function DpiVisualizer({ dpi, onChange }: DpiVisualizerProps) {
               key={p.dpi}
               type="button"
               onClick={() => onChange(p.dpi)}
-              className={`btn-tactile rounded-md px-2 py-1 text-[10px] font-mono cursor-pointer ${
+              className={`btn-tactile rounded-md px-2 py-1 text-[10px] font-mono cursor-pointer border ${
                 active
-                  ? "bg-[#222228] text-zinc-100 border border-[#52525b] font-semibold"
-                  : "bg-[#18181c] text-zinc-400 hover:text-zinc-200 border border-[#27272a]"
+                  ? "bg-ink-800 text-gold-400 border-gold-400 font-semibold"
+                  : "bg-ink-950 text-text-muted hover:text-text-strong border-ink-700"
               }`}
             >
               {p.label}
@@ -94,22 +94,22 @@ export function DpiVisualizer({ dpi, onChange }: DpiVisualizerProps) {
       {/* Live Mock Screen Preview */}
       <div className="space-y-1.5 pt-1">
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-zinc-400 font-medium">Virtual Desktop Canvas Scale</span>
-          <span className="text-[10px] font-mono text-zinc-500">{preview.summary}</span>
+          <span className="text-text font-medium">Virtual Desktop Canvas Scale</span>
+          <span className="text-[10px] font-mono text-text-muted">{preview.summary}</span>
         </div>
 
-        <div className="relative flex h-24 w-full flex-col justify-between overflow-hidden rounded-lg border border-[#222226] bg-[#0c0c0e] p-2.5">
+        <div className="relative flex h-24 w-full flex-col justify-between overflow-hidden rounded-lg border border-ink-700 bg-ink-950 p-2.5">
           {/* App Icons Row */}
           <div className="flex items-start gap-3">
             {[
-              { label: "Browser", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
-              { label: "Files", color: "bg-amber-500/20 text-amber-400 border-amber-500/30" },
-              { label: "Notes", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" },
-              { label: "Terminal", color: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
+              { label: "Browser", color: "bg-ink-800 text-mist-300 border-mist-300/30" },
+              { label: "Files", color: "bg-status-warning-bg text-status-warning border-status-warning/30" },
+              { label: "Notes", color: "bg-status-success-bg text-status-success border-status-success/30" },
+              { label: "Terminal", color: "bg-ink-800 text-gold-400 border-gold-400/30" },
             ].map((app) => (
               <div key={app.label} className="flex flex-col items-center gap-1">
                 <div
-                  className={`grid place-items-center rounded-lg border ${app.color} transition-all duration-150`}
+                  className={`grid place-items-center rounded-lg border ${app.color} transition-[width,height] duration-150 ease-out`}
                   style={{
                     width: `${preview.iconSize}px`,
                     height: `${preview.iconSize}px`,
@@ -118,7 +118,7 @@ export function DpiVisualizer({ dpi, onChange }: DpiVisualizerProps) {
                   <span style={{ fontSize: `${Math.max(7, preview.fontSize - 1)}px` }}>●</span>
                 </div>
                 <span
-                  className="font-medium text-zinc-400 truncate max-w-[48px]"
+                  className="font-medium text-text-muted truncate max-w-[48px]"
                   style={{ fontSize: `${preview.fontSize}px` }}
                 >
                   {app.label}
@@ -129,7 +129,7 @@ export function DpiVisualizer({ dpi, onChange }: DpiVisualizerProps) {
 
           {/* Virtual Bottom Taskbar */}
           <div
-            className="flex items-center justify-between border-t border-[#1f1f23] bg-[#121215] px-2 text-zinc-400"
+            className="flex items-center justify-between border-t border-ink-700 bg-ink-900 px-2 text-text-muted"
             style={{ height: `${preview.taskbarHeight}px` }}
           >
             <span style={{ fontSize: `${preview.fontSize}px` }}>Apps</span>

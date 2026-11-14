@@ -2,16 +2,16 @@ import { Badge } from "@/components/ui/badge";
 import type { DeviceState } from "@/lib/types";
 
 const STYLES: Record<string, string> = {
-  device: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-  unauthorized: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  offline: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  device: "bg-status-success-bg text-status-success border border-status-success/40",
+  unauthorized: "bg-status-warning-bg text-status-warning border border-status-warning/40",
+  offline: "bg-ink-800 text-text-muted border border-ink-700",
 };
 
 const LABELS: Record<string, string> = {
   device: "ready",
 };
 
-const FALLBACK = "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
+const FALLBACK = "bg-ink-800 text-text-muted border border-ink-700";
 
 export function DeviceStateBadge({ state }: { state: DeviceState }) {
   return <Badge className={STYLES[state] ?? FALLBACK}>{LABELS[state] ?? state}</Badge>;

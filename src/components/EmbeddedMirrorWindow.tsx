@@ -165,7 +165,7 @@ export function EmbeddedMirrorWindow({
   }, [serial]);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100 select-none">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-ink-950 text-text select-none">
       {/* Custom Title Bar */}
       <div
         onPointerDown={(e) => {
@@ -176,21 +176,21 @@ export function EmbeddedMirrorWindow({
         onDoubleClick={() => {
           win.toggleMaximize().catch(() => {});
         }}
-        className="flex h-9 cursor-grab items-center justify-between border-b border-zinc-800/80 bg-zinc-900 px-3 shrink-0 select-none active:cursor-grabbing"
+        className="flex h-9 cursor-grab items-center justify-between border-b border-ink-700 bg-ink-900 px-3 shrink-0 select-none active:cursor-grabbing"
       >
         <div className="flex items-center gap-2 pointer-events-none">
           {mode === "camera" ? (
             <>
-              <Camera className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="text-xs font-medium text-zinc-200">AnyLeap Camera — {serial}</span>
-              <span className="rounded bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300 uppercase tracking-wider">
+              <Camera className="h-3.5 w-3.5 text-status-success" />
+              <span className="text-xs font-medium text-text-strong">AnyLeap Camera — {serial}</span>
+              <span className="rounded bg-status-success-bg border border-status-success/40 px-1.5 py-0.5 text-[9px] font-semibold text-status-success uppercase tracking-wider">
                 Studio
               </span>
             </>
           ) : (
             <>
-              <GripHorizontal className="h-3.5 w-3.5 text-zinc-500" />
-              <span className="text-xs font-medium text-zinc-200">AnyLeap — {serial}</span>
+              <GripHorizontal className="h-3.5 w-3.5 text-text-muted" />
+              <span className="text-xs font-medium text-text-strong">AnyLeap — {serial}</span>
             </>
           )}
         </div>
@@ -202,7 +202,7 @@ export function EmbeddedMirrorWindow({
           <button
             type="button"
             onClick={() => win.minimize().catch(console.error)}
-            className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+            className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
             aria-label="Minimize"
           >
             <Minus className="h-3 w-3" />
@@ -210,7 +210,7 @@ export function EmbeddedMirrorWindow({
           <button
             type="button"
             onClick={() => win.toggleMaximize().catch(console.error)}
-            className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+            className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
             aria-label="Maximize"
           >
             <Square className="h-3 w-3" />
@@ -230,7 +230,7 @@ export function EmbeddedMirrorWindow({
               }
               win.destroy().catch(() => win.close().catch(() => {}));
             }}
-            className="rounded p-1 text-zinc-400 hover:bg-red-900/50 hover:text-red-300 transition-colors cursor-pointer"
+            className="btn-tactile rounded p-1 text-text-muted hover:bg-status-danger-bg hover:text-status-danger cursor-pointer"
             aria-label="Close"
           >
             <X className="h-3.5 w-3.5" />
@@ -248,7 +248,7 @@ export function EmbeddedMirrorWindow({
         />
 
         {/* Flush Right Toolbar Sidebar */}
-        <div className="w-12 shrink-0 border-l border-zinc-800/80 bg-zinc-900/95 flex flex-col items-center overflow-y-auto py-1.5">
+        <div className="w-12 shrink-0 border-l border-ink-700 bg-ink-900 flex flex-col items-center overflow-y-auto py-1.5">
           <ControlBar
             serial={serial}
             config={config}
@@ -260,7 +260,10 @@ export function EmbeddedMirrorWindow({
         </div>
       </div>
       {toast && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-800/95 border border-cyan-500/40 px-3 py-1.5 text-xs text-cyan-300 shadow-xl backdrop-blur-md transition-all">
+        <div
+          className="popover-panel absolute bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-ink-800 border border-gold-400/50 px-3 py-1.5 text-xs text-gold-400 shadow-elevated"
+          style={{ "--transform-origin": "bottom center" } as React.CSSProperties}
+        >
           {toast}
         </div>
       )}

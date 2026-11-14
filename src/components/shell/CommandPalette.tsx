@@ -97,9 +97,10 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
     }
   };
 
+  // Keyboard-initiated palette: zero open/close/selection animation per design-engineering rules.
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-24 px-4 backdrop-blur-xs select-none"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/65 pt-24 px-4 select-none"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -109,11 +110,11 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[#27272a] bg-[#121215] text-zinc-100 shadow-2xl"
+        className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-ink-700 bg-ink-900 text-text shadow-elevated"
       >
         {/* Search Input */}
-        <div className="flex items-center gap-2.5 border-b border-[#222226] px-3.5 py-3">
-          <Search className="h-4 w-4 shrink-0 text-zinc-400" />
+        <div className="flex items-center gap-2.5 border-b border-ink-700 px-3.5 py-3">
+          <Search className="h-4 w-4 shrink-0 text-text-muted" />
           <input
             ref={inputRef}
             type="text"
@@ -124,9 +125,9 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
             aria-label="Search commands"
             aria-controls="command-palette-list"
             aria-activedescendant={activeDescendantId}
-            className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+            className="flex-1 bg-transparent text-sm text-text-strong placeholder:text-text-muted focus:outline-none"
           />
-          <kbd className="rounded border border-[#27272a] bg-[#18181c] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+          <kbd className="rounded border border-ink-700 bg-ink-950 px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
             ESC
           </kbd>
         </div>
@@ -139,8 +140,8 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
           className="max-h-80 overflow-y-auto p-1.5"
         >
           {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-xs text-zinc-500">
-              <Command className="mb-2 h-5 w-5 text-zinc-600" />
+            <div className="flex flex-col items-center justify-center py-8 text-xs text-text-muted">
+              <Command className="mb-2 h-5 w-5 text-text-muted" />
               <span>No matching commands</span>
             </div>
           ) : (
@@ -157,24 +158,30 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
                   aria-disabled={isDisabled}
                   onMouseEnter={() => setActiveIndex(idx)}
                   onClick={() => execute(cmd)}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs transition-colors ${
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs ${
                     isDisabled
                       ? "opacity-45 cursor-not-allowed"
                       : "cursor-pointer"
                   } ${
                     isSelected
-                      ? "bg-[#222228] text-zinc-100"
-                      : "text-zinc-300 hover:bg-[#1a1a20]"
+                      ? "bg-ink-800 text-text-strong"
+                      : "text-text hover:bg-ink-800/60"
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="rounded bg-[#1a1a20] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-zinc-400 border border-[#27272a]">
+                    <span
+                      className={`rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider border ${
+                        isSelected
+                          ? "border-gold-400/50 bg-ink-900 text-gold-400"
+                          : "border-ink-700 bg-ink-950 text-text-muted"
+                      }`}
+                    >
                       {cmd.group}
                     </span>
                     <span className="truncate font-medium">{cmd.label}</span>
                   </div>
                   {cmd.disabled && (
-                    <span className="shrink-0 font-mono text-[10px] text-zinc-500">
+                    <span className="shrink-0 font-mono text-[10px] text-text-muted">
                       {cmd.disabled}
                     </span>
                   )}

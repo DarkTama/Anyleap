@@ -158,13 +158,13 @@ export function ControlWindow({ serial }: { serial: string }) {
       className={
         collapsed
           ? "flex h-screen w-screen items-center justify-center bg-transparent"
-          : "flex h-screen flex-col rounded-xl border border-zinc-700/60 bg-zinc-900/90 shadow-2xl backdrop-blur-md text-zinc-50"
+          : "flex h-screen flex-col rounded-xl border border-ink-700 bg-ink-900 shadow-elevated text-text-strong"
       }
     >
       {collapsed ? (
         <button
           onClick={() => setCollapsed(false)}
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 shadow-lg transition-transform hover:scale-105 hover:bg-zinc-800"
+          className="btn-tactile flex h-10 w-10 items-center justify-center rounded-full border border-gold-400/60 bg-ink-900 text-gold-400 shadow-elevated hover:bg-ink-800"
           aria-label="Expand controls"
           title="Expand controls"
         >
@@ -173,13 +173,13 @@ export function ControlWindow({ serial }: { serial: string }) {
       ) : (
         <div
           data-tauri-drag-region
-          className="flex cursor-move items-center justify-between border-b border-zinc-800/80 px-2.5 py-1.5"
+          className="flex cursor-move items-center justify-between border-b border-ink-700 px-2.5 py-1.5"
         >
-          <GripHorizontal className="pointer-events-none h-3.5 w-3.5 text-zinc-500" />
+          <GripHorizontal className="pointer-events-none h-3.5 w-3.5 text-text-muted" />
           <div className="flex items-center gap-1">
             <button
               onClick={() => setCollapsed(true)}
-              className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
               aria-label="Collapse controls"
               title="Collapse to button"
             >
@@ -187,7 +187,7 @@ export function ControlWindow({ serial }: { serial: string }) {
             </button>
             <button
               onClick={() => getCurrentWindow().close()}
-              className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
               aria-label="Close"
             >
               <X className="h-3.5 w-3.5" />

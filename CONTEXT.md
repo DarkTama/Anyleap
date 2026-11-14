@@ -58,3 +58,11 @@ The ADB-only companion view for a selected `AdbDevice` (requiring no companion a
 
 ### ADB Quick Actions
 Direct device-control and session utilities executed over `adb` and `scrcpy`: URL handoff (`VIEW` intent), per-app virtual display windows (`--new-display --start-app`), system toggles (`svc`/`cmd notification`), MP4 screen recording (`--record`), Windows battery threshold notifications, and telephony intents (`CALL`/`DIAL`, `KEYCODE_ENDCALL`).
+
+### Ink & Gold Design System (`SPEC-26`)
+Flat, high-contrast workstation theme replacing the Graphite palette (`SPEC-17`):
+- **Ink Surfaces**: `--ink-950` (`#12141F` canvas), `--ink-900` (`#1B1E2E` panels/tiles), `--ink-800` (`#2A2D40` raised controls), `--ink-700` (`#3A3D52` borders/hover).
+- **Text Hierarchy**: `--text-strong` (`#ECEAE3`), `--text` (`#C9CBD6`), `--text-muted` (`#8B8FA3`).
+- **Accents**: `--gold-400` (`#D8B46A`, used sparingly for primary CTAs, active/selected states, focus rings, active KVM edge highlight, and brand moments), `--gold-600` (`#A9822F` pressed/light accent), `--mist-300` (`#B7C9D6` info/secondary highlight).
+- **Status Tokens**: `--status-success` / `--status-warning` / `--status-danger` (non-neon, `>= 4.5:1` contrast).
+- **Motion Curve**: `--ease-out` (`cubic-bezier(0.23, 1, 0.32, 1)`), 160ms press feedback (`scale(0.97)`), zero gradients or backdrop-blur, zero animation on keyboard-initiated actions (`Ctrl+K`).

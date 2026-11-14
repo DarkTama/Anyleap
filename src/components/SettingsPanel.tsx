@@ -89,7 +89,7 @@ export function SettingsPanel() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1">
-          <label className="text-xs font-medium text-zinc-500">Quality preset</label>
+          <label className="text-xs font-medium text-text-muted">Quality preset</label>
           <select
             className={selectClass}
             value={preset}
@@ -101,7 +101,7 @@ export function SettingsPanel() {
               </option>
             ))}
           </select>
-          <p className="text-xs text-zinc-500">{PRESET_HINTS[preset]}</p>
+          <p className="text-xs text-text-muted">{PRESET_HINTS[preset]}</p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -124,7 +124,7 @@ export function SettingsPanel() {
             onChange={(v) => update("maxFps", v)}
           />
           <div className="space-y-1">
-            <label className="text-xs font-medium text-zinc-500">Codec</label>
+            <label className="text-xs font-medium text-text-muted">Codec</label>
             <select
               className={selectClass}
               value={settings.videoCodec}
@@ -177,15 +177,15 @@ export function SettingsPanel() {
           />
         </div>
 
-        <div className="space-y-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/60">
-          <label className="text-xs font-medium text-zinc-500">Display</label>
+        <div className="space-y-2 border-t border-ink-700 pt-3">
+          <label className="text-xs font-medium text-text-muted">Display</label>
           <div className="space-y-1">
             <Toggle
               label="Flex display (desktop mode)"
               checked={settings.flexDisplay}
               onChange={(v) => update("flexDisplay", v)}
             />
-            <p className="text-[11px] text-zinc-400">
+            <p className="text-[11px] text-text-muted">
               Virtual display that continuously resizes with the window (Android 10+)
             </p>
           </div>
@@ -195,7 +195,7 @@ export function SettingsPanel() {
               checked={settings.embedded ?? false}
               onChange={(v) => update("embedded", v)}
             />
-            <p className="text-[11px] text-zinc-400">
+            <p className="text-[11px] text-text-muted">
               Embeds mirror viewport and toolbar into a single native window (Escrcpy style)
             </p>
           </div>
@@ -225,7 +225,7 @@ export function SettingsPanel() {
                   <button
                     type="button"
                     onClick={autoDetectResolution}
-                    className="flex items-center gap-1 rounded bg-zinc-800 px-2 text-[11px] text-zinc-300 hover:bg-zinc-700 hover:text-white shrink-0"
+                    className="btn-tactile flex items-center gap-1 rounded border border-ink-700 bg-ink-800 px-2 text-[11px] text-text hover:border-text-muted hover:text-text-strong shrink-0"
                     title="Detect PC native monitor resolution"
                   >
                     <Monitor className="h-3 w-3" />
@@ -234,19 +234,19 @@ export function SettingsPanel() {
                 </div>
 
                 {/* DPI Scale explanation & Live Icon Preview */}
-                <div className="flex items-center gap-3 rounded border border-zinc-800/80 bg-zinc-900/60 p-2.5">
+                <div className="flex items-center gap-3 rounded border border-ink-700 bg-ink-950 p-2.5">
                   <div className="flex flex-col items-center gap-1 shrink-0">
                     <div
-                      className="flex items-center justify-center rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow"
+                      className="flex items-center justify-center rounded-xl border border-gold-400/50 bg-ink-800 text-gold-400"
                       style={{ width: `${iconSize}px`, height: `${iconSize}px` }}
                     >
                       <LayoutGrid className="w-1/2 h-1/2" />
                     </div>
-                    <span className="text-[10px] text-zinc-400">App</span>
+                    <span className="text-[10px] text-text-muted">App</span>
                   </div>
-                  <div className="text-xs text-zinc-400">
-                    <span className="font-semibold text-zinc-200">{parsedDpi} DPI</span> icon size preview
-                    <p className="text-[10px] text-zinc-500 mt-0.5">
+                  <div className="text-xs text-text-muted">
+                    <span className="font-semibold text-text-strong">{parsedDpi} DPI</span> icon size preview
+                    <p className="text-[10px] text-text-muted mt-0.5">
                       {parsedDpi <= 160
                         ? "Compact: small icons, maximum desktop workspace"
                         : parsedDpi <= 200
@@ -270,17 +270,17 @@ export function SettingsPanel() {
                       key={p.val}
                       type="button"
                       onClick={() => update("flexDisplaySize", p.val)}
-                      className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                      className={`btn-tactile rounded px-1.5 py-0.5 text-[10px] ${
                         settings.flexDisplaySize === p.val
-                          ? "bg-zinc-700 text-white font-medium"
-                          : "bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                          ? "border border-gold-400 bg-ink-800 text-gold-400 font-medium"
+                          : "border border-ink-700 bg-ink-950 text-text-muted hover:bg-ink-800 hover:text-text-strong"
                       }`}
                     >
                       {p.label}
                     </button>
                   ))}
                 </div>
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-[11px] text-text-muted">
                   Resolution as WxH, and /dpi. Lower DPI gives smaller icons and more screen space.
                 </p>
 
@@ -289,7 +289,7 @@ export function SettingsPanel() {
                   checked={settings.hideVirtualTaskbar ?? false}
                   onChange={(v) => update("hideVirtualTaskbar", v)}
                 />
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-[11px] text-text-muted">
                   Hides Android navigation bar / taskbar on the virtual desktop display
                 </p>
               </div>
@@ -301,7 +301,7 @@ export function SettingsPanel() {
             onChange={(v) => update("noWindowAspectRatioLock", v)}
           />
           <div className="space-y-1">
-            <label className="text-xs font-medium text-zinc-500">Render fit</label>
+            <label className="text-xs font-medium text-text-muted">Render fit</label>
             <select
               className={selectClass}
               value={settings.renderFit}
@@ -314,8 +314,8 @@ export function SettingsPanel() {
           </div>
         </div>
 
-        <div className="space-y-2 border-t border-[#222226] pt-3">
-          <label className="text-xs font-medium text-zinc-500">App</label>
+        <div className="space-y-2 border-t border-ink-700 pt-3">
+          <label className="text-xs font-medium text-text-muted">App</label>
           <Toggle
             label="Minimize to tray on close"
             checked={appPrefs.minimizeToTrayOnClose}
@@ -339,8 +339,8 @@ export function SettingsPanel() {
 
           <div className="flex items-center justify-between pt-2">
             <div>
-              <div className="text-xs font-medium text-zinc-300">Application Updates</div>
-              <div className="text-[11px] text-zinc-500">
+              <div className="text-xs font-medium text-text">Application Updates</div>
+              <div className="text-[11px] text-text-muted">
                 {updatePhase === "checking"
                   ? "Checking GitHub releases..."
                   : hasUpdate
@@ -353,9 +353,9 @@ export function SettingsPanel() {
               <button
                 type="button"
                 onClick={openUpdateModal}
-                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 cursor-pointer"
+                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-gold-400/50 bg-ink-800 px-3 py-1.5 text-xs font-medium text-gold-400 hover:bg-ink-700 cursor-pointer"
               >
-                <Sparkles className="h-3 w-3 text-cyan-400" />
+                <Sparkles className="h-3 w-3 text-gold-400" />
                 <span>View Update</span>
               </button>
             ) : (
@@ -363,11 +363,11 @@ export function SettingsPanel() {
                 type="button"
                 disabled={updatePhase === "checking"}
                 onClick={() => void checkForUpdatesNow(true)}
-                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer disabled:opacity-50"
+                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw
                   className={`h-3 w-3 ${
-                    updatePhase === "checking" ? "animate-spin text-zinc-200" : "text-zinc-400"
+                    updatePhase === "checking" ? "animate-spin text-text-strong" : "text-text-muted"
                   }`}
                 />
                 <span>Check Now</span>
@@ -385,7 +385,7 @@ export function SettingsPanel() {
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
-            <label className="text-xs font-medium text-zinc-500">Dock position</label>
+            <label className="text-xs font-medium text-text-muted">Dock position</label>
             <select
               className={selectClass}
               value={controlConfig.dock}
@@ -401,7 +401,7 @@ export function SettingsPanel() {
             </select>
           </div>
           <div className="space-y-1">
-            <label className="text-xs font-medium text-zinc-500">Size</label>
+            <label className="text-xs font-medium text-text-muted">Size</label>
             <select
               className={selectClass}
               value={controlConfig.size}
@@ -419,13 +419,13 @@ export function SettingsPanel() {
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs font-medium text-zinc-500">Buttons</label>
+          <label className="text-xs font-medium text-text-muted">Buttons</label>
           <div className="grid grid-cols-2 gap-2">
             {BUTTON_IDS.map((id) => (
-              <label key={id} className="flex items-center gap-2 text-sm">
+              <label key={id} className="flex items-center gap-2 text-sm text-text">
                 <input
                   type="checkbox"
-                  className="h-4 w-4"
+                  className="h-4 w-4 accent-gold-400"
                   checked={controlConfig.buttons[id]}
                   onChange={(e) =>
                     updateControl({
@@ -440,7 +440,7 @@ export function SettingsPanel() {
           </div>
         </div>
 
-        <p className="text-[11px] text-zinc-400">
+        <p className="text-[11px] text-text-muted">
           Applies to the floating control strip and the in-app controls; changes take effect
           immediately.
         </p>
@@ -485,10 +485,10 @@ function KvmSettingsCard() {
   };
 
   return (
-    <Card className="rounded-xl border border-[#222226] bg-[#141417]">
+    <Card className="rounded-xl border border-ink-700 bg-ink-900">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-          <Laptop className="h-4 w-4 text-sky-400" />
+        <CardTitle className="flex items-center gap-2 text-sm font-semibold text-text-strong">
+          <Laptop className="h-4 w-4 text-mist-300" />
           Shared Mouse &amp; Keyboard
         </CardTitle>
       </CardHeader>
@@ -496,10 +496,10 @@ function KvmSettingsCard() {
         {/* Edge Resistance Slider */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
-            <label className="font-medium text-zinc-300">
+            <label className="font-medium text-text">
               Edge Push Resistance (Dwell Delay)
             </label>
-            <span className="font-mono text-sky-400 font-semibold">
+            <span className="font-mono text-gold-400 font-semibold">
               {kvmSettings.edgeResistanceMs} ms
             </span>
           </div>
@@ -512,9 +512,9 @@ function KvmSettingsCard() {
             onChange={(e) =>
               updateKvmSettings({ edgeResistanceMs: Number(e.target.value) })
             }
-            className="w-full accent-sky-500 cursor-pointer"
+            className="w-full accent-gold-400 cursor-pointer"
           />
-          <p className="text-[11px] text-zinc-400">
+          <p className="text-[11px] text-text-muted">
             Prevents accidental leaps when interacting with browser sidebars or scrollbars. Set to 0ms for instant leap.
           </p>
         </div>
@@ -522,10 +522,10 @@ function KvmSettingsCard() {
         {/* Corner Deadzone Slider */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
-            <label className="font-medium text-zinc-300">
+            <label className="font-medium text-text">
               Corner Deadzone Margin
             </label>
-            <span className="font-mono text-amber-400 font-semibold">
+            <span className="font-mono text-status-warning font-semibold">
               {kvmSettings.cornerDeadzonePx} px
             </span>
           </div>
@@ -538,16 +538,16 @@ function KvmSettingsCard() {
             onChange={(e) =>
               updateKvmSettings({ cornerDeadzonePx: Number(e.target.value) })
             }
-            className="w-full accent-amber-500 cursor-pointer"
+            className="w-full accent-gold-400 cursor-pointer"
           />
-          <p className="text-[11px] text-zinc-400">
+          <p className="text-[11px] text-text-muted">
             Top and bottom corner screen zones where leaps are blocked (tabs, titlebars, taskbars).
           </p>
         </div>
 
         {/* Indicators */}
-        <div className="space-y-2.5 pt-2 border-t border-[#222226]">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+        <div className="space-y-2.5 pt-2 border-t border-ink-700">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Visual Indicators
           </span>
           <div className="grid grid-cols-2 gap-3">
@@ -569,7 +569,7 @@ function KvmSettingsCard() {
 
           {kvmSettings.indicatorHud && (
             <div className="space-y-1 pt-1 max-w-xs">
-              <label className="text-xs font-medium text-zinc-400">
+              <label className="text-xs font-medium text-text-muted">
                 Desktop HUD Corner
               </label>
               <select
@@ -599,23 +599,23 @@ function KvmSettingsCard() {
         </div>
 
         {/* Emergency Escape Shortcuts (Fixed) */}
-        <div className="space-y-2 pt-2 border-t border-[#222226]">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+        <div className="space-y-2 pt-2 border-t border-ink-700">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Emergency Unhook Shortcut
           </span>
           <div className="space-y-1">
-            <div className="rounded-lg border border-[#27272a] bg-[#101013] px-3 py-2 text-xs text-zinc-200 font-mono">
+            <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-xs text-text-strong font-mono">
               Scroll Lock, Pause, or Ctrl+Alt+Esc
             </div>
-            <p className="text-[11px] text-zinc-400">
+            <p className="text-[11px] text-text-muted">
               Immediately breaks cursor trap, unclips boundary lock, and returns pointer to host.
             </p>
           </div>
         </div>
 
         {/* Media & Clipboard Synchronization */}
-        <div className="space-y-2.5 pt-2 border-t border-[#222226]">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+        <div className="space-y-2.5 pt-2 border-t border-ink-700">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Clipboard & Media Sync
           </span>
           <div className="space-y-2">
@@ -644,8 +644,8 @@ function KvmSettingsCard() {
         </div>
 
         {/* Diagnostics */}
-        <div className="space-y-2.5 pt-2 border-t border-[#222226]">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+        <div className="space-y-2.5 pt-2 border-t border-ink-700">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Diagnostics
           </span>
           <div className="space-y-2">
@@ -654,12 +654,12 @@ function KvmSettingsCard() {
               checked={kvmSettings.debugLog ?? false}
               onChange={handleDebugLogToggle}
             />
-            <p className="text-[11px] text-zinc-400">
+            <p className="text-[11px] text-text-muted">
               Records keyboard hook decisions, engage/return/release events, slow callbacks (&gt;20ms), and foreground window details (rotates at 5 MB).
             </p>
             <div className="flex items-center gap-2">
               <div
-                className="flex-1 truncate rounded-lg border border-[#27272a] bg-[#101013] px-3 py-1.5 font-mono text-[11px] text-zinc-300"
+                className="flex-1 truncate rounded-lg border border-ink-700 bg-ink-950 px-3 py-1.5 font-mono text-[11px] text-text"
                 title={debugLogPath || "kvm-debug.log"}
               >
                 {debugLogPath || "kvm-debug.log"}
@@ -667,9 +667,9 @@ function KvmSettingsCard() {
               <button
                 type="button"
                 onClick={() => void kvmOpenDebugLogFolder().catch(() => {})}
-                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer shrink-0"
+                className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer shrink-0"
               >
-                <FolderOpen className="h-3.5 w-3.5 text-zinc-400" />
+                <FolderOpen className="h-3.5 w-3.5 text-text-muted" />
                 <span>Open log folder</span>
               </button>
             </div>
@@ -693,7 +693,7 @@ function NumberField({
 }) {
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-zinc-500">{label}</label>
+      <label className="text-xs font-medium text-text-muted">{label}</label>
       <input
         type="number"
         min={0}
@@ -701,7 +701,7 @@ function NumberField({
         value={value}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
       />
-      <p className="text-[11px] text-zinc-400">{hint}</p>
+      <p className="text-[11px] text-text-muted">{hint}</p>
     </div>
   );
 }
@@ -716,12 +716,12 @@ function Toggle({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <label className="flex items-center gap-2 text-sm text-text">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4"
+        className="h-4 w-4 accent-gold-400"
       />
       {label}
     </label>

@@ -110,11 +110,11 @@ export function CameraLaunchDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="w-full max-w-md border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4">
+      <Card className="modal-panel w-full max-w-md border-ink-700 bg-ink-900 shadow-elevated">
         <CardHeader className="flex-row items-center justify-between pb-3">
           <div className="flex items-center gap-2">
-            <Camera className="h-5 w-5 text-emerald-500" />
+            <Camera className="h-5 w-5 text-gold-400" />
             <CardTitle className="text-base font-semibold">Camera Studio</CardTitle>
           </div>
           <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
@@ -122,41 +122,41 @@ export function CameraLaunchDialog({
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="text-xs text-zinc-500">
+          <div className="text-xs text-text-muted">
             Stream camera video directly from{" "}
-            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+            <span className="font-medium text-text-strong">
               {deviceName ?? serial}
             </span>{" "}
             as a PC camera source.
           </div>
 
           {/* Virtual Webcam / Google Meet Guide Card */}
-          <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs space-y-1.5 dark:border-sky-500/20 dark:bg-sky-950/30">
-            <div className="flex items-center gap-1.5 font-semibold text-sky-400">
+          <div className="rounded-lg border border-mist-300/30 bg-ink-800 p-3 text-xs space-y-1.5">
+            <div className="flex items-center gap-1.5 font-semibold text-mist-300">
               <Video className="h-3.5 w-3.5" />
               <span>Using with Google Meet, Zoom, or Discord:</span>
             </div>
-            <ol className="list-decimal list-inside space-y-1 text-[11px] text-zinc-400 leading-relaxed">
-              <li>Open <strong className="text-zinc-200">OBS Studio</strong>.</li>
-              <li>Add source: <strong className="text-zinc-200">Window Capture → AnyLeap Camera Studio</strong>.</li>
-              <li>Click <strong className="text-emerald-400">Start Virtual Camera</strong> in OBS.</li>
-              <li>In Google Meet or Zoom, choose <strong className="text-sky-300">OBS Virtual Camera</strong>.</li>
+            <ol className="list-decimal list-inside space-y-1 text-[11px] text-text-muted leading-relaxed">
+              <li>Open <strong className="text-text-strong">OBS Studio</strong>.</li>
+              <li>Add source: <strong className="text-text-strong">Window Capture → AnyLeap Camera Studio</strong>.</li>
+              <li>Click <strong className="text-status-success">Start Virtual Camera</strong> in OBS.</li>
+              <li>In Google Meet or Zoom, choose <strong className="text-mist-300">OBS Virtual Camera</strong>.</li>
             </ol>
           </div>
           {error && (
-            <div className="rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">
+            <div className="rounded-md border border-status-danger/40 bg-status-danger-bg p-2.5 text-xs text-status-danger">
               {error}
             </div>
           )}
 
           {/* Camera Lens Selection */}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+            <label className="text-xs font-medium text-text">
               Camera Lens
             </label>
             {loading ? (
-              <div className="flex items-center gap-2 rounded border border-zinc-200 p-2 text-xs text-zinc-500 dark:border-zinc-800">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500" />
+              <div className="flex items-center gap-2 rounded border border-ink-700 bg-ink-950 p-2 text-xs text-text-muted">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-gold-400" />
                 Querying cameras on device...
               </div>
             ) : cameras.length > 0 ? (
@@ -173,7 +173,7 @@ export function CameraLaunchDialog({
                 }}
               >
                 {cameras.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id} className="bg-ink-900 text-text-strong">
                     Camera {c.id} ({c.facing.toUpperCase()}) — {c.resolution}
                   </option>
                 ))}
@@ -209,7 +209,7 @@ export function CameraLaunchDialog({
           {/* Resolution & Frame Rate */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              <label className="text-xs font-medium text-text">
                 Resolution
               </label>
               <select
@@ -217,17 +217,17 @@ export function CameraLaunchDialog({
                 value={resolution}
                 onChange={(e) => setResolution(e.target.value)}
               >
-                <option value="1280x720">720p HD (1280×720) — Recommended (Smooth Wireless)</option>
-                <option value="800x480">480p WVGA (800×480) — Low Latency / Fast</option>
-                <option value="640x480">480p VGA (640×480) — Minimum Bandwidth</option>
-                <option value="1920x1080">1080p FHD (1920×1080) — High Definition</option>
-                <option value="3840x2160">4K UHD (3840×2160) — Wired USB</option>
-                <option value="">Full Sensor (Auto)</option>
+                <option value="1280x720" className="bg-ink-900 text-text-strong">720p HD (1280×720) — Recommended (Smooth Wireless)</option>
+                <option value="800x480" className="bg-ink-900 text-text-strong">480p WVGA (800×480) — Low Latency / Fast</option>
+                <option value="640x480" className="bg-ink-900 text-text-strong">480p VGA (640×480) — Minimum Bandwidth</option>
+                <option value="1920x1080" className="bg-ink-900 text-text-strong">1080p FHD (1920×1080) — High Definition</option>
+                <option value="3840x2160" className="bg-ink-900 text-text-strong">4K UHD (3840×2160) — Wired USB</option>
+                <option value="" className="bg-ink-900 text-text-strong">Full Sensor (Auto)</option>
               </select>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              <label className="text-xs font-medium text-text">
                 Frame Rate
               </label>
               <select
@@ -235,9 +235,9 @@ export function CameraLaunchDialog({
                 value={fps}
                 onChange={(e) => setFps(Number(e.target.value))}
               >
-                <option value={30}>30 FPS (Standard)</option>
-                <option value={60}>60 FPS (High Speed)</option>
-                <option value={0}>Device Default</option>
+                <option value={30} className="bg-ink-900 text-text-strong">30 FPS (Standard)</option>
+                <option value={60} className="bg-ink-900 text-text-strong">60 FPS (High Speed)</option>
+                <option value={0} className="bg-ink-900 text-text-strong">Device Default</option>
               </select>
             </div>
           </div>
@@ -245,8 +245,8 @@ export function CameraLaunchDialog({
           {/* Orientation & Wireless Quality */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
-                <Compass className="h-3 w-3 text-cyan-400" />
+              <label className="text-xs font-medium text-text flex items-center gap-1.5">
+                <Compass className="h-3 w-3 text-mist-300" />
                 Stream Orientation
               </label>
               <select
@@ -254,16 +254,16 @@ export function CameraLaunchDialog({
                 value={orientation}
                 onChange={(e) => setOrientation(e.target.value)}
               >
-                <option value="270">Portrait (Upright Phone)</option>
-                <option value="0">Landscape (Monitor Wide)</option>
-                <option value="90">Inverted Portrait</option>
-                <option value="180">Inverted Landscape</option>
-                <option value="auto">Device Native Auto</option>
+                <option value="270" className="bg-ink-900 text-text-strong">Portrait (Upright Phone)</option>
+                <option value="0" className="bg-ink-900 text-text-strong">Landscape (Monitor Wide)</option>
+                <option value="90" className="bg-ink-900 text-text-strong">Inverted Portrait</option>
+                <option value="180" className="bg-ink-900 text-text-strong">Inverted Landscape</option>
+                <option value="auto" className="bg-ink-900 text-text-strong">Device Native Auto</option>
               </select>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              <label className="text-xs font-medium text-text">
                 Wireless Stream Profile
               </label>
               <select
@@ -271,34 +271,34 @@ export function CameraLaunchDialog({
                 value={bitrateMode}
                 onChange={(e) => setBitrateMode(e.target.value)}
               >
-                <option value="smooth">Smooth (4 Mbps · 50ms buffer) — Best for Wi-Fi</option>
-                <option value="balanced">Balanced (8 Mbps · 50ms buffer)</option>
-                <option value="low">Low Bandwidth (2 Mbps · 50ms buffer)</option>
-                <option value="maximum">Maximum Quality (16 Mbps · 0ms)</option>
+                <option value="smooth" className="bg-ink-900 text-text-strong">Smooth (4 Mbps · 50ms buffer) — Best for Wi-Fi</option>
+                <option value="balanced" className="bg-ink-900 text-text-strong">Balanced (8 Mbps · 50ms buffer)</option>
+                <option value="low" className="bg-ink-900 text-text-strong">Low Bandwidth (2 Mbps · 50ms buffer)</option>
+                <option value="maximum" className="bg-ink-900 text-text-strong">Maximum Quality (16 Mbps · 0ms)</option>
               </select>
             </div>
           </div>
           {/* Toggles */}
-          <div className="rounded-lg border border-zinc-200/80 p-3 space-y-2.5 dark:border-zinc-800">
+          <div className="rounded-lg border border-ink-700 bg-ink-950 p-3 space-y-2.5">
             <label className="flex items-center justify-between cursor-pointer text-xs">
-              <span className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
-                <Zap className="h-3.5 w-3.5 text-amber-500" />
+              <span className="flex items-center gap-2 text-text">
+                <Zap className="h-3.5 w-3.5 text-status-warning" />
                 Turn on Torch / Flash
               </span>
               <input
                 type="checkbox"
                 checked={torch}
                 onChange={(e) => setTorch(e.target.checked)}
-                className="h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
+                className="h-4 w-4 accent-gold-400"
               />
             </label>
 
             <label className="flex items-center justify-between cursor-pointer text-xs">
-              <span className="flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
+              <span className="flex items-center gap-2 text-text">
                 {micAudio ? (
-                  <Volume2 className="h-3.5 w-3.5 text-sky-500" />
+                  <Volume2 className="h-3.5 w-3.5 text-mist-300" />
                 ) : (
-                  <VolumeX className="h-3.5 w-3.5 text-zinc-400" />
+                  <VolumeX className="h-3.5 w-3.5 text-text-muted" />
                 )}
                 Capture Microphone Audio
               </span>
@@ -306,7 +306,7 @@ export function CameraLaunchDialog({
                 type="checkbox"
                 checked={micAudio}
                 onChange={(e) => setMicAudio(e.target.checked)}
-                className="h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
+                className="h-4 w-4 accent-gold-400"
               />
             </label>
           </div>
@@ -320,7 +320,6 @@ export function CameraLaunchDialog({
               size="sm"
               onClick={handleLaunch}
               disabled={starting}
-              className="bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
               {starting ? (
                 <>
