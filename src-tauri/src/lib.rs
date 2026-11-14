@@ -1,4 +1,5 @@
 mod commands;
+mod device_identity;
 mod embed;
 pub mod kvm;
 mod phone_files;
@@ -38,6 +39,7 @@ pub fn run() {
             commands::discover_wireless,
             commands::pair_device,
             commands::connect_device,
+            commands::reconnect_wireless,
             commands::disconnect_device,
             commands::send_keyevent,
             commands::open_notifications,

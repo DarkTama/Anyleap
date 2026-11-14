@@ -13,6 +13,8 @@ import type {
   PhoneNotification,
   PhoneToggleKey,
   PhoneToggles,
+  ReconnectResult,
+  ReconnectTarget,
   SessionExited,
   SessionInfo,
 } from "./types";
@@ -46,6 +48,9 @@ export const pairDevice = (host: string, port: number, code: string) =>
 
 export const connectDevice = (host: string, port: number) =>
   invoke<string>("connect_device", { host, port });
+
+export const reconnectWireless = (target: ReconnectTarget) =>
+  invoke<ReconnectResult>("reconnect_wireless", { target });
 
 export const disconnectDevice = (host: string, port: number) =>
   invoke<void>("disconnect_device", { host, port });

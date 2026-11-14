@@ -43,6 +43,8 @@ interface AppStore {
   openDoctor: (serial?: string | null) => void;
   closeDoctor: () => void;
   setTimelineOpen: (open: boolean) => void;
+  repairNeeded: Record<string, string>;
+  setRepairNeeded: (key: string, msg: string | null) => void;
 
   setDevices: (d: DeviceInfo[]) => void;
   setSessions: (s: SessionInfo[]) => void;
@@ -75,7 +77,18 @@ export const useAppStore = create<AppStore>((set) => ({
   doctorOpen: false,
   doctorSerial: null,
   timelineOpen: false,
+  repairNeeded: {},
 
+  setRepairNeeded: (key, msg) =>
+    set((st) => {
+      const next = { ...st.repairNeeded };
+      if (msg) {
+        next[key] = msg;
+      } else {
+        delete next[key];
+      }
+      return { repairNeeded: next };
+    }),
   setNicknames: (nicknames) => set({ nicknames }),
   setSelectedSerial: (selectedSerial) => set({ selectedSerial }),
   setCurrentMode: (currentMode) => set({ currentMode }),

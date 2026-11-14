@@ -11,11 +11,18 @@ export type DeviceState =
   | "sideload"
   | (string & {});
 
+export interface DeviceTransports {
+  usb?: string | null;
+  wifi?: string | null;
+}
+
 export interface DeviceInfo {
   serial: string;
+  hw_serial?: string | null;
   state: DeviceState;
   model: string | null;
   product: string | null;
+  transports?: DeviceTransports;
 }
 
 export interface SessionInfo {
@@ -121,14 +128,32 @@ export interface MdnsService {
   serviceType: string; // "_adb-tls-pairing._tcp" | "_adb-tls-connect._tcp" | "_adb._tcp"
   host: string;
   port: number;
+  hwSerial?: string | null;
 }
 
 export interface SavedDevice {
-  id: string; // pragmatic key = host (M2)
+  id: string; // hw_serial when resolved, else legacy host / host:port
+  hw_serial?: string | null;
   label: string;
   host: string;
   port: number; // last-known connect port
-  lastSerial: string; // "host:port" as last seen by listDevices
+  lastSerial: string; // last-known adb serial ("host:port" or usb serial)
+  transports?: DeviceTransports;
+}
+
+export interface ReconnectTarget {
+  hwSerial?: string | null;
+  host: string;
+  port: number;
+}
+
+export interface ReconnectResult {
+  status: "already_connected" | "reconnected" | "needs_repair";
+  serial?: string | null;
+  hwSerial?: string | null;
+  host?: string | null;
+  port?: number | null;
+  message?: string | null;
 }
 
 export interface MirrorRect {

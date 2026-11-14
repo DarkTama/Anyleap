@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { selectClass } from "@/lib/styles";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
-import { connectDevice, discoverWireless, listDevices, pairDevice } from "@/lib/tauri";
+import { connectDevice, discoverWireless, pairDevice } from "@/lib/tauri";
 import { upsertSaved } from "@/lib/savedDevices";
+import { resolveDeviceTarget } from "@/lib/deviceStatus";
+import { syncDevicesAndMigrate } from "@/lib/deviceSync";
 import { generatePairingChallenge, type PairingChallenge } from "@/lib/qr";
 import type { MdnsService, SavedDevice } from "@/lib/types";
 
@@ -17,8 +19,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const POLL_MS = 800;
 
 export function PairDialog({ onClose }: { onClose: () => void }) {
-  const setDevices = useAppStore((s) => s.setDevices);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
+  const setSelectedSerial = useAppStore((s) => s.setSelectedSerial);
   const setError = useAppStore((s) => s.setError);
 
   const [mode, setMode] = useState<Mode>("qr");
@@ -43,16 +45,24 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
   const [pairCode, setPairCode] = useState("");
   const [connectPort, setConnectPort] = useState("");
 
-  async function finishConnected(host: string, port: number) {
+  async function finishConnected(host: string, port: number, hwSerial?: string | null) {
+    const hw = hwSerial || undefined;
     const device: SavedDevice = {
-      id: host,
+      id: hw ?? host,
+      hw_serial: hw,
       label: host,
       host,
       port,
       lastSerial: `${host}:${port}`,
+      transports: { wifi: `${host}:${port}` },
     };
-    setSavedDevices(await upsertSaved(device));
-    setDevices(await listDevices());
+    const nextSaved = await upsertSaved(device);
+    setSavedDevices(nextSaved);
+    const { devices } = await syncDevicesAndMigrate();
+    const resolved = resolveDeviceTarget(hw ?? `${host}:${port}`, devices, nextSaved);
+    if (resolved.activeSerial) {
+      setSelectedSerial(resolved.activeSerial);
+    }
     onClose();
   }
 
@@ -148,7 +158,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
         return;
       }
       if (cancelled) return;
-      await finishConnected(connect.host, connect.port);
+      await finishConnected(connect.host, connect.port, connect.hwSerial);
       logActivity({
         kind: "device",
         title: `Paired & connected ${connect.host}:${connect.port}`,
@@ -183,7 +193,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
       }
       setStatus("Connecting…");
       await connectDevice(connect.host, connect.port);
-      await finishConnected(connect.host, connect.port);
+      await finishConnected(connect.host, connect.port, connect.hwSerial);
       logActivity({
         kind: "device",
         title: `Paired & connected ${connect.host}:${connect.port}`,
