@@ -93,55 +93,55 @@ export function ComputersView() {
   const [linkTone, linkMessage] =
     role === "main"
       ? status.is_input_trapped
-        ? ["bg-sky-400 animate-pulse", `Controlling ${peerName} now.`]
+        ? ["bg-gold-400", `Controlling ${peerName} now.`]
         : [
-            "bg-emerald-400",
+            "bg-status-success",
             `Linked to ${peerName} as Main PC. Move your cursor past the ${(edge || "right").toUpperCase()} edge to control it.`,
           ]
       : [
-          "bg-zinc-500",
+          "bg-text-muted",
           allowControl
             ? "Ready to link. Click Link on another PC to control it, or let another PC link to this one."
             : "Not linked. Turn on 'Allow other PCs to control this PC' if another PC will link to this one.",
         ];
 
   return (
-    <div className="relative flex h-full flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-6 text-zinc-100 space-y-6 select-none">
+    <div className="relative flex h-full flex-1 flex-col overflow-y-auto bg-ink-950 p-6 text-text space-y-6 select-none">
       {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#222226] pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-700 pb-4">
         <div>
-          <h1 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+          <h1 className="text-sm font-semibold text-text-strong flex items-center gap-2">
             Shared Mouse &amp; Keyboard
             {status.local_name && (
-              <span className="rounded bg-zinc-800 px-2 py-0.5 font-mono text-[10px] text-zinc-300">
+              <span className="rounded bg-ink-800 px-2 py-0.5 font-mono text-[10px] text-text border border-ink-700">
                 {status.local_name}
               </span>
             )}
             {role === "main" && (
-              <span className="rounded bg-sky-500/15 border border-sky-500/30 px-2 py-0.5 font-mono text-[10px] text-sky-300">
+              <span className="rounded bg-ink-800 border border-mist-300/40 px-2 py-0.5 font-mono text-[10px] text-mist-300">
                 Main PC
               </span>
             )}
             {role === "linked" && (
-              <span className="rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 font-mono text-[10px] text-emerald-300">
+              <span className="rounded bg-status-success-bg border border-status-success/40 px-2 py-0.5 font-mono text-[10px] text-status-success">
                 Linked PC
               </span>
             )}
           </h1>
-          <p className="mt-0.5 text-xs text-zinc-400">
+          <p className="mt-0.5 text-xs text-text-muted">
             Share your mouse and keyboard with another PC by moving the cursor across screen edges.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           {sections.showAllowControlToggle && (
-            <label className="flex items-center gap-2 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs text-zinc-200 cursor-pointer">
+            <label className="flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-1.5 text-xs text-text cursor-pointer">
               <input
                 type="checkbox"
                 checked={allowControl}
                 disabled={isLoading}
                 onChange={(e) => void setAllowControl(e.target.checked)}
-                className="accent-cyan-500 cursor-pointer"
+                className="accent-gold-400 cursor-pointer"
               />
               <span>Allow other PCs to control this PC</span>
             </label>
@@ -151,9 +151,9 @@ export function ComputersView() {
             <button
               type="button"
               onClick={() => openPairingModal()}
-              className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer"
+              className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900 px-3 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:bg-ink-800 cursor-pointer"
             >
-              <KeyRound className="h-3.5 w-3.5 text-zinc-400" />
+              <KeyRound className="h-3.5 w-3.5 text-gold-400" />
               <span>
                 {allowControl && status.security_pin
                   ? `Pairing code: ${status.security_pin}`
@@ -167,7 +167,7 @@ export function ComputersView() {
               type="button"
               disabled={isLoading}
               onClick={() => void disconnectPeer()}
-              className="btn-tactile flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 cursor-pointer disabled:opacity-40"
+              className="btn-tactile flex items-center gap-1.5 rounded-lg border border-status-danger/40 bg-status-danger-bg px-3 py-1.5 text-xs font-semibold text-status-danger hover:opacity-90 cursor-pointer disabled:opacity-40"
             >
               <Unlink className="h-3.5 w-3.5" />
               <span>Unlink</span>
@@ -177,24 +177,24 @@ export function ComputersView() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-950/40 p-3 text-xs text-rose-200">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+        <div className="flex items-center gap-2 rounded-xl border border-status-danger/40 bg-status-danger-bg p-3 text-xs text-status-danger">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-status-danger" />
           <span>{error}</span>
         </div>
       )}
 
       {/* Status Card (Not linked & Main PC) */}
       {sections.showStatusCard && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#222226] bg-[#141417] px-4 py-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-700 bg-ink-900 px-4 py-3 text-xs">
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 shrink-0 rounded-full ${linkTone}`} />
-            <span className="font-medium text-zinc-300">
+            <span className="font-medium text-text">
               {linkMessage}
               {role === "main" && (
                 <>
                   {" "}
                   Emergency escape:{" "}
-                  <kbd className="rounded bg-[#202026] px-1.5 py-0.5 font-mono text-zinc-100 border border-[#27272a]">
+                  <kbd className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-text-strong border border-ink-700">
                     Scroll Lock, Pause, or Ctrl+Alt+Esc
                   </kbd>
                   .
@@ -207,7 +207,7 @@ export function ComputersView() {
             <button
               type="button"
               onClick={() => void emergencyRelease()}
-              className="btn-tactile rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/40 px-3 py-1 font-mono text-xs hover:bg-rose-500/30 cursor-pointer font-bold"
+              className="btn-tactile rounded-md bg-status-danger-solid text-text-strong px-3 py-1 font-mono text-xs hover:opacity-90 cursor-pointer font-bold"
             >
               Bring cursor back
             </button>
@@ -217,20 +217,20 @@ export function ComputersView() {
 
       {/* Linked PC Card ("Controlled by <name>") */}
       {sections.showControlledByCard && (
-        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-emerald-500/30 bg-[#111917] p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-status-success/40 bg-status-success-bg p-5">
           <div className="flex items-center gap-3">
             <span
               className={`h-2.5 w-2.5 shrink-0 rounded-full ${
                 status.receiver_entered
-                  ? "bg-sky-400 animate-pulse"
-                  : "bg-emerald-400"
+                  ? "bg-gold-400"
+                  : "bg-status-success"
               }`}
             />
             <div>
-              <div className="text-sm font-semibold text-zinc-100">
+              <div className="text-sm font-semibold text-text-strong">
                 Controlled by {peerName}
               </div>
-              <p className="text-xs text-zinc-400 mt-0.5">
+              <p className="text-xs text-text-muted mt-0.5">
                 {status.receiver_entered
                   ? `${peerName} is currently controlling this PC's mouse and keyboard.`
                   : `${peerName} is linked and can move its cursor onto this PC.`}
@@ -242,7 +242,7 @@ export function ComputersView() {
             type="button"
             disabled={isLoading}
             onClick={() => void disconnectPeer()}
-            className="btn-tactile flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/15 px-3.5 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/25 cursor-pointer disabled:opacity-40"
+            className="btn-tactile flex items-center gap-1.5 rounded-lg border border-status-danger/40 bg-status-danger-bg px-3.5 py-1.5 text-xs font-semibold text-status-danger hover:opacity-90 cursor-pointer disabled:opacity-40"
           >
             <Unlink className="h-3.5 w-3.5" />
             <span>Unlink</span>
@@ -255,15 +255,15 @@ export function ComputersView() {
 
       {/* Discovered Nearby Computers (Not linked only) */}
       {sections.showDiscoveredPeers && (
-        <div className="rounded-xl border border-[#222226] bg-[#141417] p-5 space-y-4">
+        <div className="rounded-xl border border-ink-700 bg-ink-900 p-5 space-y-4">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
               Nearby Computers (LAN Beacon UDP 4179)
             </span>
             <button
               type="button"
               onClick={() => void refreshDiscovered()}
-              className="btn-tactile flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
+              className="btn-tactile flex items-center gap-1 text-[11px] text-text-muted hover:text-text-strong cursor-pointer"
             >
               <RefreshCw className="h-3 w-3" />
               <span>Scan</span>
@@ -271,13 +271,13 @@ export function ComputersView() {
           </div>
 
           {discoveredPeers.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-[#222226] bg-[#0c0c0e] p-6 text-center space-y-3">
-              <Monitor className="mx-auto h-8 w-8 text-zinc-600" />
+            <div className="rounded-xl border border-dashed border-ink-700 bg-ink-950 p-6 text-center space-y-3">
+              <Monitor className="mx-auto h-8 w-8 text-text-muted" />
               <div>
-                <p className="text-xs font-semibold text-zinc-300">
+                <p className="text-xs font-semibold text-text-strong">
                   No Nearby Computers Auto-Detected
                 </p>
-                <p className="text-[11px] text-zinc-500 mt-1 max-w-md mx-auto leading-relaxed">
+                <p className="text-[11px] text-text-muted mt-1 max-w-md mx-auto leading-relaxed">
                   Link directly using the other PC&apos;s local LAN IP:
                 </p>
               </div>
@@ -288,13 +288,13 @@ export function ComputersView() {
                   placeholder="192.168.x.x"
                   value={manualIp}
                   onChange={(e) => setManualIp(e.target.value)}
-                  className="h-8 flex-1 rounded-lg border border-[#27272a] bg-[#16161a] px-3 font-mono text-xs text-zinc-200 outline-none focus:border-zinc-500"
+                  className="h-8 flex-1 rounded-lg border border-ink-700 bg-ink-800 px-3 font-mono text-xs text-text-strong outline-none focus:border-gold-400"
                 />
                 <button
                   type="button"
                   onClick={() => void handleManualConnect()}
                   disabled={!manualIp.trim() || isLoading}
-                  className="btn-tactile flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer disabled:opacity-40"
+                  className="btn-tactile flex items-center gap-1.5 rounded-lg bg-gold-400 px-3 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer disabled:opacity-40"
                 >
                   <span>Link</span>
                   <ArrowRight className="h-3 w-3" />
@@ -306,17 +306,17 @@ export function ComputersView() {
               {discoveredPeers.map((peer) => (
                 <div
                   key={peer.id}
-                  className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#121215] p-3.5"
+                  className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-950 p-3.5"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="grid h-9 w-9 place-items-center rounded-lg bg-[#18181c] border border-[#27272a] text-zinc-300">
+                    <div className="grid h-9 w-9 place-items-center rounded-lg bg-ink-800 border border-ink-700 text-text">
                       <Monitor className="h-4.5 w-4.5" />
                     </div>
                     <div>
-                      <div className="text-xs font-semibold text-zinc-200">
+                      <div className="text-xs font-semibold text-text-strong">
                         {peer.name}
                       </div>
-                      <div className="font-mono text-[10px] text-zinc-500">
+                      <div className="font-mono text-[10px] text-text-muted">
                         {peer.ip}:{peer.port}
                       </div>
                     </div>
@@ -326,7 +326,7 @@ export function ComputersView() {
                     type="button"
                     disabled={isLoading}
                     onClick={() => void handleConnectPeer(peer)}
-                    className="btn-tactile rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer disabled:opacity-40"
+                    className="btn-tactile rounded-md bg-gold-400 px-3 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer disabled:opacity-40"
                   >
                     Link
                   </button>
@@ -339,15 +339,15 @@ export function ComputersView() {
 
       {/* Trusted PCs List (Linked PC only) */}
       {sections.showTrustedPeers && (
-        <div className="rounded-xl border border-[#222226] bg-[#141417] p-5 space-y-3">
+        <div className="rounded-xl border border-ink-700 bg-ink-900 p-5 space-y-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
               Trusted PCs
             </span>
             <button
               type="button"
               onClick={() => void refreshTrusted()}
-              className="btn-tactile flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
+              className="btn-tactile flex items-center gap-1 text-[11px] text-text-muted hover:text-text-strong cursor-pointer"
             >
               <RefreshCw className="h-3 w-3" />
               <span>Refresh</span>
@@ -355,7 +355,7 @@ export function ComputersView() {
           </div>
 
           {trustedPeers.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-[#222226] bg-[#0c0c0e] p-4 text-center text-xs text-zinc-500">
+            <div className="rounded-lg border border-dashed border-ink-700 bg-ink-950 p-4 text-center text-xs text-text-muted">
               No trusted PCs saved yet.
             </div>
           ) : (
@@ -363,11 +363,11 @@ export function ComputersView() {
               {trustedPeers.map((tp) => (
                 <div
                   key={tp.computer_id}
-                  className="flex items-center justify-between rounded-lg border border-[#202026] bg-[#101013] p-3 text-xs"
+                  className="flex items-center justify-between rounded-lg border border-ink-700 bg-ink-950 p-3 text-xs"
                 >
                   <div>
-                    <div className="font-semibold text-zinc-200">{tp.name}</div>
-                    <div className="font-mono text-[10px] text-zinc-500">
+                    <div className="font-semibold text-text-strong">{tp.name}</div>
+                    <div className="font-mono text-[10px] text-text-muted">
                       {tp.address || tp.computer_id}
                     </div>
                   </div>
@@ -375,7 +375,7 @@ export function ComputersView() {
                     type="button"
                     disabled={isLoading}
                     onClick={() => void forgetPeer(tp.computer_id)}
-                    className="btn-tactile flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/20 cursor-pointer disabled:opacity-40"
+                    className="btn-tactile flex items-center gap-1 rounded-md border border-status-danger/40 bg-status-danger-bg px-2.5 py-1 text-xs font-medium text-status-danger hover:opacity-90 cursor-pointer disabled:opacity-40"
                   >
                     <Trash2 className="h-3 w-3" />
                     <span>Forget</span>
@@ -388,18 +388,18 @@ export function ComputersView() {
       )}
 
       {/* Live Clipboard & File Activity Feed */}
-      <div className="rounded-xl border border-[#222226] bg-[#141417] p-5 space-y-3">
+      <div className="rounded-xl border border-ink-700 bg-ink-900 p-5 space-y-3">
         <div className="flex items-center justify-between text-xs">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Clipboard &amp; File Transfer Activity
           </span>
-          <span className="font-mono text-[10px] text-zinc-500">
+          <span className="font-mono text-[10px] text-text-muted">
             {activityFeed.length} event{activityFeed.length === 1 ? "" : "s"}
           </span>
         </div>
 
         {activityFeed.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-[#222226] bg-[#0c0c0e] p-4 text-center text-xs text-zinc-500">
+          <div className="rounded-lg border border-dashed border-ink-700 bg-ink-950 p-4 text-center text-xs text-text-muted">
             No clipboard or file sync activity yet.
           </div>
         ) : (
@@ -411,24 +411,24 @@ export function ComputersView() {
               return (
                 <div
                   key={act.id}
-                  className="flex items-center justify-between rounded-lg border border-[#202026] bg-[#101013] p-2.5 text-xs"
+                  className="flex items-center justify-between rounded-lg border border-ink-700 bg-ink-950 p-2.5 text-xs"
                 >
                   <div className="flex items-center gap-2.5 truncate max-w-[70%]">
                     {act.type === "text" && (
-                      <FileText className="h-4 w-4 text-sky-400 shrink-0" />
+                      <FileText className="h-4 w-4 text-mist-300 shrink-0" />
                     )}
                     {act.type === "image" && (
-                      <ImageIcon className="h-4 w-4 text-emerald-400 shrink-0" />
+                      <ImageIcon className="h-4 w-4 text-status-success shrink-0" />
                     )}
                     {act.type === "file" && (
-                      <FileIcon className="h-4 w-4 text-amber-400 shrink-0" />
+                      <FileIcon className="h-4 w-4 text-status-warning shrink-0" />
                     )}
                     <div className="flex flex-col truncate">
-                      <span className="truncate text-zinc-200 font-mono text-[11px]">
+                      <span className="truncate text-text-strong font-mono text-[11px]">
                         {act.name}
                       </span>
                       {act.savedPath && (
-                        <span className="truncate text-zinc-500 font-mono text-[9px]">
+                        <span className="truncate text-text-muted font-mono text-[9px]">
                           Saved: {act.savedPath}
                         </span>
                       )}
@@ -438,23 +438,23 @@ export function ComputersView() {
                   <div className="flex items-center gap-3 shrink-0">
                     {isSyncing ? (
                       <div className="flex items-center gap-2">
-                        <div className="h-1.5 w-16 rounded-full bg-zinc-800 overflow-hidden">
+                        <div className="h-1.5 w-16 rounded-full bg-ink-800 overflow-hidden">
                           <div
-                            className="h-full bg-sky-400 transition-all duration-150"
+                            className="h-full bg-gold-400 transition-[width] duration-150 ease-out"
                             style={{ width: `${act.progressPercent}%` }}
                           />
                         </div>
-                        <span className="font-mono text-[10px] text-sky-400">
+                        <span className="font-mono text-[10px] text-gold-400">
                           {act.progressPercent}%
                         </span>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1 font-mono text-[10px] text-emerald-400">
+                      <div className="flex items-center gap-1 font-mono text-[10px] text-status-success">
                         <CheckCircle2 className="h-3 w-3" />
                         <span>Synced</span>
                       </div>
                     )}
-                    <span className="font-mono text-[10px] text-zinc-600">
+                    <span className="font-mono text-[10px] text-text-muted">
                       {timeStr}
                     </span>
                   </div>
@@ -467,25 +467,25 @@ export function ComputersView() {
 
       {/* Feature Badges */}
       <div className="grid grid-cols-2 gap-4 pt-1">
-        <div className="flex items-start gap-3 rounded-xl border border-[#222226] bg-[#141417] p-3.5">
-          <Zap className="h-4 w-4 shrink-0 text-cyan-400 mt-0.5" />
+        <div className="flex items-start gap-3 rounded-xl border border-ink-700 bg-ink-900 p-3.5">
+          <Zap className="h-4 w-4 shrink-0 text-gold-400 mt-0.5" />
           <div>
-            <div className="text-xs font-semibold text-zinc-200">
+            <div className="text-xs font-semibold text-text-strong">
               Low-latency pointer (QUIC datagrams)
             </div>
-            <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+            <p className="text-[11px] text-text-muted mt-0.5 leading-relaxed">
               Relative mouse deltas travel as unreliable QUIC datagrams so bulk transfers never delay the cursor.
             </p>
           </div>
         </div>
 
-        <div className="flex items-start gap-3 rounded-xl border border-[#222226] bg-[#141417] p-3.5">
-          <Shield className="h-4 w-4 shrink-0 text-emerald-400 mt-0.5" />
+        <div className="flex items-start gap-3 rounded-xl border border-ink-700 bg-ink-900 p-3.5">
+          <Shield className="h-4 w-4 shrink-0 text-status-success mt-0.5" />
           <div>
-            <div className="text-xs font-semibold text-zinc-200">
+            <div className="text-xs font-semibold text-text-strong">
               Auto-Return Boundary Edge
             </div>
-            <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+            <p className="text-[11px] text-text-muted mt-0.5 leading-relaxed">
               Moving your cursor back past the boundary edge immediately unhooks and restores local pointer control.
             </p>
           </div>

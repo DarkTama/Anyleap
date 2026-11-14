@@ -16,10 +16,12 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | 5 | Native virtual webcam (Media Foundation) | SPEC-15 | queued | Windows 11 only. Existing spec. |
 | 6 | PC display streaming | SPEC-13 | queued | Reuse the QUIC connection from #1. |
 | 7 | Shared Mouse & Keyboard UX, role-aware links, fingerprint reconnect & offset-aware layout | SPEC-23 | review | This PR. |
-| 8 | Per-monitor layout mapping | SPEC-24 | queued | Next. |
+| 8 | "Ink & Gold" app theme + interaction polish | SPEC-26 | in-progress | Replaces Graphite palette (SPEC-17); flat tokens + design-engineering interaction polish. |
+| 9 | Per-monitor layout mapping | SPEC-24 | queued | Next. |
 | — | **Release** | — | queued | Version bump + release after SPEC-23/24 manual tests pass. |
-| 9 | Pointer scheme sync | SPEC-25 | queued | Optional toggle; uses `SetSystemCursor` + `SPI_SETCURSORS` restore, registry untouched. |
-| 10 | Cross-platform Linux/macOS input adapters | — | queued | Blocked on testers; Windows first. |
+| 10 | Pointer scheme sync | SPEC-25 | queued | Optional toggle; uses `SetSystemCursor` + `SPI_SETCURSORS` restore, registry untouched. |
+| 11 | New app icons from the Ink & Gold logo kit | — | queued | Separate PR after the kit is ready. |
+| 12 | Cross-platform Linux/macOS input adapters | — | queued | Blocked on testers; Windows first. |
 
 **Merge order:** #1 → #2 → #3 → #4. Later branches rebase onto earlier ones; after #3 lands, #2 and #4 get a follow-up to call `logActivity()`.
 

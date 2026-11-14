@@ -46,20 +46,20 @@ export function DesktopHudWindow() {
   return (
     <div className="flex h-screen w-screen items-center justify-center select-none overflow-hidden bg-transparent pointer-events-none">
       <div
-        className={`flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] backdrop-blur-md pointer-events-none animate-in fade-in duration-150 ${
+        className={`hud-pill flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] pointer-events-none shadow-elevated ${
           isRemote
-            ? "border-sky-400/60 bg-[#0c182b]/90 text-sky-100"
-            : "border-zinc-700/70 bg-[#121216]/85 text-zinc-200"
+            ? "border-gold-400 bg-ink-900 text-text-strong"
+            : "border-ink-700 bg-ink-900 text-text"
         }`}
       >
         {isRemote ? (
-          <Laptop className="h-3 w-3 shrink-0 text-sky-300" />
+          <Laptop className="h-3 w-3 shrink-0 text-gold-400" />
         ) : (
-          <Monitor className="h-3 w-3 shrink-0 text-zinc-400" />
+          <Monitor className="h-3 w-3 shrink-0 text-text-muted" />
         )}
         <span className="truncate font-medium">{activeName}</span>
         {isRemote && (
-          <span className="shrink-0 text-[9px] uppercase tracking-wide text-sky-300/80">remote</span>
+          <span className="shrink-0 text-[9px] uppercase tracking-wide text-gold-400">remote</span>
         )}
       </div>
     </div>

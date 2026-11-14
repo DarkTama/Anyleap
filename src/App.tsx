@@ -550,7 +550,7 @@ function App() {
   }, [selectedSerial, devices, sessions, kvmRunning, openDoctor, setTimelineOpen, setError]);
 
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#0c0c0e] text-zinc-100">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-ink-950 text-text">
       <AppHeader
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -559,11 +559,11 @@ function App() {
       />
 
       {error && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl rounded-lg border border-rose-500/40 bg-rose-950/90 px-3.5 py-2.5 text-xs text-rose-200 shadow-2xl backdrop-blur-md">
+        <div className="popover-panel absolute top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl rounded-lg border border-status-danger/40 bg-status-danger-bg px-3.5 py-2.5 text-xs text-status-danger shadow-elevated">
           <div className="flex items-start justify-between gap-2">
             <span className="font-mono">{error}</span>
             <button
-              className="shrink-0 text-[10px] uppercase font-bold underline opacity-80 hover:opacity-100 cursor-pointer"
+              className="btn-tactile shrink-0 text-[10px] uppercase font-bold underline opacity-85 hover:opacity-100 cursor-pointer"
               onClick={() => {
                 setError(null);
                 setErrorDetails(null);
@@ -576,13 +576,13 @@ function App() {
           {errorDetails && (
             <div className="mt-1">
               <button
-                className="text-[10px] underline opacity-80 hover:opacity-100 cursor-pointer"
+                className="btn-tactile text-[10px] underline opacity-85 hover:opacity-100 cursor-pointer"
                 onClick={() => setShowDetails((v) => !v)}
               >
                 {showDetails ? "Hide technical log" : "Show technical log"}
               </button>
               {showDetails && (
-                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/50 p-2 font-mono text-[10px] text-rose-300">
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-ink-950 p-2 font-mono text-[10px] text-status-danger">
                   {errorDetails}
                 </pre>
               )}
@@ -607,7 +607,7 @@ function App() {
         )}
         {activeTab === "computers" && <ComputersView />}
         {activeTab === "settings" && (
-          <div className="flex flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-6 max-w-4xl mx-auto w-full">
+          <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-6 max-w-4xl mx-auto w-full">
             <SettingsPanel />
           </div>
         )}

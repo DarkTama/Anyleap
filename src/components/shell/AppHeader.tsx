@@ -18,29 +18,27 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
   const currentVersion = useAppUpdateStore((s) => s.currentVersion);
 
   return (
-    <header className="flex h-13 shrink-0 items-center justify-between border-b border-[#222226] bg-[#0c0c0e] px-4 select-none">
+    <header className="flex h-13 shrink-0 items-center justify-between border-b border-ink-700 bg-ink-950 px-4 select-none">
       {/* Brand & Version Chip */}
       <div className="flex items-center gap-2.5">
-        <div className="flex items-center gap-2 font-bold tracking-tight text-zinc-100 text-[13px]">
+        <div className="flex items-center gap-2 font-bold tracking-tight text-text-strong text-[13px]">
           <AppLogo className="h-5 w-5 shrink-0" />
-          <span className="bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-            AnyLeap
-          </span>
-          <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-400">
+          <span className="text-text-strong">AnyLeap</span>
+          <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] font-medium text-text-muted">
             v{currentVersion}
           </span>
         </div>
       </div>
 
       {/* Segmented Navigation Tabs */}
-      <nav className="flex items-center rounded-lg border border-[#222226] bg-[#141417] p-0.5">
+      <nav className="flex items-center rounded-lg border border-ink-700 bg-ink-900 p-0.5">
         <button
           type="button"
           onClick={() => onTabChange("devices")}
           className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium cursor-pointer ${
             activeTab === "devices"
-              ? "bg-[#222228] text-zinc-100 shadow-sm"
-              : "text-zinc-400 hover:text-zinc-200"
+              ? "bg-ink-800 text-gold-400"
+              : "text-text-muted hover:text-text-strong"
           }`}
         >
           <Smartphone className="h-3.5 w-3.5" />
@@ -52,8 +50,8 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
           onClick={() => onTabChange("phone")}
           className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium cursor-pointer ${
             activeTab === "phone"
-              ? "bg-[#222228] text-zinc-100 shadow-sm"
-              : "text-zinc-400 hover:text-zinc-200"
+              ? "bg-ink-800 text-gold-400"
+              : "text-text-muted hover:text-text-strong"
           }`}
         >
           <TabletSmartphone className="h-3.5 w-3.5" />
@@ -65,8 +63,8 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
           onClick={() => onTabChange("computers")}
           className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium cursor-pointer ${
             activeTab === "computers"
-              ? "bg-[#222228] text-zinc-100 shadow-sm"
-              : "text-zinc-400 hover:text-zinc-200"
+              ? "bg-ink-800 text-gold-400"
+              : "text-text-muted hover:text-text-strong"
           }`}
         >
           <Monitor className="h-3.5 w-3.5" />
@@ -78,8 +76,8 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
           onClick={() => onTabChange("settings")}
           className={`btn-tactile flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium cursor-pointer ${
             activeTab === "settings"
-              ? "bg-[#222228] text-zinc-100 shadow-sm"
-              : "text-zinc-400 hover:text-zinc-200"
+              ? "bg-ink-800 text-gold-400"
+              : "text-text-muted hover:text-text-strong"
           }`}
         >
           <Sliders className="h-3.5 w-3.5" />
@@ -94,12 +92,12 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
         <button
           type="button"
           onClick={onOpenCommands}
-          className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer"
+          className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1 text-xs font-medium text-text hover:border-text-muted hover:bg-ink-800 cursor-pointer"
           title="Open command palette (Ctrl+K)"
         >
-          <Command className="h-3.5 w-3.5 text-zinc-400" />
+          <Command className="h-3.5 w-3.5 text-text-muted" />
           <span className="hidden sm:inline">Commands</span>
-          <kbd className="hidden md:inline rounded border border-[#27272a] bg-[#111114] px-1 py-0.2 font-mono text-[10px] text-zinc-400">
+          <kbd className="hidden md:inline rounded border border-ink-700 bg-ink-950 px-1 py-0.2 font-mono text-[10px] text-text-muted">
             Ctrl+K
           </kbd>
         </button>
@@ -107,19 +105,19 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
         <button
           type="button"
           onClick={onOpenPair}
-          className="btn-tactile flex items-center gap-1.5 rounded-lg border border-[#27272a] bg-[#16161a] px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:bg-[#1c1c21] cursor-pointer"
+          className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1 text-xs font-medium text-text hover:border-text-muted hover:bg-ink-800 cursor-pointer"
         >
-          <Wifi className="h-3.5 w-3.5 text-zinc-400" />
+          <Wifi className="h-3.5 w-3.5 text-text-muted" />
           <span className="hidden sm:inline">Pair Device</span>
         </button>
 
-        <div className="flex items-center gap-1.5 rounded-md border border-[#222226] bg-[#121215] px-2.5 py-1 font-mono text-[11px]">
+        <div className="flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 font-mono text-[11px]">
           <span
             className={`h-2 w-2 rounded-full ${
-              sessions.length > 0 ? "bg-emerald-400 animate-pulse" : "bg-zinc-600"
+              sessions.length > 0 ? "bg-status-success" : "bg-text-muted"
             }`}
           />
-          <span className={sessions.length > 0 ? "text-emerald-300 font-semibold" : "text-zinc-400"}>
+          <span className={sessions.length > 0 ? "text-status-success font-semibold" : "text-text-muted"}>
             {sessions.length > 0 ? `${sessions.length} LIVE` : "STANDBY"}
           </span>
         </div>

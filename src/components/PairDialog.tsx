@@ -273,9 +273,9 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
 
         {mode === "qr" && (
           <div className="space-y-3">
-            <p className="text-xs text-zinc-500">
-              On your phone: Settings → Developer options → <b>Wireless debugging</b> →{" "}
-              <b>Pair device with QR code</b>, then scan this:
+            <p className="text-xs text-text-muted">
+              On your phone: Settings → Developer options → <b className="text-text-strong">Wireless debugging</b> →{" "}
+              <b className="text-text-strong">Pair device with QR code</b>, then scan this:
             </p>
             {challenge && (
               <div className="flex justify-center rounded-md bg-white p-4">
@@ -288,8 +288,8 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
             <div className="flex items-center justify-between">
-              <p className="flex items-center gap-2 text-xs text-zinc-500">
-                {qrBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              <p className="flex items-center gap-2 text-xs text-text-muted">
+                {qrBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-gold-400" />}
                 {qrStatus ?? "Ready to scan."}
               </p>
               <Button
@@ -309,12 +309,12 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
 
         {mode === "mdns" && (
           <div className="space-y-2">
-            <p className="text-xs text-zinc-500">
-              On your phone: <b>Wireless debugging</b> → <b>Pair device with pairing code</b>,
+            <p className="text-xs text-text-muted">
+              On your phone: <b className="text-text-strong">Wireless debugging</b> → <b className="text-text-strong">Pair device with pairing code</b>,
               then Refresh.
             </p>
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-zinc-500">
+              <label className="text-xs font-medium text-text-muted">
                 Discovered pairing endpoints
               </label>
               <Button size="sm" variant="outline" onClick={refreshServices} disabled={busy}>
@@ -323,7 +323,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
               </Button>
             </div>
             {pairingServices.length === 0 ? (
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-text-muted">
                 None found yet. Open the pairing screen, then Refresh. If nothing appears,
                 your network may block mDNS — use Manual.
               </p>
@@ -359,8 +359,8 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
 
         {mode === "manual" && (
           <div className="space-y-2">
-            <p className="text-xs text-zinc-500">
-              On your phone: <b>Wireless debugging</b> → <b>Pair device with pairing code</b>.
+            <p className="text-xs text-text-muted">
+              On your phone: <b className="text-text-strong">Wireless debugging</b> → <b className="text-text-strong">Pair device with pairing code</b>.
             </p>
             <input
               className={selectClass}
@@ -391,7 +391,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
               value={connectPort}
               onChange={(e) => setConnectPort(e.target.value)}
             />
-            <p className="text-[11px] text-zinc-400">
+            <p className="text-[11px] text-text-muted">
               Pairing port + code come from the "Pair with code" dialog; the connect port is on
               the main Wireless debugging screen.
             </p>
@@ -401,7 +401,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {status && <p className="text-xs text-zinc-500">{status}</p>}
+        {status && <p className="text-xs text-text-muted">{status}</p>}
       </CardContent>
     </Card>
   );

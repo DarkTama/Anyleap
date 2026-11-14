@@ -50,9 +50,9 @@ import { KEYCODE } from "@/lib/keycodes";
 import type { ControlConfig, ControlSize } from "@/lib/controlConfig";
 
 const SIZE: Record<ControlSize, { btn: string; icon: string }> = {
-  sm: { btn: "h-8 w-8 flex-col gap-0.5 p-0 text-[9px] hover:bg-zinc-800 hover:text-white text-zinc-300 border-zinc-800/60", icon: "h-3.5 w-3.5" },
-  md: { btn: "h-9 w-9 flex-col gap-0.5 p-0 text-[10px] hover:bg-zinc-800 hover:text-white text-zinc-300 border-zinc-800/60", icon: "h-4 w-4" },
-  lg: { btn: "h-11 w-11 flex-col gap-1 p-0 text-xs hover:bg-zinc-800 hover:text-white text-zinc-300 border-zinc-800/60", icon: "h-5 w-5" },
+  sm: { btn: "h-8 w-8 flex-col gap-0.5 p-0 text-[9px] hover:bg-ink-800 hover:text-text-strong text-text border-ink-700", icon: "h-3.5 w-3.5" },
+  md: { btn: "h-9 w-9 flex-col gap-0.5 p-0 text-[10px] hover:bg-ink-800 hover:text-text-strong text-text border-ink-700", icon: "h-4 w-4" },
+  lg: { btn: "h-11 w-11 flex-col gap-1 p-0 text-xs hover:bg-ink-800 hover:text-text-strong text-text border-ink-700", icon: "h-5 w-5" },
 };
 
 /** Android nav + media/power keys for a device (via adb input). Buttons shown,
@@ -191,7 +191,7 @@ export function ControlBar({
   const container =
     orientation === "vertical"
       ? "p-1.5"
-      : "border-t border-zinc-100 px-3 py-3 dark:border-zinc-800/60";
+      : "border-t border-ink-700 px-3 py-3";
   const wrap =
     orientation === "vertical"
       ? "flex flex-col items-center gap-1.5"
@@ -203,7 +203,7 @@ export function ControlBar({
           <>
             <Button
               variant={torchOn ? "default" : "outline"}
-              className={`${sz.btn} ${torchOn ? "bg-amber-600 hover:bg-amber-500 text-white" : ""}`}
+              className={`${sz.btn} ${torchOn ? "bg-status-warning text-ink-950 border-status-warning hover:opacity-90" : ""}`}
               onClick={toggleTorch}
               title="Toggle Camera Flash / Torch"
             >
@@ -242,7 +242,7 @@ export function ControlBar({
             )}
             <Button
               variant="outline"
-              className={`${sz.btn} text-sky-400 hover:bg-sky-950/50 hover:text-sky-300 border-sky-900/40`}
+              className={`${sz.btn} text-mist-300 hover:bg-ink-800 hover:text-mist-300 border-mist-300/40`}
               onClick={() => setShowObsGuide((v) => !v)}
               title="How to use with Google Meet, Zoom, or OBS"
             >
@@ -357,7 +357,7 @@ export function ControlBar({
         {b.record && (
           <Button
             variant={isRecording ? "default" : "outline"}
-            className={`${sz.btn} ${isRecording ? "bg-rose-600/20 text-rose-300 border-rose-500/50 hover:bg-rose-600/30" : ""}`}
+            className={`${sz.btn} ${isRecording ? "bg-status-danger-bg text-status-danger border-status-danger/50 hover:opacity-90" : ""}`}
             onClick={toggleRecord}
             disabled={recBusy}
             title={isRecording ? "Stop recording" : "Start screen recording"}
@@ -365,7 +365,7 @@ export function ControlBar({
             <span className="relative inline-flex items-center justify-center">
               <Disc className={sz.icon} />
               {isRecording && (
-                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
+                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-status-danger" />
               )}
             </span>
             {isRecording ? "Stop rec" : "Record"}
@@ -418,7 +418,7 @@ export function ControlBar({
         {b.endCall && (
           <Button
             variant="outline"
-            className={`${sz.btn} hover:bg-rose-950/50 hover:text-rose-300 hover:border-rose-800/60`}
+            className={`${sz.btn} hover:bg-status-danger-bg hover:text-status-danger hover:border-status-danger/50`}
             onClick={handleEndCall}
             title="End active phone call"
           >
@@ -430,42 +430,42 @@ export function ControlBar({
         )}
       </div>
       {showObsGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs">
-          <div className="relative w-full max-w-sm rounded-xl border border-sky-500/30 bg-[#0e121a] p-4 text-left shadow-2xl space-y-3">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-sky-400">
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4">
+          <div className="modal-panel relative w-full max-w-sm rounded-xl border border-ink-700 bg-ink-900 p-4 text-left shadow-elevated space-y-3">
+            <div className="flex items-center justify-between border-b border-ink-700 pb-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-mist-300">
                 <Camera className="h-4 w-4" />
                 <span>Google Meet & OBS Virtual Camera</span>
               </div>
               <button
                 type="button"
                 onClick={() => setShowObsGuide(false)}
-                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <ol className="list-decimal list-inside space-y-2 text-[11px] text-zinc-300 leading-relaxed">
+            <ol className="list-decimal list-inside space-y-2 text-[11px] text-text leading-relaxed">
               <li>
-                Open <strong className="text-white">OBS Studio</strong> (free desktop app).
+                Open <strong className="text-text-strong">OBS Studio</strong> (free desktop app).
               </li>
               <li>
                 In Sources, click <strong>+ → Window Capture</strong>.
               </li>
               <li>
-                Select <strong className="text-cyan-300">AnyLeap Camera Studio</strong>.
+                Select <strong className="text-gold-400">AnyLeap Camera Studio</strong>.
               </li>
               <li>
-                In OBS (bottom right), click <strong className="text-emerald-400">Start Virtual Camera</strong>.
+                In OBS (bottom right), click <strong className="text-status-success">Start Virtual Camera</strong>.
               </li>
               <li>
-                In <strong className="text-sky-300">meet.google.com</strong> or Zoom settings, choose <strong className="text-sky-300">OBS Virtual Camera</strong>.
+                In <strong className="text-mist-300">meet.google.com</strong> or Zoom settings, choose <strong className="text-mist-300">OBS Virtual Camera</strong>.
               </li>
             </ol>
             <button
               type="button"
               onClick={() => setShowObsGuide(false)}
-              className="w-full rounded-lg bg-sky-600 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition-colors cursor-pointer"
+              className="btn-tactile w-full rounded-lg bg-gold-400 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer"
             >
               Got it
             </button>

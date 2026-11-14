@@ -210,7 +210,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   const targetNickname = selectedSerial ? nicknames[selectedSerial] : undefined;
 
   return (
-    <div className="flex h-full w-full overflow-hidden select-none bg-[#0c0c0e]">
+    <div className="flex h-full w-full overflow-hidden select-none bg-ink-950">
       {/* Left Column: Device Hardware Rack */}
       <DeviceRack
         selectedSerial={selectedSerial}
@@ -218,7 +218,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
       />
 
       {/* Right Column: Workbench & Launch Bay */}
-      <div className="flex flex-1 flex-col overflow-y-auto bg-[#0c0c0e] p-5 space-y-4">
+      <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-5 space-y-4">
         {/* Device Hero Card */}
         <DeviceHeroCard
           activeDevice={activeDevice}
@@ -246,7 +246,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
         {currentMode === "flex" && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
                 Flex Desktop Tuning
               </span>
               <div className="flex items-center gap-3">
@@ -257,14 +257,14 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
                       resetDeviceDisplay(selectedSerial).catch((e) => setError(String(e)));
                     }
                   }}
-                  className="text-[10px] font-mono text-zinc-400 hover:text-amber-300 underline cursor-pointer"
+                  className="btn-tactile text-[10px] font-mono text-text-muted hover:text-status-warning underline cursor-pointer"
                 >
                   Reset Density
                 </button>
                 <button
                   type="button"
                   onClick={handleSetPCResolution}
-                  className="text-[10px] font-mono text-zinc-300 hover:text-white underline cursor-pointer"
+                  className="btn-tactile text-[10px] font-mono text-text hover:text-text-strong underline cursor-pointer"
                 >
                   Match PC Resolution
                 </button>
@@ -275,15 +275,15 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
 
             {/* Quick Toggles */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#141417] p-3">
+              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <EyeOff className="h-3.5 w-3.5 text-zinc-400" />
-                    <span className="text-xs font-semibold text-zinc-200">
+                    <EyeOff className="h-3.5 w-3.5 text-text-muted" />
+                    <span className="text-xs font-semibold text-text-strong">
                       Hide Android Taskbar
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-zinc-500">
+                  <p className="mt-0.5 text-[10px] text-text-muted">
                     Removes bottom bar for full desktop area.
                   </p>
                 </div>
@@ -295,27 +295,27 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
                       hideVirtualTaskbar: !settings.hideVirtualTaskbar,
                     })
                   }
-                  className={`relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150 ease-out ${
-                    settings.hideVirtualTaskbar ? "bg-zinc-100" : "bg-[#27272a]"
+                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
+                    settings.hideVirtualTaskbar ? "bg-gold-400" : "bg-ink-800"
                   }`}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full shadow ring-0 transition duration-150 ease-out ${
-                      settings.hideVirtualTaskbar ? "translate-x-3.5 bg-zinc-950" : "translate-x-0 bg-zinc-400"
+                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
+                      settings.hideVirtualTaskbar ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
                     }`}
                   />
                 </button>
               </div>
 
-              <div className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#141417] p-3">
+              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <Sun className="h-3.5 w-3.5 text-zinc-400" />
-                    <span className="text-xs font-semibold text-zinc-200">
+                    <Sun className="h-3.5 w-3.5 text-text-muted" />
+                    <span className="text-xs font-semibold text-text-strong">
                       Turn Phone Screen Off
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-zinc-500">
+                  <p className="mt-0.5 text-[10px] text-text-muted">
                     Saves battery and protects display.
                   </p>
                 </div>
@@ -327,13 +327,13 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
                       turnScreenOff: !settings.turnScreenOff,
                     })
                   }
-                  className={`relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150 ease-out ${
-                    settings.turnScreenOff ? "bg-zinc-100" : "bg-[#27272a]"
+                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
+                    settings.turnScreenOff ? "bg-gold-400" : "bg-ink-800"
                   }`}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full shadow ring-0 transition duration-150 ease-out ${
-                      settings.turnScreenOff ? "translate-x-3.5 bg-zinc-950" : "translate-x-0 bg-zinc-400"
+                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
+                      settings.turnScreenOff ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
                     }`}
                   />
                 </button>
@@ -344,17 +344,17 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
 
         {currentMode === "mirror" && (
           <div className="space-y-3">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
               Mirror Tuning
             </span>
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#141417] p-3">
+              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <MousePointer2 className="h-3.5 w-3.5 text-zinc-400" />
-                    <span className="text-xs font-semibold text-zinc-200">Show Touches</span>
+                    <MousePointer2 className="h-3.5 w-3.5 text-text-muted" />
+                    <span className="text-xs font-semibold text-text-strong">Show Touches</span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-zinc-500">
+                  <p className="mt-0.5 text-[10px] text-text-muted">
                     Draw visual touch points on screen.
                   </p>
                 </div>
@@ -366,27 +366,27 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
                       showTouches: !settings.showTouches,
                     })
                   }
-                  className={`relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150 ease-out ${
-                    settings.showTouches ? "bg-zinc-100" : "bg-[#27272a]"
+                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
+                    settings.showTouches ? "bg-gold-400" : "bg-ink-800"
                   }`}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full shadow ring-0 transition duration-150 ease-out ${
-                      settings.showTouches ? "translate-x-3.5 bg-zinc-950" : "translate-x-0 bg-zinc-400"
+                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
+                      settings.showTouches ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
                     }`}
                   />
                 </button>
               </div>
 
-              <div className="flex items-center justify-between rounded-xl border border-[#222226] bg-[#141417] p-3">
+              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <Sun className="h-3.5 w-3.5 text-zinc-400" />
-                    <span className="text-xs font-semibold text-zinc-200">
+                    <Sun className="h-3.5 w-3.5 text-text-muted" />
+                    <span className="text-xs font-semibold text-text-strong">
                       Physical Screen Off
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-zinc-500">
+                  <p className="mt-0.5 text-[10px] text-text-muted">
                     Darken device during stream.
                   </p>
                 </div>
@@ -398,13 +398,13 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
                       turnScreenOff: !settings.turnScreenOff,
                     })
                   }
-                  className={`relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150 ease-out ${
-                    settings.turnScreenOff ? "bg-zinc-100" : "bg-[#27272a]"
+                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
+                    settings.turnScreenOff ? "bg-gold-400" : "bg-ink-800"
                   }`}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full shadow ring-0 transition duration-150 ease-out ${
-                      settings.turnScreenOff ? "translate-x-3.5 bg-zinc-950" : "translate-x-0 bg-zinc-400"
+                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
+                      settings.turnScreenOff ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
                     }`}
                   />
                 </button>
@@ -414,45 +414,45 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
         )}
 
         {currentMode === "camera" && (
-          <div className="rounded-xl border border-[#222226] bg-[#141417] p-4 space-y-2">
+          <div className="rounded-xl border border-ink-700 bg-ink-900 p-4 space-y-2">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <span className="text-xs font-semibold text-zinc-200">
+              <CheckCircle2 className="h-4 w-4 text-status-success" />
+              <span className="text-xs font-semibold text-text-strong">
                 Camera Studio Ready
               </span>
             </div>
-            <p className="text-xs text-zinc-400 leading-relaxed">
+            <p className="text-xs text-text leading-relaxed">
               Streams raw Android camera sensor feed directly to your PC with custom resolution and framerate controls.
             </p>
           </div>
         )}
 
         {currentMode === "hifi" && (
-          <div className="rounded-xl border border-[#222226] bg-[#141417] p-4">
+          <div className="rounded-xl border border-ink-700 bg-ink-900 p-4">
             <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-zinc-300" />
-              <span className="text-xs font-semibold text-zinc-200">
+              <Sparkles className="h-4 w-4 text-mist-300" />
+              <span className="text-xs font-semibold text-text-strong">
                 AV1 / HEVC High-Bitrate Pipeline (20 Mbps · 60 FPS)
               </span>
             </div>
-            <p className="mt-1 text-xs text-zinc-400 leading-relaxed">
+            <p className="mt-1 text-xs text-text leading-relaxed">
               Calibrated for crystal sharp graphics, mobile gaming and typography. Best over 5 GHz Wi-Fi or USB.
             </p>
           </div>
         )}
 
         {/* Primary Launch Action Bar */}
-        <div className="rounded-xl border border-[#222226] bg-[#141417] p-3.5 space-y-3">
-          <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
+        <div className="rounded-xl border border-ink-700 bg-ink-900 p-3.5 space-y-3">
+          <div className="flex items-center justify-between text-[11px] font-mono text-text-muted">
             <div className="flex items-center gap-2">
-              <span className="text-zinc-500">TARGET:</span>
-              <span className="text-zinc-200 font-semibold">{selectedSerial || "None"}</span>
+              <span className="text-text-muted">TARGET:</span>
+              <span className="text-text-strong font-semibold">{selectedSerial || "None"}</span>
               <span>·</span>
-              <span className="text-zinc-300">
+              <span className="text-text">
                 {currentMode === "flex" ? `FLEX (${currentDpi} DPI)` : currentMode.toUpperCase()}
               </span>
             </div>
-            <div className="text-zinc-500">CONTAINER: EMBEDDED WINDOW</div>
+            <div className="text-text-muted">CONTAINER: EMBEDDED WINDOW</div>
           </div>
 
           {activeSession ? (
@@ -460,9 +460,9 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
               type="button"
               disabled={launching}
               onClick={handlePrimaryLaunch}
-              className="btn-tactile w-full flex items-center justify-center gap-2 rounded-lg bg-rose-600 py-3 text-xs font-semibold text-white hover:bg-rose-500 cursor-pointer shadow-sm"
+              className="btn-tactile w-full flex items-center justify-center gap-2 rounded-lg bg-status-danger-solid py-3 text-xs font-semibold text-text-strong hover:opacity-90 cursor-pointer"
             >
-              <Square className="h-3.5 w-3.5 fill-white" />
+              <Square className="h-3.5 w-3.5 fill-current" />
               <span>Stop Active Stream</span>
             </button>
           ) : (
@@ -470,9 +470,9 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
               type="button"
               disabled={launching || !selectedSerial}
               onClick={handlePrimaryLaunch}
-              className="btn-tactile w-full flex items-center justify-center gap-2 rounded-lg bg-white py-3 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+              className="btn-tactile w-full flex items-center justify-center gap-2 rounded-lg bg-gold-400 py-3 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Play className="h-3.5 w-3.5 fill-zinc-950" />
+              <Play className="h-3.5 w-3.5 fill-current" />
               <span>
                 {currentMode === "camera"
                   ? "Configure & Launch Camera Studio"
