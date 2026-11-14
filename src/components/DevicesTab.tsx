@@ -4,14 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DeviceRow, SavedDeviceRow } from "./DeviceRow";
 import { useAppStore } from "@/store/useAppStore";
-import { listDevices } from "@/lib/tauri";
+import { refreshAndReconnectDevices } from "@/lib/deviceSync";
 import { buildRows } from "@/lib/deviceStatus";
 
 export function DevicesTab() {
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
   const sessions = useAppStore((s) => s.sessions);
-  const setDevices = useAppStore((s) => s.setDevices);
   const setError = useAppStore((s) => s.setError);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -19,7 +18,7 @@ export function DevicesTab() {
     setRefreshing(true);
     setError(null);
     try {
-      setDevices(await listDevices());
+      await refreshAndReconnectDevices({ silentRepair: true });
     } catch (e) {
       setError(String(e));
     } finally {

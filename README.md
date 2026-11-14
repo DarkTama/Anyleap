@@ -63,6 +63,8 @@ Download the latest build from [**GitHub Releases**](https://github.com/DarkTama
 2. Connect via USB (or enable **Wireless debugging**, click **Pair Device** in AnyLeap, and scan the QR code or enter the 6-digit pairing code).
 3. Select your phone in **Devices**, choose a profile in the Launch Matrix, and click **Mirror**.
 
+> **Automatic wireless reconnect & single device identity:** Once paired, AnyLeap identifies your phone by hardware serial. If Android rotates your Wireless debugging port after toggling Wi-Fi or rebooting, AnyLeap discovers the updated port via mDNS and reconnects automatically without re-pairing; plugging in USB while on Wi-Fi keeps everything grouped as one device (preferring USB). AnyLeap prompts to pair again only if ADB authentication is revoked or the device is unreachable via mDNS.
+
 ### Link two PCs (Shared Mouse & Keyboard)
 1. On the **Linked PC**, open the **Computers** tab and turn on **Allow other PCs to control this PC**.
 2. On the **Main PC**, open **Computers**, select the discovered PC (or enter its IP), and click **Link**.

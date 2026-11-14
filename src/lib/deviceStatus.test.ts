@@ -212,3 +212,218 @@ describe("deviceStatus", () => {
     });
   });
 });
+
+import {
+  dedupeDevices,
+  migrateSavedDevices,
+  resolveDeviceTarget,
+  decideWirelessReconnect,
+  MSG_NEEDS_REPAIR,
+} from "./deviceStatus";
+import type { MdnsService } from "./types";
+
+describe("hw_serial grouping, migration, and wireless reconnect", () => {
+  it("dedupeDevices merges USB and Wi-Fi for the same hw_serial, preferring USB", () => {
+    const merged = dedupeDevices([
+      {
+        serial: "192.168.0.175:46391",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: "Pixel 8",
+        product: null,
+      },
+      {
+        serial: "140892554J008528",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: "Pixel 8",
+        product: null,
+      },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].serial).toBe("140892554J008528");
+    expect(merged[0].hw_serial).toBe("140892554J008528");
+    expect(merged[0].transports).toEqual({
+      usb: "140892554J008528",
+      wifi: "192.168.0.175:46391",
+    });
+  });
+
+  it("dedupeDevices drops dead offline IP:port entries belonging to a live device", () => {
+    const merged = dedupeDevices([
+      {
+        serial: "192.168.0.175:40921",
+        hw_serial: null,
+        state: "offline",
+        model: null,
+        product: null,
+      },
+      {
+        serial: "192.168.0.175:46391",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: "Pixel 8",
+        product: null,
+      },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].serial).toBe("192.168.0.175:46391");
+  });
+
+  it("migrateSavedDevices resolves hw_serial, merges IP:port duplicates, keeps custom name and nickname", () => {
+    const legacySaved: SavedDevice[] = [
+      {
+        id: "192.168.0.175:40921",
+        label: "192.168.0.175:40921",
+        host: "192.168.0.175",
+        port: 40921,
+        lastSerial: "192.168.0.175:40921",
+      },
+      {
+        id: "192.168.0.175",
+        label: "Tama Pixel",
+        host: "192.168.0.175",
+        port: 46391,
+        lastSerial: "192.168.0.175:46391",
+      },
+    ];
+    const live: DeviceInfo[] = [
+      {
+        serial: "192.168.0.175:46391",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: "Pixel 8",
+        product: null,
+        transports: { usb: null, wifi: "192.168.0.175:46391" },
+      },
+    ];
+    const result = migrateSavedDevices(legacySaved, live, [], {
+      "192.168.0.175:40921": "Studio Phone",
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.savedDevices).toHaveLength(1);
+    expect(result.savedDevices[0]).toMatchObject({
+      id: "140892554J008528",
+      hw_serial: "140892554J008528",
+      label: "Tama Pixel",
+      host: "192.168.0.175",
+      port: 46391,
+      lastSerial: "192.168.0.175:46391",
+    });
+    expect(result.nicknamesChanged).toBe(true);
+    expect(result.nicknames["140892554J008528"]).toBe("Studio Phone");
+  });
+
+  it("buildRows groups saved device plugged into USB + Wi-Fi into ONE row without duplication", () => {
+    const saved: SavedDevice[] = [
+      {
+        id: "140892554J008528",
+        hw_serial: "140892554J008528",
+        label: "Work Phone",
+        host: "192.168.0.175",
+        port: 46391,
+        lastSerial: "192.168.0.175:46391",
+      },
+    ];
+    const live: DeviceInfo[] = [
+      {
+        serial: "140892554J008528",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: null,
+        product: null,
+      },
+      {
+        serial: "192.168.0.175:46391",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: null,
+        product: null,
+      },
+    ];
+    const { savedRows, otherDevices } = buildRows(live, saved, []);
+    expect(savedRows).toHaveLength(1);
+    expect(savedRows[0].device?.serial).toBe("140892554J008528");
+    expect(savedRows[0].status).toBe("connected");
+    expect(otherDevices).toHaveLength(0);
+  });
+
+  it("resolveDeviceTarget follows stale port selection to new live Wi-Fi port or USB", () => {
+    const saved: SavedDevice[] = [
+      {
+        id: "140892554J008528",
+        hw_serial: "140892554J008528",
+        label: "Pixel",
+        host: "192.168.0.175",
+        port: 46391,
+        lastSerial: "192.168.0.175:46391",
+      },
+    ];
+    const live: DeviceInfo[] = [
+      {
+        serial: "192.168.0.175:46391",
+        hw_serial: "140892554J008528",
+        state: "device",
+        model: null,
+        product: null,
+        transports: { usb: null, wifi: "192.168.0.175:46391" },
+      },
+    ];
+    const target = resolveDeviceTarget("192.168.0.175:40921", live, saved);
+    expect(target.isLive).toBe(true);
+    expect(target.activeSerial).toBe("192.168.0.175:46391");
+    expect(target.hwSerial).toBe("140892554J008528");
+
+    expect(
+      resolveDeviceNickname(
+        { "140892554J008528": "Daily" },
+        { saved: target.saved!, device: target.device!, serial: target.activeSerial! },
+      ),
+    ).toBe("Daily");
+  });
+
+  it("decideWirelessReconnect picks new mDNS port by hw_serial and prompts re-pair only when needed", () => {
+    const saved: SavedDevice = {
+      id: "140892554J008528",
+      hw_serial: "140892554J008528",
+      label: "Pixel",
+      host: "192.168.0.175",
+      port: 40921,
+      lastSerial: "192.168.0.175:40921",
+    };
+    const mdns: MdnsService[] = [
+      {
+        name: "adb-140892554J008528-Exhc24",
+        serviceType: "_adb-tls-connect._tcp",
+        host: "192.168.0.175",
+        port: 46391,
+        hwSerial: "140892554J008528",
+      },
+    ];
+    expect(decideWirelessReconnect(saved, [], mdns)).toEqual({
+      kind: "reconnect_mdns",
+      host: "192.168.0.175",
+      port: 46391,
+      hwSerial: "140892554J008528",
+    });
+
+    const unauthorized = decideWirelessReconnect(
+      saved,
+      [
+        {
+          serial: "192.168.0.175:40921",
+          hw_serial: "140892554J008528",
+          state: "unauthorized",
+          model: null,
+          product: null,
+        },
+      ],
+      [],
+    );
+    expect(unauthorized).toEqual({
+      kind: "needs_repair",
+      message: MSG_NEEDS_REPAIR,
+    });
+  });
+});

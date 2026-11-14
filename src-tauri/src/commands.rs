@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,14 @@ use tauri::path::BaseDirectory;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
+pub use crate::device_identity::{
+    decide_reconnect, finalize_reconnect_result, find_mdns_connect_match, is_auth_connect_error,
+    is_wifi_serial, merge_devices, parse_adb_devices, parse_hw_serial_shell_output,
+    parse_mdns_services, DeviceInfo, MdnsService, ReconnectDecision, ReconnectResult,
+    ReconnectTarget, HW_SERIAL_PROP_SEP,
+};
+#[cfg(test)]
+pub use crate::device_identity::SVC_PAIRING;
 use crate::state::{poison_error, AppState, Session};
 
 /// Filename of the bundled adb sidecar (target-triple suffixed by Tauri).
@@ -14,14 +23,6 @@ use crate::state::{poison_error, AppState, Session};
 const ADB_SIDECAR: &str = concat!("adb-", env!("TARGET"), ".exe");
 #[cfg(not(target_os = "windows"))]
 const ADB_SIDECAR: &str = concat!("adb-", env!("TARGET"));
-
-#[derive(Serialize, Clone)]
-pub struct DeviceInfo {
-    pub serial: String,
-    pub state: String,
-    pub model: Option<String>,
-    pub product: Option<String>,
-}
 
 #[derive(Serialize, Clone)]
 pub struct SessionInfo {
@@ -105,20 +106,6 @@ pub struct CoreSettings {
     pub hide_virtual_taskbar: bool,
 }
 
-/// An adb mDNS service entry, as listed by `adb mdns services`.
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct MdnsService {
-    pub name: String,
-    pub service_type: String,
-    pub host: String,
-    pub port: u16,
-}
-
-const SVC_PAIRING: &str = "_adb-tls-pairing._tcp";
-const SVC_CONNECT: &str = "_adb-tls-connect._tcp";
-const SVC_LEGACY: &str = "_adb._tcp";
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -187,114 +174,6 @@ fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         }
     }
     None
-}
-
-fn is_valid_device_state(state: &str) -> bool {
-    matches!(
-        state,
-        "device"
-            | "unauthorized"
-            | "offline"
-            | "authorizing"
-            | "connecting"
-            | "no permissions"
-            | "bootloader"
-            | "recovery"
-            | "sideload"
-            | "host"
-    )
-}
-
-/// Parse `adb devices -l` output into structured device records.
-///
-/// Skips the header line and any `* daemon ...` startup noise, keeps non-`device`
-/// states (e.g. `unauthorized`, `offline`) so the UI can guide the user.
-fn parse_adb_devices(text: &str) -> Vec<DeviceInfo> {
-    let mut out = Vec::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty()
-            || line.starts_with("List of devices")
-            || line.starts_with('*')
-            || line.starts_with("adb ")
-            || line.starts_with("error:")
-            || line.starts_with("cannot ")
-        {
-            continue;
-        }
-        let mut it = line.split_whitespace();
-        let serial = match it.next() {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let mut state = match it.next() {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let rest: Vec<&str> = it.collect();
-        // "no permissions" is the only multi-word state we expect.
-        if state == "no" && rest.first() == Some(&"permissions") {
-            state = "no permissions".to_string();
-        }
-        if !is_valid_device_state(&state) {
-            continue;
-        }
-        let mut model = None;
-        let mut product = None;
-        for tok in &rest {
-            if let Some(v) = tok.strip_prefix("model:") {
-                model = Some(v.to_string());
-            }
-            if let Some(v) = tok.strip_prefix("product:") {
-                product = Some(v.to_string());
-            }
-        }
-        out.push(DeviceInfo { serial, state, model, product });
-    }
-    out
-}
-
-/// Parse `adb mdns services` output into structured entries.
-///
-/// Anchors on the known service-type token (instance names can contain spaces),
-/// then reads the following token as `host:port`. Skips the header and any
-/// `* daemon ...` noise.
-fn parse_mdns_services(text: &str) -> Vec<MdnsService> {
-    let mut out = Vec::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with("List of discovered") || line.starts_with('*') {
-            continue;
-        }
-        let toks: Vec<&str> = line.split_whitespace().collect();
-        let svc_idx = match toks
-            .iter()
-            .position(|t| matches!(*t, SVC_PAIRING | SVC_CONNECT | SVC_LEGACY))
-        {
-            Some(i) if i > 0 && i + 1 < toks.len() => i,
-            _ => continue,
-        };
-        let name = toks[..svc_idx].join(" ");
-        let service_type = toks[svc_idx].to_string();
-        let (host, port_str) = match toks[svc_idx + 1].rsplit_once(':') {
-            Some(hp) => hp,
-            None => continue,
-        };
-        let port = match port_str.parse::<u16>() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if host.is_empty() {
-            continue;
-        }
-        out.push(MdnsService {
-            name,
-            service_type,
-            host: host.to_string(),
-            port,
-        });
-    }
-    out
 }
 
 /// Build the scrcpy argument vector from typed settings (single source of truth
@@ -512,10 +391,29 @@ pub fn parse_list_cameras_output(stdout: &str) -> Vec<CameraDeviceOption> {
     results
 }
 
-/// List USB/TCP devices known to adb.
-#[tauri::command]
-pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
-    let output = adb_cmd(&app)?
+async fn query_hw_serial_for_device(app: &AppHandle, serial: &str) -> Option<String> {
+    let cmd = adb_cmd(app).ok()?;
+    let script = format!(
+        "getprop ro.serialno; echo {}; getprop ro.boot.serialno",
+        HW_SERIAL_PROP_SEP
+    );
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        cmd.args(["-s", serial, "shell", &script]).output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_hw_serial_shell_output(&String::from_utf8_lossy(&out.stdout))
+}
+
+async fn list_devices_with_mdns(
+    app: &AppHandle,
+) -> Result<(Vec<DeviceInfo>, Vec<MdnsService>), String> {
+    let output = adb_cmd(app)?
         .args(["devices", "-l"])
         .output()
         .await
@@ -524,8 +422,61 @@ pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
         let err = String::from_utf8_lossy(&output.stderr);
         return Err(format!("adb devices failed: {}", err.trim()));
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_adb_devices(&text))
+    let raw = parse_adb_devices(&String::from_utf8_lossy(&output.stdout));
+    let mdns = match adb_cmd(app) {
+        Ok(cmd) => match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            cmd.args(["mdns", "services"]).output(),
+        )
+        .await
+        {
+            Ok(Ok(out)) if out.status.success() => {
+                parse_mdns_services(&String::from_utf8_lossy(&out.stdout))
+            }
+            _ => Vec::new(),
+        },
+        Err(_) => Vec::new(),
+    };
+    if raw.is_empty() {
+        return Ok((Vec::new(), mdns));
+    }
+
+    let mut join_set = tokio::task::JoinSet::new();
+    for dev in &raw {
+        if dev.state == "device" {
+            let app_c = app.clone();
+            let serial_c = dev.serial.clone();
+            join_set.spawn(async move {
+                let hw = query_hw_serial_for_device(&app_c, &serial_c).await;
+                (serial_c, hw)
+            });
+        }
+    }
+    let mut hw_serials = HashMap::new();
+    while let Some(res) = join_set.join_next().await {
+        if let Ok((serial, Some(hw))) = res {
+            hw_serials.insert(serial, hw);
+        }
+    }
+
+    let merged = merge_devices(raw, &hw_serials, &mdns);
+    for dead in &merged.dead_serials {
+        if let Ok(cmd) = adb_cmd(app) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                cmd.args(["disconnect", dead]).output(),
+            )
+            .await;
+        }
+    }
+    Ok((merged.devices, mdns))
+}
+
+/// List USB/TCP devices known to adb, merged by hardware serial (preferring live USB).
+#[tauri::command]
+pub async fn list_devices(app: AppHandle) -> Result<Vec<DeviceInfo>, String> {
+    let (devices, _) = list_devices_with_mdns(&app).await?;
+    Ok(devices)
 }
 
 /// scrcpy stderr patterns that suggest a (possibly transient) encoder/connection
@@ -1485,15 +1436,15 @@ pub async fn pair_device(
     }
 }
 
-/// Connect to a wireless device (`adb connect host:port`).
-#[tauri::command]
-pub async fn connect_device(app: AppHandle, host: String, port: u16) -> Result<String, String> {
+async fn try_adb_connect(app: &AppHandle, host: &str, port: u16) -> Result<String, String> {
     let target = format!("{host}:{port}");
-    let output = adb_cmd(&app)?
-        .args(["connect", &target])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        adb_cmd(app)?.args(["connect", &target]).output(),
+    )
+    .await
+    .map_err(|_| format!("adb connect {target} timed out"))?
+    .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
     let low = combined.to_lowercase();
@@ -1507,6 +1458,176 @@ pub async fn connect_device(app: AppHandle, host: String, port: u16) -> Result<S
             msg.to_string()
         })
     }
+}
+
+/// Connect to a wireless device (`adb connect host:port`).
+#[tauri::command]
+pub async fn connect_device(app: AppHandle, host: String, port: u16) -> Result<String, String> {
+    try_adb_connect(&app, &host, port).await
+}
+
+/// Smart wireless reconnect: checks live devices and `_adb-tls-connect` mDNS
+/// entries matching `hw_serial` before falling back to stored `host:port`.
+/// Returns `"needs_repair"` with `"This phone needs to be paired again"` when
+/// no mDNS match exists and stored endpoint is unreachable or fails auth.
+#[tauri::command]
+pub async fn reconnect_wireless(
+    app: AppHandle,
+    target: ReconnectTarget,
+) -> Result<ReconnectResult, String> {
+    let (live_devices, mdns) = list_devices_with_mdns(&app).await?;
+    match decide_reconnect(&target, &live_devices, &mdns) {
+        ReconnectDecision::AlreadyConnected {
+            serial,
+            hw_serial,
+            host,
+            port,
+        } => Ok(ReconnectResult {
+            status: "already_connected".to_string(),
+            serial: Some(serial),
+            hw_serial,
+            host,
+            port,
+            message: None,
+        }),
+        ReconnectDecision::ConnectMdns {
+            host,
+            port,
+            mut hw_serial,
+            stale_serial,
+        } => {
+            if let Some(stale) = stale_serial {
+                if let Ok(cmd) = adb_cmd(&app) {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        cmd.args(["disconnect", &stale]).output(),
+                    )
+                    .await;
+                }
+            }
+            let outcome = try_adb_connect(&app, &host, port).await.map(|_| ());
+            if outcome.is_ok() {
+                let endpoint = format!("{host}:{port}");
+                if is_endpoint_unauthorized(&app, &endpoint).await {
+                    return Ok(finalize_reconnect_result(
+                        Err("unauthorized".to_string()),
+                        host,
+                        port,
+                        hw_serial,
+                    ));
+                }
+                if hw_serial.is_none() {
+                    hw_serial = query_hw_serial_for_device(&app, &endpoint).await;
+                }
+            }
+            Ok(finalize_reconnect_result(outcome, host, port, hw_serial))
+        }
+        ReconnectDecision::TryStored { host, port } => {
+            let outcome = try_adb_connect(&app, &host, port).await.map(|_| ());
+            match outcome {
+                Ok(()) => {
+                    let endpoint = format!("{host}:{port}");
+                    if is_endpoint_unauthorized(&app, &endpoint).await {
+                        return Ok(finalize_reconnect_result(
+                            Err("unauthorized".to_string()),
+                            host,
+                            port,
+                            target.hw_serial,
+                        ));
+                    }
+                    let hw = match target.hw_serial {
+                        Some(h) => Some(h),
+                        None => query_hw_serial_for_device(&app, &endpoint).await,
+                    };
+                    Ok(finalize_reconnect_result(Ok(()), host, port, hw))
+                }
+                Err(err) => {
+                    if !is_auth_connect_error(&err) {
+                        if let Ok(fresh_mdns) = discover_wireless(app.clone()).await {
+                            if let Some(svc) = find_mdns_connect_match(&target, &fresh_mdns) {
+                                if svc.host != host || svc.port != port {
+                                    let stale = format!("{host}:{port}");
+                                    if let Ok(cmd) = adb_cmd(&app) {
+                                        let _ = tokio::time::timeout(
+                                            std::time::Duration::from_secs(1),
+                                            cmd.args(["disconnect", &stale]).output(),
+                                        )
+                                        .await;
+                                    }
+                                    let retry = try_adb_connect(&app, &svc.host, svc.port)
+                                        .await
+                                        .map(|_| ());
+                                    let mut hw = svc.hw_serial.clone().or(target.hw_serial);
+                                    if retry.is_ok() {
+                                        let ep = format!("{}:{}", svc.host, svc.port);
+                                        if is_endpoint_unauthorized(&app, &ep).await {
+                                            return Ok(finalize_reconnect_result(
+                                                Err("unauthorized".to_string()),
+                                                svc.host.clone(),
+                                                svc.port,
+                                                hw,
+                                            ));
+                                        }
+                                        if hw.is_none() {
+                                            hw = query_hw_serial_for_device(&app, &ep).await;
+                                        }
+                                    }
+                                    return Ok(finalize_reconnect_result(
+                                        retry,
+                                        svc.host.clone(),
+                                        svc.port,
+                                        hw,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Ok(finalize_reconnect_result(
+                        Err(err),
+                        host,
+                        port,
+                        target.hw_serial,
+                    ))
+                }
+            }
+        }
+        ReconnectDecision::NeedsRepair { message } => Ok(ReconnectResult {
+            status: "needs_repair".to_string(),
+            serial: None,
+            hw_serial: target.hw_serial,
+            host: if target.host.is_empty() {
+                None
+            } else {
+                Some(target.host)
+            },
+            port: if target.port > 0 {
+                Some(target.port)
+            } else {
+                None
+            },
+            message: Some(message),
+        }),
+    }
+}
+
+async fn is_endpoint_unauthorized(app: &AppHandle, endpoint: &str) -> bool {
+    let Ok(cmd) = adb_cmd(app) else {
+        return false;
+    };
+    let Ok(Ok(out)) = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        cmd.args(["devices", "-l"]).output(),
+    )
+    .await
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    parse_adb_devices(&String::from_utf8_lossy(&out.stdout))
+        .into_iter()
+        .any(|d| d.serial == endpoint && d.state == "unauthorized")
 }
 
 /// Disconnect a wireless device (idempotent).
@@ -2312,14 +2433,6 @@ pub struct DeviceDetails {
     pub connection: String,
 }
 
-pub(crate) fn is_wifi_serial(serial: &str) -> bool {
-    if let Some((host, port)) = serial.rsplit_once(':') {
-        !host.is_empty() && port.parse::<u16>().is_ok()
-    } else {
-        false
-    }
-}
-
 pub(crate) fn parse_getprop(output: &str, serial: &str) -> DeviceDetails {
     let mut manufacturer = String::new();
     let mut model = String::new();
@@ -2972,8 +3085,7 @@ mod spec18_tests {
             adb_devices: Some(Ok(vec![DeviceInfo {
                 serial: "ABC123".into(),
                 state: "unauthorized".into(),
-                model: None,
-                product: None,
+                ..Default::default()
             }])),
             scrcpy_version: Ok("scrcpy 3.1".into()),
             serial: Some("ABC123".into()),
@@ -2998,7 +3110,7 @@ mod spec18_tests {
             serial: "192.168.1.10:5555".into(),
             state: "device".into(),
             model: Some("Pixel".into()),
-            product: None,
+            ..Default::default()
         }];
         let a10 = sequence_doctor_checks(&DoctorCheckInput {
             adb_version: Ok("1.0.41".into()),

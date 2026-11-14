@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { DeviceStateBadge } from "@/components/DeviceStateBadge";
 import { Badge } from "@/components/ui/badge";
+import { MSG_NEEDS_REPAIR } from "@/lib/deviceStatus";
 import { getDeviceDetails } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
 import type { BatteryInfo, DeviceInfo, SavedDevice, SessionInfo } from "@/lib/types";
@@ -24,6 +25,9 @@ interface DeviceHeroCardProps {
   nickname?: string;
   isLive: boolean;
   isWireless: boolean;
+  hasUsb?: boolean;
+  hasWifi?: boolean;
+  repairMessage?: string | null;
   activeSession: SessionInfo | null;
   currentMode: StudioMode;
   battery?: BatteryInfo;
@@ -50,6 +54,9 @@ export function DeviceHeroCard({
   nickname,
   isLive,
   isWireless,
+  hasUsb,
+  hasWifi,
+  repairMessage,
   activeSession,
   currentMode,
   battery,
@@ -123,6 +130,9 @@ export function DeviceHeroCard({
 
   const deviceState = "state" in activeDevice ? activeDevice.state : "offline";
   const connectionType = details?.connection ?? (isWireless ? "wifi" : "usb");
+  const dualTransport = Boolean(hasUsb && hasWifi);
+  const needsRepairMsg =
+    !isLive && (repairMessage || (deviceState === "unauthorized" ? MSG_NEEDS_REPAIR : null));
   const resolvedTitle =
     nickname ||
     ("label" in activeDevice && activeDevice.label) ||
@@ -130,125 +140,147 @@ export function DeviceHeroCard({
     displayName;
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-ink-700 bg-ink-900 px-4 py-3.5">
-      {/* Left: Identity & Health */}
-      <div className="flex items-center gap-3.5 min-w-0">
-        <div
-          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${
-            isLive
-              ? "border-status-success/40 bg-status-success-bg text-status-success"
-              : "border-ink-700 bg-ink-800 text-text-muted"
-          }`}
-        >
-          <Smartphone className="h-5 w-5" />
-        </div>
+    <div className="rounded-xl border border-ink-700 bg-ink-900 px-4 py-3.5 space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        {/* Left: Identity & Health */}
+        <div className="flex items-center gap-3.5 min-w-0">
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${
+              isLive
+                ? "border-status-success/40 bg-status-success-bg text-status-success"
+                : "border-ink-700 bg-ink-800 text-text-muted"
+            }`}
+          >
+            <Smartphone className="h-5 w-5" />
+          </div>
 
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-sm font-semibold text-text-strong">
-              {resolvedTitle}
-            </h2>
-            {details?.androidVersion && (
-              <span className="font-mono text-[11px] text-text-muted">
-                Android {details.androidVersion}
-              </span>
-            )}
-            <Badge className="gap-1 border border-ink-700 bg-ink-800 text-text font-mono text-[10px]">
-              {connectionType === "wifi" ? (
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-sm font-semibold text-text-strong">
+                {resolvedTitle}
+              </h2>
+              {details?.androidVersion && (
+                <span className="font-mono text-[11px] text-text-muted">
+                  Android {details.androidVersion}
+                </span>
+              )}
+              <Badge className="gap-1 border border-ink-700 bg-ink-800 text-text font-mono text-[10px]">
+                {dualTransport ? (
+                  <>
+                    <Usb className="h-3 w-3 text-status-success" />
+                    USB + Wi-Fi
+                  </>
+                ) : connectionType === "wifi" ? (
+                  <>
+                    <Wifi className="h-3 w-3 text-mist-300" />
+                    Wi-Fi
+                  </>
+                ) : (
+                  <>
+                    <Usb className="h-3 w-3 text-text-muted" />
+                    USB
+                  </>
+                )}
+              </Badge>
+              <DeviceStateBadge state={deviceState} />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 font-mono text-[11px] text-text-muted">
+              <span className="truncate">{selectedSerial ?? "—"}</span>
+              {details?.manufacturer && (
                 <>
-                  <Wifi className="h-3 w-3 text-mist-300" />
-                  Wi-Fi
-                </>
-              ) : (
-                <>
-                  <Usb className="h-3 w-3 text-text-muted" />
-                  USB
+                  <span className="text-ink-700">·</span>
+                  <span>{details.manufacturer}</span>
                 </>
               )}
-            </Badge>
-            <DeviceStateBadge state={deviceState} />
+              {battery?.level !== null && battery?.level !== undefined && (
+                <>
+                  <span className="text-ink-700">·</span>
+                  <span className="inline-flex items-center gap-1 text-text">
+                    {battery.charging ? (
+                      <BatteryCharging className="h-3.5 w-3.5 text-status-success" />
+                    ) : (
+                      <Battery className="h-3.5 w-3.5 text-text-muted" />
+                    )}
+                    {battery.level}%
+                  </span>
+                </>
+              )}
+            </div>
           </div>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 font-mono text-[11px] text-text-muted">
-            <span className="truncate">{selectedSerial ?? "—"}</span>
-            {details?.manufacturer && (
-              <>
-                <span className="text-ink-700">·</span>
-                <span>{details.manufacturer}</span>
-              </>
-            )}
-            {battery?.level !== null && battery?.level !== undefined && (
-              <>
-                <span className="text-ink-700">·</span>
-                <span className="inline-flex items-center gap-1 text-text">
-                  {battery.charging ? (
-                    <BatteryCharging className="h-3.5 w-3.5 text-status-success" />
-                  ) : (
-                    <Battery className="h-3.5 w-3.5 text-text-muted" />
-                  )}
-                  {battery.level}%
-                </span>
-              </>
-            )}
-          </div>
+        {/* Right: Primary Actions */}
+        <div className="flex items-center gap-2">
+          {activeSession ? (
+            <button
+              type="button"
+              disabled={launching}
+              onClick={onMirror}
+              className="btn-tactile flex items-center gap-1.5 rounded-lg bg-status-danger-solid px-3 py-1.5 text-xs font-semibold text-text-strong hover:opacity-90 cursor-pointer disabled:opacity-50"
+            >
+              <Square className="h-3 w-3 fill-current" />
+              <span>Stop</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={launching || !selectedSerial}
+              onClick={onMirror}
+              className="btn-tactile flex items-center gap-1.5 rounded-lg bg-gold-400 px-3 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Play className="h-3 w-3 fill-current" />
+              <span>{MODE_LABELS[currentMode]}</span>
+            </button>
+          )}
+
+          {isWireless && (
+            <button
+              type="button"
+              disabled={reconnecting}
+              onClick={onReconnect}
+              className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-2.5 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${reconnecting ? "animate-spin" : ""}`} />
+              <span>Reconnect</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => openDoctor(selectedSerial)}
+            className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-2.5 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+          >
+            <Stethoscope className="h-3.5 w-3.5 text-mist-300" />
+            <span>Troubleshoot</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="btn-tactile flex items-center justify-center rounded-lg border border-ink-700 bg-ink-800 p-1.5 text-text-muted hover:border-text-muted hover:text-text-strong cursor-pointer"
+            title="Rescan devices"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin text-text-strong" : ""}`} />
+          </button>
         </div>
       </div>
 
-      {/* Right: Primary Actions */}
-      <div className="flex items-center gap-2">
-        {activeSession ? (
-          <button
-            type="button"
-            disabled={launching}
-            onClick={onMirror}
-            className="btn-tactile flex items-center gap-1.5 rounded-lg bg-status-danger-solid px-3 py-1.5 text-xs font-semibold text-text-strong hover:opacity-90 cursor-pointer disabled:opacity-50"
-          >
-            <Square className="h-3 w-3 fill-current" />
-            <span>Stop</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={launching || !selectedSerial}
-            onClick={onMirror}
-            className="btn-tactile flex items-center gap-1.5 rounded-lg bg-gold-400 px-3 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Play className="h-3 w-3 fill-current" />
-            <span>{MODE_LABELS[currentMode]}</span>
-          </button>
-        )}
-
-        {isWireless && (
-          <button
-            type="button"
-            disabled={reconnecting}
-            onClick={onReconnect}
-            className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-2.5 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${reconnecting ? "animate-spin" : ""}`} />
-            <span>Reconnect</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => openDoctor(selectedSerial)}
-          className="btn-tactile flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-2.5 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
-        >
-          <Stethoscope className="h-3.5 w-3.5 text-mist-300" />
-          <span>Troubleshoot</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="btn-tactile flex items-center justify-center rounded-lg border border-ink-700 bg-ink-800 p-1.5 text-text-muted hover:border-text-muted hover:text-text-strong cursor-pointer"
-          title="Rescan devices"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin text-text-strong" : ""}`} />
-        </button>
-      </div>
+      {needsRepairMsg && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-status-danger/40 bg-status-danger-bg px-3 py-2 text-xs text-status-danger">
+          <span>{needsRepairMsg}</span>
+          {onOpenPair && (
+            <button
+              type="button"
+              onClick={onOpenPair}
+              className="btn-tactile shrink-0 rounded bg-gold-400 px-2.5 py-1 text-[11px] font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer"
+            >
+              Pair again
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

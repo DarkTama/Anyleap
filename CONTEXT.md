@@ -8,6 +8,7 @@ The desktop application container (Tauri 2 + React) managing connected external 
 ### Device Connection (`DeviceSource`)
 An abstract polymorphic handle representing an attached client device:
 - **`AdbDevice`**: An Android device connected via USB or Wi-Fi (ADB pairing / QR code) running `scrcpy` subprocesses for mirroring, camera studio, and audio forwarding.
+- **Stable Device Identity (`hw_serial` & `transports`)**: Every Android phone is keyed by its hardware serial (`ro.serialno` / `ro.boot.serialno`, or parsed from mDNS `_adb-tls-connect._tcp` instance names `adb-<serial>-<suffix>`), rather than ephemeral wireless `IP:port` endpoints. USB and Wi-Fi transports for the same `hw_serial` merge into one logical device entry across `list_devices`, saved devices, Device Rack, Hero Card, and Timeline (preferring USB when both transports are live). When Wireless debugging rotates ports, AnyLeap matches `_adb-tls-connect._tcp` by `hw_serial`, calls `adb connect` on the new endpoint, removes stale offline `IP:port` duplicates, and only prompts to re-pair (`"This phone needs to be paired again"`) if no mDNS match exists or ADB rejects authentication.
 - **`NetworkPcDevice`**: A secondary PC or laptop connected over local network (mDNS / direct IP) running a native QUIC link for virtual KVM, remote desktop, and deck control.
 
 ### Virtual KVM (Computer Link / Shared Mouse & Keyboard)

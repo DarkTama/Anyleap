@@ -8,10 +8,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import { CameraLaunchDialog } from "./CameraLaunchDialog";
 import {
-  connectDevice,
   disconnectDevice,
-  discoverWireless,
-  listDevices,
   startMirror,
   stopMirror,
 } from "@/lib/tauri";
@@ -20,9 +17,17 @@ import {
   deviceStatusOf,
   type DeviceStatus,
   type SavedRow,
-  resolveDeviceNickname,
+  findSessionForDevice,
   getNicknameKey,
+  isWifiSerial,
+  MSG_NEEDS_REPAIR,
+  resolveDeviceNickname,
 } from "@/lib/deviceStatus";
+import {
+  reconnectSavedDevice,
+  repairKeyFor,
+  syncDevicesAndMigrate,
+} from "@/lib/deviceSync";
 import type { DeviceInfo } from "@/lib/types";
 import { saveNickname } from "@/lib/settingsStore";
 
@@ -57,7 +62,6 @@ function splitSerial(serial: string): [string, number] {
 export function DeviceRow({ device }: { device: DeviceInfo }) {
   const settings = useAppStore((s) => s.settings);
   const sessions = useAppStore((s) => s.sessions);
-  const setDevices = useAppStore((s) => s.setDevices);
   const setError = useAppStore((s) => s.setError);
   const controlConfig = useAppStore((s) => s.controlConfig);
   const nicknames = useAppStore((s) => s.nicknames);
@@ -69,21 +73,29 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
 
-  const nickname = nicknames[device.serial];
+  const nickname = resolveDeviceNickname(nicknames, {
+    serial: device.serial,
+    device,
+  });
+  const nicknameKey = getNicknameKey({ serial: device.serial, device });
 
   const handleSaveNickname = async () => {
     try {
-      await saveNickname(device.serial, editName);
-      setNickname(device.serial, editName);
+      await saveNickname(nicknameKey, editName);
+      setNickname(nicknameKey, editName);
+      if (device.serial !== nicknameKey) {
+        await saveNickname(device.serial, editName);
+        setNickname(device.serial, editName);
+      }
       setEditing(false);
     } catch (e) {
       setError(String(e));
     }
   };
 
-  const wireless = device.serial.includes(":");
+  const wireless = Boolean(device.transports?.wifi || isWifiSerial(device.serial));
   const status = deviceStatusOf(device, sessions);
-  const session = sessions.find((s) => s.serial === device.serial);
+  const session = findSessionForDevice({ device }, sessions);
 
   async function mirror() {
     setBusy(true);
@@ -118,8 +130,12 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
     setError(null);
     try {
       await disconnectDevice(host, port);
-      setDevices(await listDevices());
-      logActivity({ kind: "device", title: `Disconnected ${device.serial}` });
+      await syncDevicesAndMigrate();
+      logActivity({
+        kind: "device",
+        title: `Disconnected ${device.serial}`,
+        deviceId: device.hw_serial ?? undefined,
+      });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -259,18 +275,19 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const { saved, device, status } = row;
   const settings = useAppStore((s) => s.settings);
   const sessions = useAppStore((s) => s.sessions);
-  const setDevices = useAppStore((s) => s.setDevices);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
   const controlConfig = useAppStore((s) => s.controlConfig);
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
   const openDoctor = useAppStore((s) => s.openDoctor);
+  const repairNeeded = useAppStore((s) => s.repairNeeded);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const serial = device?.serial;
-  const nickname = resolveDeviceNickname(nicknames, { serial, saved });
-  const nicknameKey = getNicknameKey({ serial, saved });
+  const targetSerial = serial ?? (saved.lastSerial || `${saved.host}:${saved.port}`);
+  const nickname = resolveDeviceNickname(nicknames, { serial, saved, device });
+  const nicknameKey = getNicknameKey({ serial, saved, device });
   const handleSaveNickname = async () => {
     try {
       await saveNickname(nicknameKey, editName);
@@ -288,18 +305,20 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const [open, setOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
 
-  const session = serial ? sessions.find((s) => s.serial === serial) : undefined;
+  const session = findSessionForDevice({ device, saved, serial: targetSerial }, sessions);
+  const rKey = repairKeyFor({ device, saved, serial: targetSerial });
+  const rowRepairMsg =
+    status === "offline" || (device && device.state !== "device")
+      ? repairNeeded[rKey] ??
+        repairNeeded[saved.id] ??
+        (device?.state === "unauthorized" ? MSG_NEEDS_REPAIR : null)
+      : null;
 
   async function reconnect() {
     setBusy(true);
     setError(null);
     try {
-      const services = await discoverWireless().catch(() => []);
-      const svc = services.find(
-        (s) => s.host === saved.host && s.serviceType.includes("connect"),
-      );
-      await connectDevice(saved.host, svc?.port ?? saved.port);
-      setDevices(await listDevices());
+      await reconnectSavedDevice(saved, { silent: false });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -314,6 +333,24 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
     try {
       await startMirror(serial, settings);
     } catch (e) {
+      if (isWifiSerial(serial)) {
+        const res = await reconnectSavedDevice(saved, { silent: false });
+        if (
+          (res.status === "reconnected" || res.status === "already_connected") &&
+          res.serial
+        ) {
+          try {
+            await startMirror(res.serial, settings);
+            return;
+          } catch (retryErr) {
+            setError(String(retryErr));
+            return;
+          }
+        }
+        if (res.status === "needs_repair") {
+          return;
+        }
+      }
       setError(String(e));
     } finally {
       setBusy(false);
@@ -333,14 +370,19 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   }
 
   async function disconnect() {
-    if (!serial) return;
-    const [host, port] = splitSerial(serial);
+    const wifiEp = device?.transports?.wifi ?? (serial && isWifiSerial(serial) ? serial : null);
+    if (!wifiEp) return;
+    const [host, port] = splitSerial(wifiEp);
     setBusy(true);
     setError(null);
     try {
       await disconnectDevice(host, port);
-      setDevices(await listDevices());
-      logActivity({ kind: "device", title: `Disconnected ${device.serial}` });
+      await syncDevicesAndMigrate();
+      logActivity({
+        kind: "device",
+        title: `Disconnected ${wifiEp}`,
+        deviceId: saved.hw_serial ?? device?.hw_serial ?? undefined,
+      });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -409,6 +451,9 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
             {serial ?? `${saved.host}:${saved.port}`}
           </span>
           <StatusBadge status={status} mode={session?.mode} />
+          {rowRepairMsg && (
+            <span className="text-[11px] text-status-danger">{rowRepairMsg}</span>
+          )}
         </span>
         <span className="flex gap-2">
           {status === "offline" && (
@@ -451,7 +496,8 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
               Camera
             </Button>
           )}
-          {serial && status !== "offline" && (
+          {(device?.transports?.wifi || (serial && isWifiSerial(serial))) &&
+            status !== "offline" && (
             <Button size="sm" variant="outline" onClick={disconnect} disabled={busy}>
               <Unplug className="h-4 w-4" />
               Disconnect

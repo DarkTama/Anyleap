@@ -11,14 +11,23 @@ import {
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import {
-  listDevices,
   startMirror,
   stopMirror,
   getSystemResolution,
-  connectDevice,
-  discoverWireless,
   resetDeviceDisplay,
 } from "@/lib/tauri";
+import {
+  findSessionForDevice,
+  isWifiSerial,
+  parseHostPort,
+  resolveDeviceNickname,
+  resolveDeviceTarget,
+} from "@/lib/deviceStatus";
+import {
+  reconnectSavedDevice,
+  refreshAndReconnectDevices,
+  repairKeyFor,
+} from "@/lib/deviceSync";
 import { DeviceRack } from "./DeviceRack";
 import { DeviceHeroCard } from "./DeviceHeroCard";
 import { LaunchMatrix } from "./LaunchMatrix";
@@ -35,7 +44,6 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
   const sessions = useAppStore((s) => s.sessions);
-  const setDevices = useAppStore((s) => s.setDevices);
   const settings = useAppStore((s) => s.settings);
   const setSettings = useAppStore((s) => s.setSettings);
   const setError = useAppStore((s) => s.setError);
@@ -45,34 +53,44 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   const currentMode = useAppStore((s) => s.currentMode);
   const setCurrentMode = useAppStore((s) => s.setCurrentMode);
   const batteryMap = useAppStore((s) => s.batteryMap);
+  const repairNeeded = useAppStore((s) => s.repairNeeded);
 
   const [refreshing, setRefreshing] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
 
-  // Active target device resolution
-  const activeDevice: DeviceInfo | SavedDevice | null = useMemo(() => {
-    if (!selectedSerial) return devices[0] ?? savedDevices[0] ?? null;
-    const foundDev = devices.find((d) => d.serial === selectedSerial);
-    if (foundDev) return foundDev;
-    const foundSaved = savedDevices.find(
-      (s) => s.lastSerial === selectedSerial || `${s.host}:${s.port}` === selectedSerial,
-    );
-    return foundSaved ?? null;
-  }, [devices, savedDevices, selectedSerial]);
-
-  const activeSession = useMemo(() => {
-    if (!selectedSerial) return null;
-    return sessions.find((s) => s.serial === selectedSerial) ?? null;
-  }, [sessions, selectedSerial]);
-
-  const isLive = Boolean(
-    activeDevice &&
-      ("state" in activeDevice
-        ? activeDevice.state === "device"
-        : devices.some((d) => d.serial.startsWith(`${(activeDevice as SavedDevice).host}:`))),
+  // Active target device resolution grouped by hardware serial
+  const resolved = useMemo(
+    () => resolveDeviceTarget(selectedSerial, devices, savedDevices),
+    [selectedSerial, devices, savedDevices],
   );
+  const activeSerial = resolved.activeSerial;
+  const activeDevice: DeviceInfo | SavedDevice | null =
+    resolved.device ?? resolved.saved ?? null;
+
+  const activeSession = useMemo(
+    () =>
+      findSessionForDevice(
+        { device: resolved.device, saved: resolved.saved, serial: activeSerial },
+        sessions,
+      ) ?? null,
+    [resolved.device, resolved.saved, activeSerial, sessions],
+  );
+
+  const isLive = resolved.isLive;
+  const isWireless = resolved.isWireless;
+  const targetRepairKey = repairKeyFor({
+    device: resolved.device,
+    saved: resolved.saved,
+    serial: activeSerial,
+  });
+  const repairMessage =
+    !isLive && targetRepairKey
+      ? repairNeeded[targetRepairKey] ??
+        (resolved.saved?.id ? repairNeeded[resolved.saved.id] : undefined) ??
+        null
+      : null;
 
   // Parse current DPI from flexDisplaySize or fallback to 160
   const currentDpi = useMemo(() => {
@@ -107,7 +125,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
     setRefreshing(true);
     setError(null);
     try {
-      setDevices(await listDevices());
+      await refreshAndReconnectDevices({ silentRepair: true });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -116,7 +134,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   };
 
   const handlePrimaryLaunch = async () => {
-    if (!selectedSerial) return;
+    if (!activeSerial) return;
     if (currentMode === "camera") {
       setCameraOpen(true);
       return;
@@ -126,33 +144,45 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
     setError(null);
 
     try {
-      let targetSerial = selectedSerial;
-      const isSavedOffline =
-        !devices.some((d) => d.serial === targetSerial) &&
-        savedDevices.some((s) => `${s.host}:${s.port}` === targetSerial || s.lastSerial === targetSerial);
-
-      if (isSavedOffline) {
-        const saved = savedDevices.find(
-          (s) => `${s.host}:${s.port}` === targetSerial || s.lastSerial === targetSerial,
-        );
-        if (saved) {
-          const services = await discoverWireless().catch(() => []);
-          const svc = services.find((s) => s.host === saved.host && s.serviceType.includes("connect"));
-          const connectedSerial = await connectDevice(saved.host, svc?.port ?? saved.port);
-          targetSerial = connectedSerial;
-          setDevices(await listDevices());
-          logActivity({
-            kind: "device",
-            title: `Connected ${saved.label || connectedSerial}`,
-            detail: connectedSerial,
-          });
-        }
-      }
-
       if (activeSession) {
         await stopMirror(activeSession.id);
-      } else {
+        return;
+      }
+
+      let targetSerial = activeSerial;
+      if (!isLive && resolved.saved) {
+        const res = await reconnectSavedDevice(resolved.saved, { silent: false });
+        if (res.status === "needs_repair") {
+          return;
+        }
+        if (res.serial) {
+          targetSerial = res.serial;
+        }
+        logActivity({
+          kind: "device",
+          title: `Connected ${resolved.saved.label || targetSerial}`,
+          detail: targetSerial,
+          deviceId: resolved.hwSerial ?? undefined,
+        });
+      }
+
+      try {
         await startMirror(targetSerial, settings);
+      } catch (launchErr) {
+        if (resolved.saved && isWifiSerial(targetSerial)) {
+          const res = await reconnectSavedDevice(resolved.saved, { silent: false });
+          if (
+            (res.status === "reconnected" || res.status === "already_connected") &&
+            res.serial
+          ) {
+            await startMirror(res.serial, settings);
+            return;
+          }
+          if (res.status === "needs_repair") {
+            return;
+          }
+        }
+        throw launchErr;
       }
     } catch (e) {
       const msg = String(e);
@@ -161,39 +191,44 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
         kind: "mirror",
         title: `Failed to start mirror`,
         detail: msg,
+        deviceId: resolved.hwSerial ?? undefined,
       });
     } finally {
       setLaunching(false);
     }
   };
 
-  const isWireless = Boolean(
-    (selectedSerial && selectedSerial.includes(":")) ||
-      (activeDevice && !("state" in activeDevice)),
-  );
-
   const handleReconnect = async () => {
-    if (!selectedSerial) return;
+    if (!activeSerial && !resolved.saved) return;
     setReconnecting(true);
     setError(null);
     try {
-      const saved = savedDevices.find(
-        (s) => `${s.host}:${s.port}` === selectedSerial || s.lastSerial === selectedSerial,
-      );
-      const [hostPart, portPart] = selectedSerial.split(":");
-      const host = saved?.host ?? hostPart;
-      const fallbackPort = saved?.port ?? (portPart ? Number(portPart) : 5555);
-      if (!host) return;
-      const services = await discoverWireless().catch(() => []);
-      const svc = services.find((s) => s.host === host && s.serviceType.includes("connect"));
-      const connectedSerial = await connectDevice(host, svc?.port ?? fallbackPort);
-      setSelectedSerial(connectedSerial);
-      setDevices(await listDevices());
-      logActivity({
-        kind: "device",
-        title: `Reconnected ${saved?.label || connectedSerial}`,
-        detail: connectedSerial,
-      });
+      const parsed = activeSerial ? parseHostPort(activeSerial) : null;
+      const savedTarget: SavedDevice | null =
+        resolved.saved ??
+        (parsed
+          ? {
+              id: resolved.hwSerial ?? activeSerial!,
+              hw_serial: resolved.hwSerial ?? undefined,
+              label: activeSerial!,
+              host: parsed.host,
+              port: parsed.port,
+              lastSerial: activeSerial!,
+            }
+          : null);
+      if (!savedTarget) return;
+
+      const res = await reconnectSavedDevice(savedTarget, { silent: false });
+      if (res.status !== "needs_repair") {
+        const nextSerial = res.serial ?? activeSerial;
+        if (nextSerial) setSelectedSerial(nextSerial);
+        logActivity({
+          kind: "device",
+          title: `Reconnected ${savedTarget.label || nextSerial || savedTarget.host}`,
+          detail: nextSerial ?? undefined,
+          deviceId: res.hwSerial ?? resolved.hwSerial ?? undefined,
+        });
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -201,20 +236,29 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
     }
   };
 
-  const targetDisplayName = activeDevice
-    ? "model" in activeDevice
-      ? activeDevice.model || activeDevice.product || activeDevice.serial
-      : activeDevice.label || activeDevice.lastSerial || `${activeDevice.host}:${activeDevice.port}`
-    : "No Device Selected";
+  const targetDisplayName = resolved.device
+    ? resolved.device.model || resolved.device.product || resolved.device.serial
+    : resolved.saved
+      ? resolved.saved.label ||
+        resolved.saved.lastSerial ||
+        `${resolved.saved.host}:${resolved.saved.port}`
+      : "No Device Selected";
 
-  const targetNickname = selectedSerial ? nicknames[selectedSerial] : undefined;
+  const targetNickname = activeDevice
+    ? resolveDeviceNickname(nicknames, {
+        serial: activeSerial ?? undefined,
+        device: resolved.device ?? undefined,
+        saved: resolved.saved ?? undefined,
+      })
+    : undefined;
 
   return (
     <div className="flex h-full w-full overflow-hidden select-none bg-ink-950">
       {/* Left Column: Device Hardware Rack */}
       <DeviceRack
-        selectedSerial={selectedSerial}
+        selectedSerial={activeSerial}
         onSelectDevice={(serial) => setSelectedSerial(serial)}
+        onOpenPair={onOpenPair}
       />
 
       {/* Right Column: Workbench & Launch Bay */}
@@ -222,14 +266,17 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
         {/* Device Hero Card */}
         <DeviceHeroCard
           activeDevice={activeDevice}
-          selectedSerial={selectedSerial}
+          selectedSerial={activeSerial}
           displayName={targetDisplayName}
           nickname={targetNickname}
           isLive={isLive}
           isWireless={isWireless}
+          hasUsb={resolved.hasUsb}
+          hasWifi={resolved.hasWifi}
+          repairMessage={repairMessage}
           activeSession={activeSession}
           currentMode={currentMode}
-          battery={selectedSerial ? batteryMap[selectedSerial] : undefined}
+          battery={activeSerial ? batteryMap[activeSerial] : undefined}
           launching={launching}
           reconnecting={reconnecting}
           refreshing={refreshing}
@@ -253,8 +300,8 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
                 <button
                   type="button"
                   onClick={() => {
-                    if (selectedSerial) {
-                      resetDeviceDisplay(selectedSerial).catch((e) => setError(String(e)));
+                    if (activeSerial) {
+                      resetDeviceDisplay(activeSerial).catch((e) => setError(String(e)));
                     }
                   }}
                   className="btn-tactile text-[10px] font-mono text-text-muted hover:text-status-warning underline cursor-pointer"
@@ -446,7 +493,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
           <div className="flex items-center justify-between text-[11px] font-mono text-text-muted">
             <div className="flex items-center gap-2">
               <span className="text-text-muted">TARGET:</span>
-              <span className="text-text-strong font-semibold">{selectedSerial || "None"}</span>
+              <span className="text-text-strong font-semibold">{activeSerial || "None"}</span>
               <span>·</span>
               <span className="text-text">
                 {currentMode === "flex" ? `FLEX (${currentDpi} DPI)` : currentMode.toUpperCase()}
@@ -468,7 +515,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
           ) : (
             <button
               type="button"
-              disabled={launching || !selectedSerial}
+              disabled={launching || !activeSerial}
               onClick={handlePrimaryLaunch}
               className="btn-tactile w-full flex items-center justify-center gap-2 rounded-lg bg-gold-400 py-3 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
@@ -487,11 +534,11 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
       <TimelinePanel />
 
       {/* Camera Launch Dialog */}
-      {selectedSerial && (
+      {activeSerial && (
         <CameraLaunchDialog
           isOpen={cameraOpen}
           onClose={() => setCameraOpen(false)}
-          serial={selectedSerial}
+          serial={activeSerial}
           deviceName={targetDisplayName}
         />
       )}

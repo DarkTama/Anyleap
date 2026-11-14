@@ -16,6 +16,7 @@ export interface Activity {
   kind: ActivityKind;
   title: string;
   detail?: string;
+  deviceId?: string;
   at: number;
   durationMs?: number;
 }

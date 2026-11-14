@@ -25,10 +25,7 @@ import {
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import {
-  connectDevice,
   disconnectDevice,
-  discoverWireless,
-  listDevices,
   startMirror,
   stopMirror,
   getBatteryInfo,
@@ -40,22 +37,35 @@ import { forgetSaved } from "@/lib/savedDevices";
 import {
   buildRows,
   deviceStatusOf,
-  resolveDeviceNickname,
+  findSessionForDevice,
   getNicknameKey,
+  isWifiSerial,
+  MSG_NEEDS_REPAIR,
+  resolveDeviceNickname,
+  resolveDeviceTarget,
 } from "@/lib/deviceStatus";
+import {
+  reconnectSavedDevice,
+  repairKeyFor,
+  syncDevicesAndMigrate,
+} from "@/lib/deviceSync";
 import { saveNickname } from "@/lib/settingsStore";
 import type { BatteryInfo, SavedDevice } from "@/lib/types";
 
 interface DeviceRackProps {
   selectedSerial: string | null;
   onSelectDevice: (serial: string) => void;
+  onOpenPair?: () => void;
 }
 
-export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) {
+export function DeviceRack({
+  selectedSerial,
+  onSelectDevice,
+  onOpenPair,
+}: DeviceRackProps) {
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
   const sessions = useAppStore((s) => s.sessions);
-  const setDevices = useAppStore((s) => s.setDevices);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
   const settings = useAppStore((s) => s.settings);
@@ -65,6 +75,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
   const batteryMap = useAppStore((s) => s.batteryMap);
   const setBatteryInfo = useAppStore((s) => s.setBatteryInfo);
   const openDoctor = useAppStore((s) => s.openDoctor);
+  const repairNeeded = useAppStore((s) => s.repairNeeded);
 
   const prevBatteryRef = useRef<Record<string, BatteryInfo>>({});
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
@@ -183,13 +194,12 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
     }
   };
 
-  // If no device is selected yet and devices exist, pick the first available
+  // If no device is selected yet and devices exist, pick the first available merged target
   useEffect(() => {
     if (!selectedSerial) {
-      if (devices.length > 0) {
-        onSelectDevice(devices[0].serial);
-      } else if (savedDevices.length > 0) {
-        onSelectDevice(savedDevices[0].lastSerial || `${savedDevices[0].host}:${savedDevices[0].port}`);
+      const first = resolveDeviceTarget(null, devices, savedDevices);
+      if (first.activeSerial) {
+        onSelectDevice(first.activeSerial);
       }
     }
   }, [devices, savedDevices, selectedSerial, onSelectDevice]);
@@ -219,14 +229,19 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
     setError(null);
     setFailedSerial(null);
     try {
-      const services = await discoverWireless().catch(() => []);
-      const svc = services.find((s) => s.host === saved.host && s.serviceType.includes("connect"));
-      const connectedSerial = await connectDevice(saved.host, svc?.port ?? saved.port);
-      setDevices(await listDevices());
+      const res = await reconnectSavedDevice(saved, { silent: false });
+      if (res.status === "needs_repair") {
+        setFailedSerial(saved.id);
+        return;
+      }
+      if (res.serial) {
+        onSelectDevice(res.serial);
+      }
       logActivity({
         kind: "device",
-        title: `Connected ${saved.label || connectedSerial}`,
-        detail: connectedSerial,
+        title: `Connected ${saved.label || res.serial || saved.host}`,
+        detail: res.serial ?? undefined,
+        deviceId: res.hwSerial ?? saved.hw_serial ?? undefined,
       });
     } catch (e) {
       setFailedSerial(saved.id);
@@ -243,7 +258,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
     setError(null);
     try {
       await disconnectDevice(host, Number(port));
-      setDevices(await listDevices());
+      await syncDevicesAndMigrate();
       logActivity({
         kind: "device",
         title: `Disconnected ${serial}`,
@@ -266,13 +281,34 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
     }
   };
 
-  const handleMirror = async (serial: string) => {
+  const handleMirror = async (serial: string, saved?: SavedDevice) => {
     setBusySerial(serial);
     setError(null);
     setFailedSerial(null);
     try {
       await startMirror(serial, settings);
     } catch (e) {
+      if (saved && isWifiSerial(serial)) {
+        const res = await reconnectSavedDevice(saved, { silent: false });
+        if (
+          (res.status === "reconnected" || res.status === "already_connected") &&
+          res.serial
+        ) {
+          try {
+            await startMirror(res.serial, settings);
+            return;
+          } catch (retryErr) {
+            const msg = String(retryErr);
+            setFailedSerial(res.serial);
+            setError(msg);
+            return;
+          }
+        }
+        if (res.status === "needs_repair") {
+          setFailedSerial(saved.id);
+          return;
+        }
+      }
       const msg = String(e);
       setFailedSerial(serial);
       setError(msg);
@@ -280,6 +316,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
         kind: "mirror",
         title: `Failed to mirror ${serial}`,
         detail: msg,
+        deviceId: saved?.hw_serial ?? undefined,
       });
     } finally {
       setBusySerial(null);
@@ -306,7 +343,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
             Device Rack
           </span>
           <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[9px] font-mono text-text-muted border border-ink-700">
-            {devices.length + savedRows.filter((r) => !r.device).length}
+            {savedRows.length + otherDevices.length}
           </span>
         </div>
         <span className="font-mono text-[10px] text-text-muted">USB / WI-FI</span>
@@ -325,17 +362,26 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
 
         {/* Live connected other devices (USB or ad-hoc wireless) */}
         {otherDevices.map((dev) => {
-          const isSelected = selectedSerial === dev.serial;
+          const isSelected = Boolean(
+            selectedSerial === dev.serial ||
+              (dev.hw_serial && selectedSerial === dev.hw_serial) ||
+              (dev.transports?.usb && selectedSerial === dev.transports.usb) ||
+              (dev.transports?.wifi && selectedSerial === dev.transports.wifi),
+          );
           const isBusy = busySerial === dev.serial;
           const wireless = dev.serial.includes(":");
           const status = deviceStatusOf(dev, sessions);
-          const session = sessions.find((s) => s.serial === dev.serial);
-          const nickname = nicknames[dev.serial];
+          const session = findSessionForDevice({ device: dev }, sessions);
+          const nickname = resolveDeviceNickname(nicknames, {
+            serial: dev.serial,
+            device: dev,
+          });
+          const nicknameKey = getNicknameKey({ serial: dev.serial, device: dev });
           const batt = batteryMap[dev.serial];
 
           return (
             <div
-              key={dev.serial}
+              key={dev.hw_serial || dev.serial}
               onClick={() => onSelectDevice(dev.serial)}
               className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
                 isSelected
@@ -373,13 +419,13 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                           autoFocus
                           onChange={(e) => setEditingName(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSaveNickname(dev.serial);
+                            if (e.key === "Enter") handleSaveNickname(nicknameKey, dev.serial);
                             if (e.key === "Escape") setEditingSerial(null);
                           }}
                         />
                         <button
                           type="button"
-                          onClick={() => handleSaveNickname(dev.serial)}
+                          onClick={() => handleSaveNickname(nicknameKey, dev.serial)}
                           className="btn-tactile text-gold-400 hover:text-text-strong p-0.5"
                         >
                           <Check className="h-3 w-3" />
@@ -557,17 +603,41 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
           );
         })}
 
-        {/* Saved wireless devices */}
+        {/* Saved devices */}
         {savedRows.map((r) => {
           const { saved, device, status } = r;
           const serial = device?.serial;
-          const targetSerial = serial ?? `${saved.host}:${saved.port}`;
-          const isSelected = selectedSerial === targetSerial || (serial && selectedSerial === serial);
+          const targetSerial = serial ?? (saved.lastSerial || `${saved.host}:${saved.port}`);
+          const isSelected = Boolean(
+            selectedSerial === targetSerial ||
+              (serial && selectedSerial === serial) ||
+              (saved.hw_serial && selectedSerial === saved.hw_serial) ||
+              (device?.transports?.usb && selectedSerial === device.transports.usb) ||
+              (device?.transports?.wifi && selectedSerial === device.transports.wifi),
+          );
           const isBusy = busySerial === saved.id || Boolean(serial && busySerial === serial);
-          const session = serial ? sessions.find((s) => s.serial === serial) : undefined;
-          const nickname = resolveDeviceNickname(nicknames, { serial, saved });
-          const nicknameKey = getNicknameKey({ serial, saved });
+          const session = findSessionForDevice(
+            { device, saved, serial: targetSerial },
+            sessions,
+          );
+          const nickname = resolveDeviceNickname(nicknames, {
+            serial,
+            saved,
+            device,
+          });
+          const nicknameKey = getNicknameKey({ serial, saved, device });
           const batt = serial ? batteryMap[serial] : undefined;
+          const rKey = repairKeyFor({ device, saved, serial: targetSerial });
+          const rowRepairMsg =
+            status === "offline" || (device && device.state !== "device")
+              ? repairNeeded[rKey] ??
+                repairNeeded[saved.id] ??
+                (device?.state === "unauthorized" ? MSG_NEEDS_REPAIR : null)
+              : null;
+          const dualTransport = Boolean(device?.transports?.usb && device?.transports?.wifi);
+          const usbOnly = Boolean(
+            !dualTransport && (device?.transports?.usb || (serial && !isWifiSerial(serial))),
+          );
 
           return (
             <div
@@ -650,17 +720,35 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   </div>
                 </div>
 
-                {/* Wireless Badge */}
+                {/* Transport Badge */}
                 <div className="flex items-center gap-1 rounded bg-ink-800 px-1.5 py-0.5 border border-ink-700 text-[10px] font-mono text-text shrink-0">
-                  <Wifi className="h-3 w-3 text-mist-300" />
-                  <span>Wi-Fi</span>
+                  {dualTransport ? (
+                    <>
+                      <Usb className="h-3 w-3 text-status-success" />
+                      <span>USB + Wi-Fi</span>
+                    </>
+                  ) : usbOnly ? (
+                    <>
+                      <Usb className="h-3 w-3 text-text-muted" />
+                      <span>USB</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wifi className="h-3 w-3 text-mist-300" />
+                      <span>Wi-Fi</span>
+                    </>
+                  )}
                 </div>
               </div>
 
               {/* Hardware Telemetry Bar */}
               <div className="mt-2.5 flex items-center justify-between border-t border-ink-700 pt-2 text-[10px] text-text-muted font-mono">
-                <span className="truncate max-w-[120px]">
-                  {status === "offline" ? "Saved Device" : serial}
+                <span className="truncate max-w-[140px]">
+                  {status === "offline"
+                    ? rowRepairMsg
+                      ? MSG_NEEDS_REPAIR
+                      : "Saved Device"
+                    : serial}
                 </span>
                 {batt?.level !== null && batt?.level !== undefined && (
                   <div className="flex items-center gap-1 text-text">
@@ -673,6 +761,24 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   </div>
                 )}
               </div>
+
+              {rowRepairMsg && (
+                <div
+                  className="mt-2 flex items-center justify-between gap-2 rounded-md border border-status-danger/40 bg-status-danger-bg px-2 py-1 text-[10px] text-status-danger"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="truncate">{rowRepairMsg}</span>
+                  {onOpenPair && (
+                    <button
+                      type="button"
+                      onClick={onOpenPair}
+                      className="btn-tactile shrink-0 rounded bg-gold-400 px-1.5 py-0.5 text-[10px] font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer"
+                    >
+                      Pair again
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Quick Actions */}
               <div
@@ -703,7 +809,7 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
                   <button
                     type="button"
                     disabled={isBusy}
-                    onClick={() => serial && handleMirror(serial)}
+                    onClick={() => serial && handleMirror(serial, saved)}
                     className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
                   >
                     <Play className="h-3 w-3 fill-current" />
@@ -724,15 +830,19 @@ export function DeviceRack({ selectedSerial, onSelectDevice }: DeviceRackProps) 
 
                 {status !== "offline" && serial && (
                   <>
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => handleDisconnect(serial)}
-                      className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-text-strong hover:border-text-muted"
-                      title="Disconnect wireless"
-                    >
-                      <Unplug className="h-3.5 w-3.5" />
-                    </button>
+                    {(device?.transports?.wifi || isWifiSerial(serial)) && (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() =>
+                          handleDisconnect(device?.transports?.wifi ?? serial)
+                        }
+                        className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-text-strong hover:border-text-muted"
+                        title="Disconnect wireless"
+                      >
+                        <Unplug className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={isBusy}

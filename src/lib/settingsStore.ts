@@ -156,12 +156,39 @@ export async function listSavedDevices(): Promise<SavedDevice[]> {
   return (await store.get<SavedDevice[]>("savedDevices")) ?? [];
 }
 
+export async function replaceSavedDevices(devices: SavedDevice[]): Promise<SavedDevice[]> {
+  const store = await getStore();
+  await store.set("savedDevices", devices);
+  await store.save();
+  return devices;
+}
+
 export async function saveDevice(device: SavedDevice): Promise<SavedDevice[]> {
   const store = await getStore();
   const current = (await store.get<SavedDevice[]>("savedDevices")) ?? [];
-  const next = current.some((d) => d.id === device.id)
-    ? current.map((d) => (d.id === device.id ? device : d))
-    : [...current, device];
+  const matchesExisting = (d: SavedDevice) =>
+    d.id === device.id ||
+    (Boolean(device.hw_serial) && d.hw_serial === device.hw_serial) ||
+    (Boolean(device.hw_serial) && d.id === device.host) ||
+    (!d.hw_serial && Boolean(device.host) && d.host === device.host);
+
+  const existing = current.find(matchesExisting);
+  const mergedLabel =
+    existing?.label &&
+    existing.label !== existing.host &&
+    existing.label !== existing.lastSerial &&
+    existing.label !== `${existing.host}:${existing.port}`
+      ? existing.label
+      : device.label;
+  const normalized: SavedDevice = {
+    ...existing,
+    ...device,
+    id: device.hw_serial || device.id,
+    label: mergedLabel || device.label,
+  };
+
+  const remaining = current.filter((d) => !matchesExisting(d));
+  const next = [...remaining, normalized];
   await store.set("savedDevices", next);
   await store.save();
   return next;
@@ -170,7 +197,7 @@ export async function saveDevice(device: SavedDevice): Promise<SavedDevice[]> {
 export async function forgetDevice(id: string): Promise<SavedDevice[]> {
   const store = await getStore();
   const next = ((await store.get<SavedDevice[]>("savedDevices")) ?? []).filter(
-    (d) => d.id !== id,
+    (d) => d.id !== id && d.hw_serial !== id,
   );
   await store.set("savedDevices", next);
   await store.save();
@@ -187,6 +214,15 @@ export const getSavedDevices = listSavedDevices;
 export async function getNicknames(): Promise<Record<string, string>> {
   const store = await getStore();
   return (await store.get<Record<string, string>>("nicknames")) ?? {};
+}
+
+export async function replaceNicknames(
+  nicknames: Record<string, string>,
+): Promise<Record<string, string>> {
+  const store = await getStore();
+  await store.set("nicknames", nicknames);
+  await store.save();
+  return nicknames;
 }
 
 export async function saveNickname(

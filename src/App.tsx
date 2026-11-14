@@ -10,10 +10,7 @@ import { TimelineDrawer } from "@/components/deck/TimelinePanel";
 import { PairDialog } from "@/components/PairDialog";
 import { useAppStore } from "@/store/useAppStore";
 import {
-  connectDevice,
-  discoverWireless,
   getDeviceNotifications,
-  listDevices,
   listSessions,
   onSessionExited,
   onSessionStarted,
@@ -26,6 +23,8 @@ import {
   getPhoneToggles,
   setPhoneToggle,
 } from "@/lib/tauri";
+import { MSG_NEEDS_REPAIR, resolveDeviceNickname, resolveDeviceTarget } from "@/lib/deviceStatus";
+import { refreshAndReconnectDevices, syncDevicesAndMigrate } from "@/lib/deviceSync";
 import type { PhoneNotification } from "@/lib/types";
 import {
   isPermissionGranted,
@@ -49,7 +48,6 @@ import { listen } from "@tauri-apps/api/event";
 function App() {
   const error = useAppStore((s) => s.error);
   const sessions = useAppStore((s) => s.sessions);
-  const setDevices = useAppStore((s) => s.setDevices);
   const setSessions = useAppStore((s) => s.setSessions);
   const upsertSession = useAppStore((s) => s.upsertSession);
   const removeSession = useAppStore((s) => s.removeSession);
@@ -161,9 +159,20 @@ function App() {
         removeSession(e.payload.id);
         const targetSerial = e.payload.serial || endedSession?.serial;
         if (endedSession) {
-          const dev = state.devices.find((d) => d.serial === endedSession.serial);
+          const resolved = resolveDeviceTarget(
+            endedSession.serial,
+            state.devices,
+            state.savedDevices,
+          );
+          const dev = resolved.device ?? undefined;
+          const saved = resolved.saved ?? undefined;
           const label =
-            state.nicknames[endedSession.serial] ||
+            resolveDeviceNickname(state.nicknames, {
+              serial: endedSession.serial,
+              device: dev,
+              saved,
+            }) ||
+            saved?.label ||
             dev?.model ||
             dev?.product ||
             endedSession.serial;
@@ -175,6 +184,7 @@ function App() {
                 ? `Camera Studio ${label}`
                 : `Mirrored ${label}`,
             detail: e.payload.last_error || undefined,
+            deviceId: resolved.hwSerial ?? undefined,
             durationMs,
           });
           if (endedSession.recording_path) {
@@ -182,6 +192,7 @@ function App() {
               kind: "mirror",
               title: `Recording saved (${label})`,
               detail: endedSession.recording_path,
+              deviceId: resolved.hwSerial ?? undefined,
               durationMs,
             });
           }
@@ -220,8 +231,7 @@ function App() {
         }, 4000);
       }),
     ];
-    listDevices()
-      .then(setDevices)
+    syncDevicesAndMigrate()
       .catch((e) => setError(String(e)));
     listSessions()
       .then(setSessions)
@@ -231,36 +241,21 @@ function App() {
       if (hudNoticeTimerRef.current) clearTimeout(hudNoticeTimerRef.current);
       unlisteners.forEach((p) => p.then((un) => un()));
     };
-  }, [setDevices, setSessions, upsertSession, removeSession, setError]);
+  }, [setSessions, upsertSession, removeSession, setError]);
 
-  // Load saved devices and best-effort auto-reconnect (offline phones are normal).
+  // Load saved devices, migrate legacy IP:port entries, and auto-reconnect wireless phones.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const saved = await listSaved().catch(() => []);
       if (cancelled) return;
       setSavedDevices(saved);
-      if (saved.length) {
-        const services = await discoverWireless().catch(() => []);
-        if (cancelled) return;
-        await Promise.allSettled(
-          saved.map((d) => {
-            const svc = services.find(
-              (s) => s.host === d.host && s.serviceType.includes("connect"),
-            );
-            return connectDevice(d.host, svc?.port ?? d.port);
-          }),
-        );
-        if (cancelled) return;
-        listDevices()
-          .then(setDevices)
-          .catch(() => {});
-      }
+      await refreshAndReconnectDevices({ silentRepair: true }).catch(() => {});
     })();
     return () => {
       cancelled = true;
     };
-  }, [setSavedDevices, setDevices]);
+  }, [setSavedDevices]);
 
   // Load the persisted control-bar config on launch.
   useEffect(() => {
@@ -616,16 +611,32 @@ function App() {
         <div className="popover-panel absolute top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl rounded-lg border border-status-danger/40 bg-status-danger-bg px-3.5 py-2.5 text-xs text-status-danger shadow-elevated">
           <div className="flex items-start justify-between gap-2">
             <span className="font-mono">{error}</span>
-            <button
-              className="btn-tactile shrink-0 text-[10px] uppercase font-bold underline opacity-85 hover:opacity-100 cursor-pointer"
-              onClick={() => {
-                setError(null);
-                setErrorDetails(null);
-                setShowDetails(false);
-              }}
-            >
-              dismiss
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {error.includes(MSG_NEEDS_REPAIR) && (
+                <button
+                  type="button"
+                  className="btn-tactile rounded bg-gold-400 px-2 py-0.5 text-[10px] font-bold uppercase text-ink-950 hover:bg-gold-600 cursor-pointer"
+                  onClick={() => {
+                    setError(null);
+                    setErrorDetails(null);
+                    setShowDetails(false);
+                    setPairOpen(true);
+                  }}
+                >
+                  Pair again
+                </button>
+              )}
+              <button
+                className="btn-tactile shrink-0 text-[10px] uppercase font-bold underline opacity-85 hover:opacity-100 cursor-pointer"
+                onClick={() => {
+                  setError(null);
+                  setErrorDetails(null);
+                  setShowDetails(false);
+                }}
+              >
+                dismiss
+              </button>
+            </div>
           </div>
           {errorDetails && (
             <div className="mt-1">

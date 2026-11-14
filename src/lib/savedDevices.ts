@@ -3,6 +3,7 @@ export {
   upsertSaved,
   forgetSaved,
   listSavedDevices,
+  replaceSavedDevices,
   saveDevice,
   forgetDevice,
 } from "./settingsStore";
