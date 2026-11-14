@@ -185,4 +185,162 @@ describe("kvmStore", () => {
     expect(useKvmStore.getState().settings.debugLog).toBe(true);
     expect(dbgSpy).toHaveBeenCalledWith(true);
   });
+
+  it("connectPeer computes remote_origin and sends it via kvmUpdateTopology", async () => {
+    vi.spyOn(kvmService, "kvmConnectPeer").mockResolvedValue(undefined);
+    const updateTopoSpy = vi
+      .spyOn(kvmService, "kvmUpdateTopology")
+      .mockResolvedValue(undefined);
+    vi.spyOn(kvmService, "kvmGetStatus").mockResolvedValue({
+      is_host_running: true,
+      port: 4177,
+      security_pin: "123456",
+      connected_peers: ["Workstation"],
+      is_input_trapped: false,
+      local_id: "main-pc",
+      local_name: "Main",
+      monitors: [
+        { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+      ],
+      peers: [
+        {
+          id: "peer-pc",
+          name: "Workstation",
+          is_local: false,
+          address: "192.168.1.60",
+          bounds: { x: 0, y: 0, width: 1920, height: 1200 },
+          monitors: [
+            { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1200, is_primary: true },
+          ],
+        },
+      ],
+    });
+
+    await useKvmStore.getState().connectPeer({
+      id: "peer-pc",
+      name: "Workstation",
+      ip: "192.168.1.60",
+      port: 4177,
+    });
+
+    const state = useKvmStore.getState();
+    expect(state.topology.remote_origin).toEqual({ x: 1920, y: 0 });
+    expect(updateTopoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remote_origin: { x: 1920, y: 0 },
+      })
+    );
+  });
+
+  it("refreshStatus falls back to preset on previously used side and shows notice when monitors change", async () => {
+    vi.spyOn(kvmService, "kvmConnectPeer").mockResolvedValue(undefined);
+    const updateTopoSpy = vi
+      .spyOn(kvmService, "kvmUpdateTopology")
+      .mockResolvedValue(undefined);
+    vi.spyOn(kvmService, "kvmGetStatus").mockResolvedValueOnce({
+      is_host_running: true,
+      port: 4177,
+      security_pin: "123456",
+      connected_peers: ["Laptop"],
+      is_input_trapped: false,
+      local_id: "main-pc",
+      local_name: "Main",
+      monitors: [
+        { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+      ],
+      peers: [
+        {
+          id: "peer-1",
+          name: "Laptop",
+          is_local: false,
+          address: "192.168.1.77",
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+          monitors: [
+            { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+          ],
+        },
+      ],
+    }).mockResolvedValueOnce({
+      is_host_running: true,
+      port: 4177,
+      security_pin: "123456",
+      connected_peers: ["Laptop"],
+      is_input_trapped: false,
+      local_id: "main-pc",
+      local_name: "Main",
+      monitors: [
+        { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+      ],
+      peers: [
+        {
+          id: "peer-1",
+          name: "Laptop",
+          is_local: false,
+          address: "192.168.1.77",
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+          monitors: [
+            { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+          ],
+        },
+      ],
+    });
+
+    await useKvmStore.getState().connectPeer({
+      id: "peer-1",
+      name: "Laptop",
+      ip: "192.168.1.77",
+      port: 4177,
+    });
+
+    // Move peer to bottom via setTopology
+    const cur = useKvmStore.getState().topology;
+    await useKvmStore.getState().setTopology({
+      ...cur,
+      links: [{ ...cur.links[0], from_edge: "bottom", to_edge: "top" }],
+      remote_origin: { x: 200, y: 1080 },
+    });
+
+    // Now Main PC gains a second monitor on refreshStatus
+    vi.spyOn(kvmService, "kvmGetStatus").mockResolvedValueOnce({
+      is_host_running: true,
+      port: 4177,
+      security_pin: "123456",
+      connected_peers: ["Laptop"],
+      is_input_trapped: false,
+      local_id: "main-pc",
+      local_name: "Main",
+      monitors: [
+        { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+        { id: "\\\\.\\DISPLAY2", device_name: "\\\\.\\DISPLAY2", x: 1920, y: 0, width: 1920, height: 1080, is_primary: false },
+      ],
+      peers: [
+        {
+          id: "peer-1",
+          name: "Laptop",
+          is_local: false,
+          address: "192.168.1.77",
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+          monitors: [
+            { id: "\\\\.\\DISPLAY1", device_name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 1920, height: 1080, is_primary: true },
+          ],
+        },
+      ],
+    });
+
+    updateTopoSpy.mockClear();
+    await useKvmStore.getState().refreshStatus();
+
+    const after = useKvmStore.getState();
+    expect(after.monitorChangeNotice).toMatch(/Main PC.*BOTTOM preset/i);
+    expect(after.topology.remote_origin).toEqual({ x: 0, y: 1080 });
+    expect(after.topology.links[0].from_edge).toBe("bottom");
+    expect(updateTopoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remote_origin: { x: 0, y: 1080 },
+      })
+    );
+
+    after.dismissMonitorChangeNotice();
+    expect(useKvmStore.getState().monitorChangeNotice).toBeNull();
+  });
 });

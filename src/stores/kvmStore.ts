@@ -31,8 +31,12 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { logActivity } from "./activityStore";
 import {
-  computePeerOrigin,
+  computePresetOrigin,
+  computeSeams,
+  monitorLayoutSignature,
+  normalizeMonitors,
   oppositeEdge,
+  primarySeamSide,
   unionRect as layoutUnionRect,
 } from "@/components/computers/topologyLayout";
 
@@ -53,9 +57,11 @@ export interface KvmState {
   settings: KvmSettingsConfig;
   activityFeed: KvmActivityItem[];
   cursorPos: { normX: number; normY: number } | null;
+  monitorChangeNotice: string | null;
 
   init: () => Promise<void>;
   refreshStatus: () => Promise<void>;
+  dismissMonitorChangeNotice: () => void;
   setAllowControl: (enabled: boolean) => Promise<void>;
   startServer: () => Promise<void>;
   stopServer: () => Promise<void>;
@@ -121,6 +127,7 @@ const defaultTopology: TopologyConfig = {
     },
   ],
   links: [],
+  remote_origin: null,
 };
 
 function loadSavedSettings(): KvmSettingsConfig {
@@ -204,6 +211,114 @@ function pruneLinks(links: TopologyLink[], computers: ComputerNode[]): TopologyL
   return links.filter((l) => ids.has(l.from_id) && ids.has(l.to_id));
 }
 
+function reconcileTopologyOnStatus(params: {
+  currentTopology: TopologyConfig;
+  updatedPrimary: ComputerNode;
+  computers: ComputerNode[];
+  status: KvmStatus;
+  settings: KvmSettingsConfig;
+}): {
+  topology: TopologyConfig;
+  monitorChangeNotice: string | null;
+  didMonitorFallback: boolean;
+} {
+  const { currentTopology, updatedPrimary, computers, status, settings } = params;
+  const prevPrimary = currentTopology.computers.find((c) => c.is_local);
+  const prevPeer = currentTopology.computers.find((c) => !c.is_local);
+  const nextPeer = computers.find((c) => !c.is_local);
+  const prunedLinks = pruneLinks(currentTopology.links, computers);
+
+  if (!nextPeer) {
+    return {
+      topology: {
+        computers,
+        links: prunedLinks,
+        remote_origin: null,
+      },
+      monitorChangeNotice: null,
+      didMonitorFallback: false,
+    };
+  }
+
+  const prevLocalSig = monitorLayoutSignature(prevPrimary?.monitors);
+  const nextLocalSig = monitorLayoutSignature(updatedPrimary.monitors);
+  const prevPeerSig = monitorLayoutSignature(prevPeer?.monitors);
+  const nextPeerSig = monitorLayoutSignature(nextPeer.monitors);
+
+  const samePeer = Boolean(prevPeer && prevPeer.id === nextPeer.id);
+  const localChanged =
+    samePeer && prevLocalSig !== "" && nextLocalSig !== "" && prevLocalSig !== nextLocalSig;
+  const peerChanged =
+    samePeer && prevPeerSig !== "" && nextPeerSig !== "" && prevPeerSig !== nextPeerSig;
+
+  if (localChanged || peerChanged) {
+    const prevSide: EdgeSide =
+      currentTopology.links[0]?.from_edge ??
+      (status.controller_edge === "left" ||
+      status.controller_edge === "right" ||
+      status.controller_edge === "top" ||
+      status.controller_edge === "bottom"
+        ? status.controller_edge
+        : loadSavedPlacement());
+
+    const mainMons = normalizeMonitors(updatedPrimary.monitors, updatedPrimary.bounds, "local");
+    const peerMons = normalizeMonitors(nextPeer.monitors, nextPeer.bounds, "peer");
+    const peerUnion = unionRect(peerMons);
+    const presetOrigin = computePresetOrigin(mainMons, peerMons, prevSide);
+
+    const updatedPeerNode: ComputerNode = {
+      ...nextPeer,
+      bounds: {
+        x: presetOrigin.x + peerUnion.x,
+        y: presetOrigin.y + peerUnion.y,
+        width: peerUnion.width,
+        height: peerUnion.height,
+      },
+    };
+    const nextComputers = computers.map((c) => (c.is_local ? updatedPrimary : updatedPeerNode));
+    const existingLink = prunedLinks[0];
+    const nextLinks: TopologyLink[] = [
+      {
+        from_id: updatedPrimary.id,
+        from_edge: prevSide,
+        to_id: updatedPeerNode.id,
+        to_edge: oppositeEdge(prevSide),
+        offset_x: 0,
+        offset_y: 0,
+        deadzone_px: existingLink?.deadzone_px ?? settings.cornerDeadzonePx,
+        resistance_ms: existingLink?.resistance_ms ?? settings.edgeResistanceMs,
+      },
+    ];
+
+    const whoChanged =
+      localChanged && peerChanged
+        ? "both PCs"
+        : localChanged
+          ? "Main PC"
+          : nextPeer.name;
+
+    return {
+      topology: {
+        computers: nextComputers,
+        links: nextLinks,
+        remote_origin: presetOrigin,
+      },
+      monitorChangeNotice: `Display layout changed on ${whoChanged} — reset to ${prevSide.toUpperCase()} preset.`,
+      didMonitorFallback: true,
+    };
+  }
+
+  return {
+    topology: {
+      computers,
+      links: prunedLinks,
+      remote_origin: currentTopology.remote_origin ?? status.remote_origin ?? null,
+    },
+    monitorChangeNotice: null,
+    didMonitorFallback: false,
+  };
+}
+
 let eventListening = false;
 
 export const useKvmStore = create<KvmState>((set, get) => ({
@@ -218,6 +333,9 @@ export const useKvmStore = create<KvmState>((set, get) => ({
   settings: loadSavedSettings(),
   activityFeed: [],
   cursorPos: null,
+  monitorChangeNotice: null,
+
+  dismissMonitorChangeNotice: () => set({ monitorChangeNotice: null }),
 
   init: async () => {
     try {
@@ -226,6 +344,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
         kvmListTrusted().catch(() => [] as TrustedPeerInfo[]),
       ]);
 
+      let fallbackTopology: TopologyConfig | null = null;
       set((state) => {
         const currentTopology = state.topology;
         const primary =
@@ -254,21 +373,39 @@ export const useKvmStore = create<KvmState>((set, get) => ({
           [updatedPrimary, ...currentTopology.computers.filter((c) => !c.is_local)],
           status.peers
         );
-        const links = pruneLinks(currentTopology.links, computers);
+        const reconciled = reconcileTopologyOnStatus({
+          currentTopology,
+          updatedPrimary,
+          computers,
+          status,
+          settings: state.settings,
+        });
+        if (reconciled.didMonitorFallback) {
+          fallbackTopology = reconciled.topology;
+        }
 
         return {
           status,
           trustedPeers,
-          topology: {
-            computers,
-            links,
-          },
+          topology: reconciled.topology,
+          ...(reconciled.didMonitorFallback
+            ? { monitorChangeNotice: reconciled.monitorChangeNotice }
+            : !computers.some((c) => !c.is_local)
+              ? { monitorChangeNotice: null }
+              : {}),
         };
       });
+
+      if (fallbackTopology) {
+        void kvmUpdateTopology(fallbackTopology).catch(() => {});
+      }
 
       if (!eventListening && typeof window !== "undefined") {
         eventListening = true;
         void listen<string>("kvm-peer-connected", () => {
+          void get().refreshStatus();
+        });
+        void listen<unknown>("kvm-monitors-changed", () => {
           void get().refreshStatus();
         });
         void listen<string | null>("kvm-peer-disconnected", (event) => {
@@ -276,21 +413,29 @@ export const useKvmStore = create<KvmState>((set, get) => ({
           const cur = get().topology;
           const primaryNode = cur.computers.find((c) => c.is_local) || cur.computers[0];
           if (disconnectedId) {
+            const nextComputers = cur.computers.filter(
+              (c) => c.is_local || c.id !== disconnectedId
+            );
+            const hasRemote = nextComputers.some((c) => !c.is_local);
             set((state) => ({
               selectedPeer: state.selectedPeer?.id === disconnectedId ? null : state.selectedPeer,
+              monitorChangeNotice: hasRemote ? state.monitorChangeNotice : null,
               topology: {
-                computers: cur.computers.filter((c) => c.is_local || c.id !== disconnectedId),
+                computers: nextComputers,
                 links: cur.links.filter(
                   (l) => l.from_id !== disconnectedId && l.to_id !== disconnectedId
                 ),
+                remote_origin: hasRemote ? cur.remote_origin ?? null : null,
               },
             }));
           } else {
             set({
               selectedPeer: null,
+              monitorChangeNotice: null,
               topology: {
                 computers: [primaryNode],
                 links: [],
+                remote_origin: null,
               },
             });
           }
@@ -325,6 +470,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
   refreshStatus: async () => {
     try {
       const status = await kvmGetStatus();
+      let fallbackTopology: TopologyConfig | null = null;
       set((state) => {
         const currentTopology = state.topology;
         const primary =
@@ -348,10 +494,19 @@ export const useKvmStore = create<KvmState>((set, get) => ({
           [updatedPrimary, ...currentTopology.computers.filter((c) => !c.is_local)],
           status.peers
         );
-        const updatedLinks = pruneLinks(currentTopology.links, updatedComputers);
+        const reconciled = reconcileTopologyOnStatus({
+          currentTopology,
+          updatedPrimary,
+          computers: updatedComputers,
+          status,
+          settings: state.settings,
+        });
+        if (reconciled.didMonitorFallback) {
+          fallbackTopology = reconciled.topology;
+        }
         const selectedStillPresent =
           state.selectedPeer &&
-          updatedComputers.some(
+          reconciled.topology.computers.some(
             (c) => !c.is_local && c.id === state.selectedPeer?.id
           );
 
@@ -359,12 +514,17 @@ export const useKvmStore = create<KvmState>((set, get) => ({
           status,
           error: null,
           selectedPeer: selectedStillPresent ? state.selectedPeer : null,
-          topology: {
-            computers: updatedComputers,
-            links: updatedLinks,
-          },
+          topology: reconciled.topology,
+          ...(reconciled.didMonitorFallback
+            ? { monitorChangeNotice: reconciled.monitorChangeNotice }
+            : !reconciled.topology.computers.some((c) => !c.is_local)
+              ? { monitorChangeNotice: null }
+              : {}),
         };
       });
+      if (fallbackTopology) {
+        await kvmUpdateTopology(fallbackTopology).catch(() => {});
+      }
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     }
@@ -450,7 +610,23 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       const savedPlacement = loadSavedPlacement();
       const peerId = matchedRemote?.id || peer.id;
       const peerName = matchedRemote?.name || peer.name;
-      const peerOrigin = computePeerOrigin(primary.bounds, peerUnion, savedPlacement, 0);
+      const localMonitors =
+        primary.monitors && primary.monitors.length > 0
+          ? primary.monitors
+          : status.monitors ?? [];
+      const localUnion =
+        localMonitors.length > 0 ? unionRect(localMonitors) : primary.bounds;
+      const updatedPrimary: ComputerNode = {
+        ...primary,
+        id: primaryId,
+        bounds: localUnion,
+        monitors: localMonitors,
+      };
+      const remoteOrigin = computePresetOrigin(
+        normalizeMonitors(localMonitors, localUnion, "local"),
+        normalizeMonitors(peerMonitors, peerUnion, "peer"),
+        savedPlacement
+      );
 
       const peerNode: ComputerNode = {
         id: peerId,
@@ -458,21 +634,15 @@ export const useKvmStore = create<KvmState>((set, get) => ({
         is_local: false,
         address: peerIp,
         bounds: {
-          x: peerOrigin.x,
-          y: peerOrigin.y,
+          x: remoteOrigin.x + peerUnion.x,
+          y: remoteOrigin.y + peerUnion.y,
           width: peerUnion.width,
           height: peerUnion.height,
         },
         monitors: peerMonitors,
       };
 
-      const updatedComputers = [
-        {
-          ...primary,
-          id: primaryId,
-        },
-        peerNode,
-      ];
+      const updatedComputers = [updatedPrimary, peerNode];
 
       const settings = get().settings;
       const nextTopology: TopologyConfig = {
@@ -489,6 +659,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
             resistance_ms: settings.edgeResistanceMs,
           },
         ],
+        remote_origin: remoteOrigin,
       };
 
       await kvmUpdateTopology(nextTopology);
@@ -498,6 +669,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
         status: afterStatus,
         topology: nextTopology,
         selectedPeer: { ...peer, id: peerId, name: peerName },
+        monitorChangeNotice: null,
         isLoading: false,
       });
       logActivity({
@@ -526,12 +698,14 @@ export const useKvmStore = create<KvmState>((set, get) => ({
             links: currentTopology.links.filter(
               (l) => l.from_id !== prevPeer.id && l.to_id !== prevPeer.id
             ),
+            remote_origin: null,
           }
         : {
             computers: [primary],
             links: [],
+            remote_origin: null,
           };
-      if (currentTopology.links.length > 0) {
+      if (currentTopology.links.length > 0 || currentTopology.remote_origin) {
         await kvmUpdateTopology(resetTopology).catch(() => {});
       }
       const freshStatus = await kvmGetStatus().catch(() => null);
@@ -548,6 +722,7 @@ export const useKvmStore = create<KvmState>((set, get) => ({
         selectedPeer: null,
         topology: resetTopology,
         cursorPos: null,
+        monitorChangeNotice: null,
         isLoading: false,
       }));
       logActivity({
@@ -581,7 +756,17 @@ export const useKvmStore = create<KvmState>((set, get) => ({
 
   setTopology: async (topology: TopologyConfig) => {
     set({ topology });
-    if (topology.links[0]?.from_edge) {
+    const localNode = topology.computers.find((c) => c.is_local);
+    const peerNode = topology.computers.find((c) => !c.is_local);
+    if (topology.remote_origin && localNode && peerNode) {
+      const seams = computeSeams(
+        normalizeMonitors(localNode.monitors, localNode.bounds, "local"),
+        normalizeMonitors(peerNode.monitors, peerNode.bounds, "peer"),
+        topology.remote_origin
+      );
+      const side = primarySeamSide(seams, topology.links[0]?.from_edge ?? loadSavedPlacement());
+      savePlacement(side);
+    } else if (topology.links[0]?.from_edge) {
       savePlacement(topology.links[0].from_edge);
     }
     try {
@@ -687,5 +872,6 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       error: null,
       activityFeed: [],
       cursorPos: null,
+      monitorChangeNotice: null,
     }),
 }));

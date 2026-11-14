@@ -175,6 +175,15 @@ body {
   transition: opacity 150ms var(--ease-out);
 }
 
+/* Topology canvas monitor & seam snap transition (disabled while dragging) */
+.canvas-snap-transition {
+  transition:
+    left 160ms var(--ease-out),
+    top 160ms var(--ease-out),
+    width 160ms var(--ease-out),
+    height 160ms var(--ease-out);
+}
+
 @starting-style {
   .hud-pill {
     opacity: 0;
@@ -212,6 +221,7 @@ body {
   .drawer-panel,
   .popover-panel,
   .hud-pill,
+  .canvas-snap-transition,
   .photo-tile-img {
     transition-property: opacity, background-color, border-color, color;
     transition-duration: 120ms;

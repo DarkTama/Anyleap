@@ -474,6 +474,7 @@ Options:
                     .cloned()
                     .unwrap_or(anyleap_lib::kvm::monitors::MonitorDisplay {
                         id: "mon-1".into(),
+                        device_name: "mon-1".into(),
                         x: 0,
                         y: 0,
                         width: 1920,
@@ -634,6 +635,8 @@ Options:
                 relative_y: 0.5,
                 dwell_ms: 0,
                 deadzone_px: 0,
+                target_monitor: None,
+                along_px: None,
             })
             .await
     }

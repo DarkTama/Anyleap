@@ -1,12 +1,28 @@
 use super::monitors::MonitorDisplay;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScreenRect {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LinkedSeam {
+    pub linked_monitor_id: String,
+    pub side: String, // "left" | "right" | "top" | "bottom" (side of the LINKED monitor)
+    pub start: i32,   // overlap span start in Linked PC coordinates
+    pub end: i32,     // overlap span end in Linked PC coordinates
+    pub main_monitor_id: String,
+    pub main_offset: i32, // remote_origin_axis - main_mon_axis so along_px = linked_coord + main_offset
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,6 +56,8 @@ pub struct TopologyLink {
 pub struct TopologyConfig {
     pub computers: Vec<ComputerNode>,
     pub links: Vec<TopologyLink>,
+    #[serde(default)]
+    pub remote_origin: Option<Point>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -81,10 +99,22 @@ pub enum KvmPacket {
         dwell_ms: u32,
         #[serde(default)]
         deadzone_px: i32,
+        #[serde(default)]
+        target_monitor: Option<String>,
+        #[serde(default)]
+        along_px: Option<i32>,
     },
     CursorReturn {
         edge: String,
         relative_y: f32,
+        #[serde(default)]
+        target_monitor: Option<String>,
+        #[serde(default)]
+        along_px: Option<i32>,
+    },
+    Seams {
+        #[serde(default)]
+        seams: Vec<LinkedSeam>,
     },
     ClipboardText {
         text: String,
@@ -270,6 +300,8 @@ mod tests {
                 relative_y: 0.5,
                 dwell_ms: 0,
                 deadzone_px: 0,
+                target_monitor: None,
+                along_px: None,
             }
         );
 
@@ -278,10 +310,55 @@ mod tests {
             relative_y: 0.25,
             dwell_ms: 120,
             deadzone_px: 48,
+            target_monitor: Some(r"\\.\DISPLAY2".into()),
+            along_px: Some(540),
         };
         let json = serde_json::to_string(&pkt).expect("serialize");
         let rt: KvmPacket = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(pkt, rt);
+    }
+
+    #[test]
+    fn test_cursor_return_seams_and_topology_roundtrip() {
+        let legacy_ret = r#"{"type":"CursorReturn","payload":{"edge":"left","relative_y":0.5}}"#;
+        let decoded_ret: KvmPacket = serde_json::from_str(legacy_ret).expect("legacy return");
+        assert_eq!(
+            decoded_ret,
+            KvmPacket::CursorReturn {
+                edge: "left".into(),
+                relative_y: 0.5,
+                target_monitor: None,
+                along_px: None,
+            }
+        );
+
+        let seams_pkt = KvmPacket::Seams {
+            seams: vec![LinkedSeam {
+                linked_monitor_id: r"\\.\DISPLAY1".into(),
+                side: "top".into(),
+                start: 0,
+                end: 1920,
+                main_monitor_id: r"\\.\DISPLAY2".into(),
+                main_offset: -1920,
+            }],
+        };
+        let s_json = serde_json::to_string(&seams_pkt).expect("serialize seams");
+        assert_eq!(serde_json::from_str::<KvmPacket>(&s_json).unwrap(), seams_pkt);
+
+        let legacy_topo = r#"{"computers":[],"links":[]}"#;
+        let topo: TopologyConfig = serde_json::from_str(legacy_topo).expect("legacy topo");
+        assert_eq!(topo.remote_origin, None);
+
+        let topo_with_origin = TopologyConfig {
+            computers: vec![],
+            links: vec![],
+            remote_origin: Some(Point { x: 1920, y: -420 }),
+        };
+        let t_json = serde_json::to_string(&topo_with_origin).expect("serialize topo");
+        assert_eq!(
+            serde_json::from_str::<TopologyConfig>(&t_json).unwrap(),
+            topo_with_origin
+        );
     }
 
     #[test]

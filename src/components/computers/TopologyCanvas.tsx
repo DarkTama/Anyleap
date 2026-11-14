@@ -4,16 +4,23 @@ import {
   MousePointer,
   ShieldCheck,
   AlertCircle,
+  AlertTriangle,
   UploadCloud,
+  X,
 } from "lucide-react";
-import type { EdgeSide, TopologyConfig } from "@/types/kvm";
+import type { EdgeSide, Point, Seam, TopologyConfig } from "@/types/kvm";
 import { useKvmStore } from "@/stores/kvmStore";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
-  clampEdgeOffset,
   computeCanvasLayout,
-  computePeerOrigin,
+  computePresetOrigin,
+  hasMonitorOverlap,
+  normalizeMonitors,
   oppositeEdge,
+  primarySeamSide,
+  resolveRemoteOrigin,
+  snapRemoteOrigin,
+  type CanvasViewport,
 } from "./topologyLayout";
 
 const EDGE_OPTIONS: { side: EdgeSide; label: string }[] = [
@@ -30,11 +37,26 @@ function getLinkEdge(edge?: string | null): EdgeSide {
   return "right";
 }
 
+function shortMonitorLabel(
+  deviceName: string | undefined,
+  isPrimary: boolean,
+  idx: number
+): string {
+  if (isPrimary) return "Main";
+  if (deviceName) {
+    const match = deviceName.match(/DISPLAY(\d+)/i);
+    if (match) return `D${match[1]}`;
+  }
+  return `D${idx + 1}`;
+}
+
 export function TopologyCanvas() {
   const topology = useKvmStore((s) => s.topology);
   const status = useKvmStore((s) => s.status);
   const settings = useKvmStore((s) => s.settings);
   const cursorPos = useKvmStore((s) => s.cursorPos);
+  const monitorChangeNotice = useKvmStore((s) => s.monitorChangeNotice);
+  const dismissMonitorChangeNotice = useKvmStore((s) => s.dismissMonitorChangeNotice);
   const setTopology = useKvmStore((s) => s.setTopology);
   const updateSettings = useKvmStore((s) => s.updateSettings);
   const sendFile = useKvmStore((s) => s.sendFile);
@@ -44,26 +66,85 @@ export function TopologyCanvas() {
   const peer = topology.computers.find((c) => !c.is_local) || null;
   const activeLink = topology.links[0];
 
-  const [placement, setPlacement] = useState<EdgeSide>(() => {
+  const mainMonitors = useMemo(
+    () =>
+      normalizeMonitors(
+        primary?.monitors && primary.monitors.length > 0
+          ? primary.monitors
+          : status.monitors,
+        primary?.bounds ?? { x: 0, y: 0, width: 1920, height: 1080 },
+        "local"
+      ),
+    [primary, status.monitors]
+  );
+
+  const peerMonitors = useMemo(
+    () =>
+      peer
+        ? normalizeMonitors(peer.monitors, peer.bounds, "peer")
+        : [],
+    [peer]
+  );
+
+  const fallbackSide = useMemo<EdgeSide>(() => {
     if (activeLink?.from_edge) return getLinkEdge(activeLink.from_edge);
     if (status.controller_edge) return getLinkEdge(status.controller_edge);
-    const saved = localStorage.getItem("anyleap_kvm_placement");
-    return getLinkEdge(saved);
-  });
+    if (typeof localStorage !== "undefined") {
+      return getLinkEdge(localStorage.getItem("anyleap_kvm_placement"));
+    }
+    return "right";
+  }, [activeLink?.from_edge, status.controller_edge]);
 
-  const [edgeOffset, setEdgeOffset] = useState<number>(() => {
-    if (!activeLink) return 0;
-    return activeLink.from_edge === "top" || activeLink.from_edge === "bottom"
-      ? activeLink.offset_x ?? 0
-      : activeLink.offset_y ?? 0;
-  });
+  const resolvedSavedOrigin = useMemo<Point>(
+    () =>
+      peer
+        ? resolveRemoteOrigin({
+            mainMonitors,
+            linkedMonitors: peerMonitors,
+            remoteOrigin: topology.remote_origin ?? status.remote_origin ?? null,
+            link: activeLink ?? null,
+            fallbackSide,
+          })
+        : { x: 0, y: 0 },
+    [
+      peer,
+      mainMonitors,
+      peerMonitors,
+      topology.remote_origin,
+      status.remote_origin,
+      activeLink,
+      fallbackSide,
+    ]
+  );
 
+  const [draftOrigin, setDraftOrigin] = useState<Point>(resolvedSavedOrigin);
   const [isDragging, setIsDragging] = useState(false);
+  const [dragState, setDragState] = useState<{
+    overlaps: boolean;
+    hasSeam: boolean;
+  }>({ overlaps: false, hasSeam: true });
   const [isHoveringDrop, setIsHoveringDrop] = useState(false);
+
   const containerRef = useRef<HTMLDivElement>(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 760, height: 288 });
-  const latestOffsetRef = useRef(edgeOffset);
-  latestOffsetRef.current = edgeOffset;
+  const [canvasSize, setCanvasSize] = useState({ width: 760, height: 320 });
+
+  const activeDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startOrigin: Point;
+    lastValidOrigin: Point;
+    viewport: CanvasViewport;
+    latestOrigin: Point;
+    latestValid: boolean;
+    latestSeams: Seam[];
+  } | null>(null);
+
+  // Sync local draftOrigin with saved topology when not dragging
+  useEffect(() => {
+    if (isDragging) return;
+    setDraftOrigin(resolvedSavedOrigin);
+  }, [resolvedSavedOrigin, isDragging]);
 
   // Measure canvas container for accurate to-scale rendering
   useEffect(() => {
@@ -80,31 +161,6 @@ export function TopologyCanvas() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-
-  // Sync placement and offset from active link on reconnect / status refresh (M2)
-  useEffect(() => {
-    if (isDragging) return;
-    const linkEdge = activeLink?.from_edge
-      ? getLinkEdge(activeLink.from_edge)
-      : status.controller_edge
-        ? getLinkEdge(status.controller_edge)
-        : null;
-    if (linkEdge) {
-      setPlacement(linkEdge);
-      const nextOffset =
-        linkEdge === "top" || linkEdge === "bottom"
-          ? activeLink?.offset_x ?? 0
-          : activeLink?.offset_y ?? 0;
-      setEdgeOffset(nextOffset);
-      latestOffsetRef.current = nextOffset;
-    }
-  }, [
-    activeLink?.from_edge,
-    activeLink?.offset_x,
-    activeLink?.offset_y,
-    status.controller_edge,
-    isDragging,
-  ]);
 
   // Listen for native OS drag and drop files onto the canvas
   useEffect(() => {
@@ -142,125 +198,193 @@ export function TopologyCanvas() {
   const localNodeForLayout = useMemo(
     () => ({
       bounds: primary?.bounds ?? { x: 0, y: 0, width: 1920, height: 1080 },
-      monitors:
-        primary?.monitors && primary.monitors.length > 0
-          ? primary.monitors
-          : status.monitors ?? [],
+      monitors: mainMonitors,
     }),
-    [primary, status.monitors]
+    [primary?.bounds, mainMonitors]
+  );
+
+  const peerNodeForLayout = useMemo(
+    () =>
+      peer
+        ? {
+            bounds: peer.bounds,
+            monitors: peerMonitors,
+          }
+        : null,
+    [peer, peerMonitors]
   );
 
   const layout = useMemo(
     () =>
       computeCanvasLayout({
         localNode: localNodeForLayout,
-        peerNode: peer,
-        edge: placement,
-        offsetPx: edgeOffset,
+        peerNode: peerNodeForLayout,
+        remoteOrigin: draftOrigin,
         canvasWidth: canvasSize.width,
         canvasHeight: canvasSize.height,
-        padding: 32,
+        padding: 36,
+        frozenViewport: isDragging ? activeDragRef.current?.viewport ?? null : null,
       }),
-    [localNodeForLayout, peer, placement, edgeOffset, canvasSize.width, canvasSize.height]
+    [
+      localNodeForLayout,
+      peerNodeForLayout,
+      draftOrigin,
+      canvasSize.width,
+      canvasSize.height,
+      isDragging,
+    ]
   );
 
-  const submitTopology = (side: EdgeSide, offsetPx: number) => {
+  const submitTopology = (origin: Point, primarySide: EdgeSide) => {
     if (!primary || !peer) return;
-    const isTopBottom = side === "top" || side === "bottom";
-    const peerOrigin = computePeerOrigin(
-      layout.localUnionPhysical,
-      layout.peerUnionPhysical,
-      side,
-      offsetPx
-    );
+    const roundedOrigin: Point = {
+      x: Math.round(origin.x),
+      y: Math.round(origin.y),
+    };
+    const nextLayout = computeCanvasLayout({
+      localNode: localNodeForLayout,
+      peerNode: peerNodeForLayout,
+      remoteOrigin: roundedOrigin,
+      canvasWidth: canvasSize.width,
+      canvasHeight: canvasSize.height,
+      padding: 36,
+    });
     const nextTopology: TopologyConfig = {
       computers: [
         primary,
         {
           ...peer,
           bounds: {
-            x: peerOrigin.x,
-            y: peerOrigin.y,
-            width: layout.peerUnionPhysical.width,
-            height: layout.peerUnionPhysical.height,
+            x: nextLayout.peerUnionPhysical.x,
+            y: nextLayout.peerUnionPhysical.y,
+            width: nextLayout.peerUnionPhysical.width,
+            height: nextLayout.peerUnionPhysical.height,
           },
         },
       ],
       links: [
         {
           from_id: primary.id,
-          from_edge: side,
+          from_edge: primarySide,
           to_id: peer.id,
-          to_edge: oppositeEdge(side),
-          offset_x: isTopBottom ? offsetPx : 0,
-          offset_y: isTopBottom ? 0 : offsetPx,
+          to_edge: oppositeEdge(primarySide),
+          offset_x: 0,
+          offset_y: 0,
           deadzone_px: settings.cornerDeadzonePx,
           resistance_ms: settings.edgeResistanceMs,
         },
       ],
+      remote_origin: roundedOrigin,
     };
     void setTopology(nextTopology);
   };
 
-  const handleTogglePlacement = (side: EdgeSide) => {
-    const clamped = clampEdgeOffset(
-      layout.localUnionPhysical,
-      layout.peerUnionPhysical,
-      side,
-      0
-    );
-    setPlacement(side);
-    setEdgeOffset(clamped);
-    latestOffsetRef.current = clamped;
-    localStorage.setItem("anyleap_kvm_placement", side);
-    submitTopology(side, clamped);
-  };
-
-  const handleMouseDownDrag = (e: React.MouseEvent) => {
+  const handlePresetSide = (side: EdgeSide) => {
     if (!peer) return;
-    e.preventDefault();
-    setIsDragging(true);
-    const startClientX = e.clientX;
-    const startClientY = e.clientY;
-    const startOffset = edgeOffset;
-    const scale = Math.max(0.01, layout.scale);
-    const isTopBottom = placement === "top" || placement === "bottom";
-
-    const handleMouseMove = (moveEvt: MouseEvent) => {
-      const deltaCanvasPx = isTopBottom
-        ? moveEvt.clientX - startClientX
-        : moveEvt.clientY - startClientY;
-      const deltaPhysical = Math.round(deltaCanvasPx / scale);
-      const clamped = clampEdgeOffset(
-        layout.localUnionPhysical,
-        layout.peerUnionPhysical,
-        placement,
-        startOffset + deltaPhysical
-      );
-      latestOffsetRef.current = clamped;
-      setEdgeOffset(clamped);
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      submitTopology(placement, latestOffsetRef.current);
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    const presetOrigin = computePresetOrigin(mainMonitors, peerMonitors, side);
+    setDraftOrigin(presetOrigin);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("anyleap_kvm_placement", side);
+    }
+    submitTopology(presetOrigin, side);
   };
 
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!peer) return;
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    if (activeDragRef.current) return; // multi-touch protection
+
+    e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // jsdom / synthetic event fallback
+    }
+
+    const startOrigin = draftOrigin;
+    const initialValid =
+      !hasMonitorOverlap(mainMonitors, peerMonitors, startOrigin) &&
+      layout.seams.length > 0;
+
+    activeDragRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startOrigin,
+      lastValidOrigin: initialValid ? startOrigin : resolvedSavedOrigin,
+      viewport: layout.viewport,
+      latestOrigin: startOrigin,
+      latestValid: initialValid,
+      latestSeams: layout.seams,
+    };
+    setDragState({ overlaps: false, hasSeam: layout.seams.length > 0 });
+    setIsDragging(true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = activeDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+
+    const scale = Math.max(1e-6, drag.viewport.scale);
+    const dxPhys = Math.round((e.clientX - drag.startClientX) / scale);
+    const dyPhys = Math.round((e.clientY - drag.startClientY) / scale);
+    const candidateOrigin: Point = {
+      x: drag.startOrigin.x + dxPhys,
+      y: drag.startOrigin.y + dyPhys,
+    };
+
+    const snap = snapRemoteOrigin({
+      mainMonitors,
+      linkedMonitors: peerMonitors,
+      candidateOrigin,
+      scale,
+      maxSnapScreenPx: 24,
+    });
+
+    drag.latestOrigin = snap.origin;
+    drag.latestValid = snap.valid;
+    drag.latestSeams = snap.seams;
+    setDragState({
+      overlaps: snap.overlaps,
+      hasSeam: snap.seams.length > 0,
+    });
+    setDraftOrigin(snap.origin);
+  };
+
+  const finishDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = activeDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // ignore if not captured
+    }
+    activeDragRef.current = null;
+    setIsDragging(false);
+    setDragState({ overlaps: false, hasSeam: true });
+
+    if (drag.latestValid && drag.latestSeams.length > 0) {
+      const side = primarySeamSide(drag.latestSeams, fallbackSide);
+      setDraftOrigin(drag.latestOrigin);
+      submitTopology(drag.latestOrigin, side);
+    } else {
+      // Overlap or no-seam position rejected: snap back cleanly to last valid origin
+      setDraftOrigin(drag.lastValidOrigin);
+    }
+  };
+
+  const activeSide = primarySeamSide(layout.seams, fallbackSide);
   const isCursorRemote = status.is_input_trapped;
   const isCursorLocal = !status.is_input_trapped;
   const deadzonePx = settings.cornerDeadzonePx;
 
-  const isHorizontalSharedEdge = placement === "left" || placement === "right";
   const deadzoneCanvasPx =
     deadzonePx <= 0
       ? 0
       : Math.min(24, Math.max(4, Math.round(deadzonePx * layout.scale)));
+
+  const snapTransitionClass = isDragging ? "" : "canvas-snap-transition";
 
   return (
     <div className="rounded-xl border border-ink-700 bg-ink-900 p-5 space-y-4 select-none">
@@ -278,15 +402,15 @@ export function TopologyCanvas() {
         </div>
 
         <div className="flex items-center gap-2.5">
-          <span className="text-[11px] text-text-muted">Linked PC edge:</span>
+          <span className="text-[11px] text-text-muted">Preset edge:</span>
           <div className="flex rounded-lg border border-ink-700 bg-ink-950 p-0.5">
             {EDGE_OPTIONS.map(({ side, label }) => (
               <button
                 key={side}
                 type="button"
-                onClick={() => handleTogglePlacement(side)}
+                onClick={() => handlePresetSide(side)}
                 className={`btn-tactile rounded px-2.5 py-1 text-[10px] font-mono cursor-pointer ${
-                  placement === side
+                  activeSide === side
                     ? "bg-gold-400 text-ink-950 font-bold"
                     : "text-text-muted hover:text-text-strong"
                 }`}
@@ -298,10 +422,30 @@ export function TopologyCanvas() {
         </div>
       </div>
 
+      {monitorChangeNotice && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 rounded-lg border border-status-warning/40 bg-status-warning-bg px-3.5 py-2 text-xs text-status-warning"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>{monitorChangeNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={dismissMonitorChangeNotice}
+            aria-label="Dismiss monitor change notice"
+            className="btn-tactile rounded p-0.5 text-status-warning hover:text-text-strong cursor-pointer"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Scaled Blueprint Grid Canvas */}
       <div
         ref={containerRef}
-        className={`relative h-72 w-full rounded-xl border overflow-hidden transition-colors duration-150 ${
+        className={`relative h-80 w-full rounded-xl border overflow-hidden transition-colors duration-150 ${
           isHoveringDrop
             ? "border-status-success bg-status-success-bg/40"
             : "border-ink-700 bg-ink-950"
@@ -328,7 +472,7 @@ export function TopologyCanvas() {
           </div>
         )}
 
-        {/* Main PC Union Outline + Monitors */}
+        {/* Main PC Label + Bounding Guide */}
         <div
           style={{
             left: `${layout.localUnionCanvas.left}px`,
@@ -336,11 +480,7 @@ export function TopologyCanvas() {
             width: `${layout.localUnionCanvas.width}px`,
             height: `${layout.localUnionCanvas.height}px`,
           }}
-          className={`absolute rounded-lg border transition-colors duration-150 ${
-            isCursorLocal
-              ? "border-mist-300"
-              : "border-ink-700"
-          }`}
+          className={`absolute pointer-events-none ${snapTransitionClass}`}
         >
           <div className="absolute -top-5 left-0 flex items-center gap-1.5 whitespace-nowrap">
             <span className="font-mono text-[10px] font-bold text-mist-300">
@@ -355,72 +495,23 @@ export function TopologyCanvas() {
           </div>
         </div>
 
-        {/* Shared Edge Gateway + Corner Deadzones (only along overlapping edge-monitor spans) */}
-        {peer &&
-          layout.sharedEdgeSpans.map((span, idx) => {
-            const spanLen = isHorizontalSharedEdge
-              ? span.canvas.height
-              : span.canvas.width;
-            const dzPx =
-              deadzoneCanvasPx <= 0
-                ? 0
-                : Math.min(spanLen / 2, deadzoneCanvasPx);
-            return (
-              <div
-                key={`${span.physicalStart}-${span.physicalEnd}-${idx}`}
-                style={{
-                  left: `${span.canvas.left}px`,
-                  top: `${span.canvas.top}px`,
-                  width: `${span.canvas.width}px`,
-                  height: `${span.canvas.height}px`,
-                }}
-                className={`absolute flex ${
-                  isHorizontalSharedEdge ? "flex-col" : "flex-row"
-                } justify-between pointer-events-none z-10`}
-              >
-                {dzPx > 0 && (
-                  <div
-                    style={
-                      isHorizontalSharedEdge
-                        ? { height: `${dzPx}px` }
-                        : { width: `${dzPx}px` }
-                    }
-                    className={`${
-                      isHorizontalSharedEdge ? "w-full" : "h-full"
-                    } rounded-sm bg-status-warning/85 shrink-0`}
-                  />
-                )}
-                <div className="flex-1 bg-gold-400" />
-                {dzPx > 0 && (
-                  <div
-                    style={
-                      isHorizontalSharedEdge
-                        ? { height: `${dzPx}px` }
-                        : { width: `${dzPx}px` }
-                    }
-                    className={`${
-                      isHorizontalSharedEdge ? "w-full" : "h-full"
-                    } rounded-sm bg-status-warning/85 shrink-0`}
-                  />
-                )}
-              </div>
-            );
-          })}
-
         {/* Individual Main PC Monitors */}
         {layout.localMonitors.map((mon, idx) => (
           <div
             key={mon.id || idx}
+            title={mon.deviceName || mon.id}
             style={{
               left: `${mon.canvas.left}px`,
               top: `${mon.canvas.top}px`,
               width: `${mon.canvas.width}px`,
               height: `${mon.canvas.height}px`,
             }}
-            className="absolute flex flex-col items-center justify-center rounded border border-mist-300/50 bg-ink-800 overflow-hidden pointer-events-none"
+            className={`absolute flex flex-col items-center justify-center rounded border bg-ink-800 overflow-hidden pointer-events-none ${snapTransitionClass} ${
+              isCursorLocal ? "border-mist-300/70" : "border-mist-300/40"
+            }`}
           >
             <span className="font-mono text-[9px] font-semibold text-text-strong truncate max-w-full px-1">
-              {mon.isPrimary ? "Main" : `D${idx + 1}`}
+              {shortMonitorLabel(mon.deviceName, mon.isPrimary, idx)}
             </span>
             <span className="font-mono text-[8px] text-mist-300 truncate max-w-full px-1">
               {mon.physical.width}×{mon.physical.height}
@@ -428,26 +519,33 @@ export function TopologyCanvas() {
           </div>
         ))}
 
-        {/* Linked PC Union (Draggable) + Monitors */}
+        {/* Linked PC Block (Draggable via Pointer Capture) */}
         {peer && (
           <div
-            onMouseDown={handleMouseDownDrag}
+            data-testid="linked-pc-block"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={finishDrag}
+            onPointerCancel={finishDrag}
             style={{
               left: `${layout.peerUnionCanvas.left}px`,
               top: `${layout.peerUnionCanvas.top}px`,
               width: `${layout.peerUnionCanvas.width}px`,
               height: `${layout.peerUnionCanvas.height}px`,
+              touchAction: "none",
             }}
-            className={`absolute rounded-lg border transition-colors duration-150 ${
-              isDragging ? "cursor-grabbing opacity-90" : "cursor-grab"
-            } ${
-              isCursorRemote
-                ? "border-gold-400"
-                : "border-status-success/60 hover:border-status-success"
+            className={`absolute pointer-events-none ${snapTransitionClass} ${
+              isDragging ? "z-20 opacity-95" : "z-10"
             }`}
           >
-            <div className="absolute -bottom-5 left-0 flex items-center gap-1.5 whitespace-nowrap">
-              <span className="font-mono text-[10px] font-bold text-status-success">
+            <div className="absolute -bottom-5 left-0 flex items-center gap-1.5 whitespace-nowrap pointer-events-none">
+              <span
+                className={`font-mono text-[10px] font-bold ${
+                  isDragging && dragState.overlaps
+                    ? "text-status-danger"
+                    : "text-status-success"
+                }`}
+              >
                 {peer.name}
               </span>
               {isCursorRemote && (
@@ -457,6 +555,48 @@ export function TopologyCanvas() {
                 </span>
               )}
             </div>
+
+            {/* Individual Linked PC Monitors (hit-testable drag handles) */}
+            {layout.peerMonitors.map((mon, idx) => {
+              const relLeft = mon.canvas.left - layout.peerUnionCanvas.left;
+              const relTop = mon.canvas.top - layout.peerUnionCanvas.top;
+              const borderClass =
+                isDragging && dragState.overlaps
+                  ? "border-status-danger bg-status-danger-bg"
+                  : isDragging && !dragState.hasSeam
+                    ? "border-status-warning/70 bg-ink-800"
+                    : isCursorRemote
+                      ? "border-gold-400 bg-status-success-bg"
+                      : "border-status-success/60 bg-status-success-bg hover:border-status-success";
+              return (
+                <div
+                  key={mon.id || idx}
+                  title={mon.deviceName || mon.id}
+                  style={{
+                    left: `${relLeft}px`,
+                    top: `${relTop}px`,
+                    width: `${mon.canvas.width}px`,
+                    height: `${mon.canvas.height}px`,
+                  }}
+                  className={`absolute flex flex-col items-center justify-center rounded border overflow-hidden pointer-events-auto ${snapTransitionClass} ${
+                    isDragging ? "cursor-grabbing" : "cursor-grab"
+                  } ${borderClass}`}
+                >
+                  <span className="font-mono text-[9px] font-semibold text-text-strong truncate max-w-full px-1">
+                    {mon.isPrimary ? "Primary" : shortMonitorLabel(mon.deviceName, false, idx)}
+                  </span>
+                  <span
+                    className={`font-mono text-[8px] truncate max-w-full px-1 ${
+                      isDragging && dragState.overlaps
+                        ? "text-status-danger"
+                        : "text-status-success"
+                    }`}
+                  >
+                    {mon.physical.width}×{mon.physical.height}
+                  </span>
+                </div>
+              );
+            })}
 
             {isCursorRemote && cursorPos && settings.indicatorCanvasDot && (
               <div
@@ -471,34 +611,76 @@ export function TopologyCanvas() {
           </div>
         )}
 
-        {/* Individual Linked PC Monitors */}
+        {/* Per-Monitor Gold Seam Highlights + Corner Deadzones */}
         {peer &&
-          layout.peerMonitors.map((mon, idx) => (
-            <div
-              key={mon.id || idx}
-              style={{
-                left: `${mon.canvas.left}px`,
-                top: `${mon.canvas.top}px`,
-                width: `${mon.canvas.width}px`,
-                height: `${mon.canvas.height}px`,
-              }}
-              className="absolute flex flex-col items-center justify-center rounded border border-status-success/50 bg-status-success-bg overflow-hidden pointer-events-none"
-            >
-              <span className="font-mono text-[9px] font-semibold text-text-strong truncate max-w-full px-1">
-                {mon.isPrimary ? "Primary" : `D${idx + 1}`}
-              </span>
-              <span className="font-mono text-[8px] text-status-success truncate max-w-full px-1">
-                {mon.physical.width}×{mon.physical.height}
-              </span>
-            </div>
-          ))}
+          layout.seamRects.map((item, idx) => {
+            const isVertical = item.orientation === "vertical";
+            const spanLen = isVertical ? item.canvas.height : item.canvas.width;
+            const dzPx =
+              deadzoneCanvasPx <= 0
+                ? 0
+                : Math.min(spanLen / 2, deadzoneCanvasPx);
+            return (
+              <div
+                key={`${item.seam.main_monitor_id}-${item.seam.linked_monitor_id}-${item.seam.side}-${idx}`}
+                data-testid="seam-highlight"
+                data-seam-side={item.seam.side}
+                data-main-monitor={item.seam.main_monitor_id}
+                data-linked-monitor={item.seam.linked_monitor_id}
+                style={{
+                  left: `${item.canvas.left}px`,
+                  top: `${item.canvas.top}px`,
+                  width: `${item.canvas.width}px`,
+                  height: `${item.canvas.height}px`,
+                }}
+                className={`absolute flex ${
+                  isVertical ? "flex-col" : "flex-row"
+                } justify-between pointer-events-none z-30 ${snapTransitionClass}`}
+              >
+                {dzPx > 0 && (
+                  <div
+                    style={isVertical ? { height: `${dzPx}px` } : { width: `${dzPx}px` }}
+                    className={`${
+                      isVertical ? "w-full" : "h-full"
+                    } rounded-sm bg-status-warning/85 shrink-0`}
+                  />
+                )}
+                <div className="flex-1 bg-gold-400" />
+                {dzPx > 0 && (
+                  <div
+                    style={isVertical ? { height: `${dzPx}px` } : { width: `${dzPx}px` }}
+                    className={`${
+                      isVertical ? "w-full" : "h-full"
+                    } rounded-sm bg-status-warning/85 shrink-0`}
+                  />
+                )}
+              </div>
+            );
+          })}
 
         {peer && (
-          <div className="absolute bottom-2 right-3 flex items-center gap-1.5 text-[10px] font-mono text-text-muted pointer-events-none">
-            <Move className="h-3 w-3" />
-            <span>
-              Drag {peer.name} along edge (offset: {edgeOffset}px)
-            </span>
+          <div className="absolute bottom-2 right-3 z-30 flex items-center gap-1.5 text-[10px] font-mono pointer-events-none">
+            <Move
+              className={`h-3 w-3 ${
+                isDragging && dragState.overlaps
+                  ? "text-status-danger"
+                  : "text-text-muted"
+              }`}
+            />
+            {isDragging && dragState.overlaps ? (
+              <span className="text-status-danger">
+                Overlaps Main PC — release to snap back
+              </span>
+            ) : isDragging && !dragState.hasSeam ? (
+              <span className="text-status-warning">
+                Move near a monitor edge to snap
+              </span>
+            ) : (
+              <span className="text-text-muted">
+                Drag {peer.name} around monitors • {layout.seams.length} seam
+                {layout.seams.length === 1 ? "" : "s"} ({draftOrigin.x}, {draftOrigin.y})
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -509,7 +691,7 @@ export function TopologyCanvas() {
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-1.5 text-text">
               <span className="h-2 w-2 rounded-full bg-gold-400" />
-              <span className="font-mono text-[11px]">Active Edge</span>
+              <span className="font-mono text-[11px]">Active Seam</span>
             </div>
             <div className="flex items-center gap-1.5 text-text">
               <span className="h-2 w-2 rounded-sm bg-status-warning" />

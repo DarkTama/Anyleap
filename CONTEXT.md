@@ -32,8 +32,10 @@ A software-defined keyboard, video, and mouse multiplexer that allows a single p
 ### Peer Fingerprint
 SHA-256 (hex) of a peer's self-signed certificate DER. Pinned at PIN pairing and checked on every later connection; a changed fingerprint means "peer identity changed — re-pair".
 
-### Edge Leap
-The event trigger when a mouse pointer reaches the physical or logical perimeter of a display monitor, causing the local host to capture input and forward coordinates/events to an adjacent linked device.
+### Edge Leap & Per-Monitor Layout (`SPEC-24`)
+The spatial transition mechanism that lets a cursor move seamlessly between PCs across touching monitor boundaries:
+- **Remote Origin (`remote_origin`)**: Optional `Point { x, y }` placement of the Linked PC's virtual-desktop origin `(0, 0)` inside the Main PC's virtual-desktop coordinates (physical px). Supersedes single-edge `TopologyLink` offsets (and auto-migrates from legacy links when absent).
+- **Seam (`Seam` / `LinkedSeam`)**: A strictly positive overlapping segment where a Main PC monitor edge touches a Linked PC monitor edge with zero gap and zero overlap. Controller leaps (`CursorEnter`) and receiver returns (`CursorReturn`) trigger only across active seams (with per-seam `dwell_ms` and end-of-seam `deadzone_px`) and carry `target_monitor` (`device_name`) and `along_px` (local pixel coordinate along the target monitor's entry edge). Crossing an uncovered edge clamps inside the local desktop.
 
 ### Deck Macro Surface
 A touch-grid interface (phone, tablet, or secondary window) presenting interactive buttons, hardware vital gauges, and application shortcut triggers.
