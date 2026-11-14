@@ -1,6 +1,9 @@
 use super::identity::{client_config, peer_fingerprint, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
 use super::protocol::{encode_delta, read_frame, write_frame, KvmPacket, TransferEvent, UdpMouseDelta};
+// --- SPEC-25b ---
+use super::protocol::{decode_audio_datagram, AudioDatagram};
+// --- /SPEC-25b ---
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -25,6 +28,9 @@ pub struct KvmClientHandle {
     pub send_packet_tx: mpsc::Sender<KvmPacket>,
     pub incoming_tx: broadcast::Sender<KvmPacket>,
     pub transfer_tx: broadcast::Sender<TransferEvent>,
+    // --- SPEC-25b ---
+    pub audio_tx: broadcast::Sender<AudioDatagram>,
+    // --- /SPEC-25b ---
     pub conn: quinn::Connection,
     pub delta_seq: Arc<AtomicU32>,
     _endpoint: quinn::Endpoint,
@@ -135,6 +141,9 @@ impl KvmClientHandle {
         let (send_packet_tx, mut send_packet_rx) = mpsc::channel::<KvmPacket>(512);
         let (incoming_tx, _) = broadcast::channel::<KvmPacket>(512);
         let (transfer_tx, _) = broadcast::channel::<TransferEvent>(64);
+        // --- SPEC-25b ---
+        let (audio_tx, _) = broadcast::channel::<AudioDatagram>(256);
+        // --- /SPEC-25b ---
         let is_connected = Arc::new(AtomicBool::new(true));
 
         let out_connected = Arc::clone(&is_connected);
@@ -204,6 +213,17 @@ impl KvmClientHandle {
             }
         });
 
+        // --- SPEC-25b ---
+        let (dg_conn, a_tx) = (conn.clone(), audio_tx.clone());
+        tokio::spawn(async move {
+            while let Ok(dg) = dg_conn.read_datagram().await {
+                if let Some(audio_dg) = decode_audio_datagram(&dg) {
+                    let _ = a_tx.send(audio_dg);
+                }
+            }
+        });
+        // --- /SPEC-25b ---
+
         Ok(Self {
             target_addr: ip.to_string(),
             peer_id: peer_info.computer_id,
@@ -213,6 +233,9 @@ impl KvmClientHandle {
             send_packet_tx,
             incoming_tx,
             transfer_tx,
+            // --- SPEC-25b ---
+            audio_tx,
+            // --- /SPEC-25b ---
             conn,
             delta_seq: Arc::new(AtomicU32::new(0)),
             _endpoint: endpoint,

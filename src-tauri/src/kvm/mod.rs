@@ -15,3 +15,7 @@ pub mod server;
 pub mod open_on_linked;
 pub mod session_sync;
 // --- end SPEC-25c ---
+// --- SPEC-25b ---
+pub mod audio;
+pub mod media_keys;
+// --- /SPEC-25b ---

@@ -3,16 +3,22 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, Once, OnceLock};
 
 pub const DEBUG_LOG_FILE_NAME: &str = "kvm-debug.log";
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 const CHANNEL_CAPACITY: usize = 2048;
 
+enum LogCommand {
+    Event(DebugEvent),
+    Flush(mpsc::SyncSender<()>),
+}
+
 static DEBUG_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
 static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
-static SENDER: OnceLock<mpsc::SyncSender<DebugEvent>> = OnceLock::new();
+static SENDER: OnceLock<mpsc::SyncSender<LogCommand>> = OnceLock::new();
 static LOG_PATH_STATE: OnceLock<Mutex<(PathBuf, u64)>> = OnceLock::new();
+static PANIC_HOOK_ONCE: Once = Once::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyDecision {
@@ -281,7 +287,34 @@ pub fn note(build: impl FnOnce() -> String) {
             hwnd: foreground_hwnd_raw(),
             text: build(),
         });
+        flush();
     }
+}
+
+/// Synchronously waits (up to 50 ms) for the background log writer to write and
+/// flush all previously queued events to disk. Safe to call on shutdown or panic.
+pub fn flush() {
+    if !is_enabled() {
+        return;
+    }
+    if let Some(tx) = SENDER.get() {
+        let (ack_tx, ack_rx) = mpsc::sync_channel::<()>(1);
+        if tx.try_send(LogCommand::Flush(ack_tx)).is_ok() {
+            let _ = ack_rx.recv_timeout(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+fn install_panic_hook() {
+    PANIC_HOOK_ONCE.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if is_enabled() {
+                note(|| format!("PANIC {info}"));
+            }
+            prev(info);
+        }));
+    });
 }
 
 #[inline]
@@ -321,9 +354,9 @@ fn path_state() -> &'static Mutex<(PathBuf, u64)> {
     LOG_PATH_STATE.get_or_init(|| Mutex::new((PathBuf::new(), 0)))
 }
 
-fn ensure_sender() -> &'static mpsc::SyncSender<DebugEvent> {
+fn ensure_sender() -> &'static mpsc::SyncSender<LogCommand> {
     SENDER.get_or_init(|| {
-        let (tx, rx) = mpsc::sync_channel::<DebugEvent>(CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::sync_channel::<LogCommand>(CHANNEL_CAPACITY);
         let _ = std::thread::Builder::new()
             .name("kvm-debug-log".into())
             .spawn(move || writer_loop(rx));
@@ -340,9 +373,11 @@ pub fn set_enabled(enabled: bool, log_path: PathBuf) {
             guard.0 = log_path;
             guard.1 = guard.1.wrapping_add(1);
         }
+        install_panic_hook();
         let _ = ensure_sender();
         DEBUG_LOG_ENABLED.store(true, Ordering::Release);
     } else {
+        flush();
         DEBUG_LOG_ENABLED.store(false, Ordering::Release);
     }
 }
@@ -354,7 +389,7 @@ pub fn record_event(event: DebugEvent) {
         return;
     }
     if let Some(tx) = SENDER.get() {
-        if tx.try_send(event).is_err() {
+        if tx.try_send(LogCommand::Event(event)).is_err() {
             DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -771,6 +806,7 @@ impl RotatingLogWriter {
         }
         if let Some(ref mut w) = self.writer {
             w.write_all(line.as_bytes())?;
+            w.flush()?;
             self.written_bytes += line.len() as u64;
         }
         Ok(())
@@ -783,7 +819,7 @@ impl RotatingLogWriter {
     }
 }
 
-fn writer_loop(rx: mpsc::Receiver<DebugEvent>) {
+fn writer_loop(rx: mpsc::Receiver<LogCommand>) {
     let mut writer = RotatingLogWriter::new(PathBuf::new(), MAX_LOG_BYTES);
     let mut seen_gen = 0u64;
 
@@ -795,12 +831,27 @@ fn writer_loop(rx: mpsc::Receiver<DebugEvent>) {
             }
         }
 
-        let line = format_event_line(&first, resolve_window_details);
-        let _ = writer.write_line(&line);
+        let mut acks: Vec<mpsc::SyncSender<()>> = Vec::new();
+        match first {
+            LogCommand::Event(ev) => {
+                let line = format_event_line(&ev, resolve_window_details);
+                let _ = writer.write_line(&line);
+            }
+            LogCommand::Flush(ack) => {
+                acks.push(ack);
+            }
+        }
 
-        while let Ok(ev) = rx.try_recv() {
-            let line = format_event_line(&ev, resolve_window_details);
-            let _ = writer.write_line(&line);
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                LogCommand::Event(ev) => {
+                    let line = format_event_line(&ev, resolve_window_details);
+                    let _ = writer.write_line(&line);
+                }
+                LogCommand::Flush(ack) => {
+                    acks.push(ack);
+                }
+            }
         }
 
         let dropped = DROPPED_EVENTS.swap(0, Ordering::Relaxed);
@@ -812,6 +863,9 @@ fn writer_loop(rx: mpsc::Receiver<DebugEvent>) {
             let _ = writer.write_line(&note);
         }
         writer.flush();
+        for ack in acks {
+            let _ = ack.try_send(());
+        }
     }
 }
 
@@ -1012,6 +1066,21 @@ mod tests {
         assert!(backup_after.contains("line-2"));
         assert!(!backup_after.contains("line-1"));
         assert!(active_after.contains("line-3"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotating_log_writer_write_line_flushes_immediately() {
+        let dir = std::env::temp_dir().join(format!("anyleap-debuglog-flush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let log_path = log_path_for_dir(&dir);
+
+        let mut writer = RotatingLogWriter::new(log_path.clone(), MAX_LOG_BYTES);
+        writer.write_line("immediate-line\n").unwrap();
+        // Must already be visible on disk without a separate writer.flush() call.
+        let disk = std::fs::read_to_string(&log_path).unwrap();
+        assert_eq!(disk, "immediate-line\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

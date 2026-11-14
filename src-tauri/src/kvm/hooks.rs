@@ -1788,6 +1788,36 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
         return Some(LRESULT(0));
     }
 
+    // --- SPEC-25b ---
+    if super::media_keys::is_media_key(vk_code) {
+        let target = super::media_keys::current_media_key_target_for_vk(vk_code, trapped);
+        let (decision, res) = match target {
+            super::media_keys::MediaKeyTarget::Linked => {
+                try_send_packet(KvmPacket::MediaKey {
+                    vk: vk_code,
+                    is_down,
+                });
+                (KeyDecision::Forward, Some(LRESULT(1)))
+            }
+            super::media_keys::MediaKeyTarget::Local => (KeyDecision::Pass, None),
+        };
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Key {
+                ts_us,
+                vk: vk_code,
+                scan_code,
+                is_down,
+                extended,
+                injected: false,
+                is_trapped: trapped,
+                decision,
+                hwnd,
+            });
+        }
+        return res;
+    }
+    // --- /SPEC-25b ---
+
     if trapped {
         if log_enabled {
             debug_log::record_event(DebugEvent::Key {
