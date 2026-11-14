@@ -2,7 +2,7 @@ import { Smartphone, TabletSmartphone, Monitor, Sliders, Wifi, Command } from "l
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { UpdateBadge } from "./UpdateBadge";
-import { AppLogo } from "./AppLogo";
+import { AppLogo, AppWordmark } from "./AppLogo";
 
 export type ShellTab = "devices" | "phone" | "computers" | "settings";
 
@@ -21,10 +21,10 @@ export function AppHeader({ activeTab, onTabChange, onOpenPair, onOpenCommands }
     <header className="flex h-13 shrink-0 items-center justify-between border-b border-ink-700 bg-ink-950 px-4 select-none">
       {/* Brand & Version Chip */}
       <div className="flex items-center gap-2.5">
-        <div className="flex items-center gap-2 font-bold tracking-tight text-text-strong text-[13px]">
-          <AppLogo className="h-5 w-5 shrink-0" />
-          <span className="text-text-strong">AnyLeap</span>
-          <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] font-medium text-text-muted">
+        <div className="flex items-center gap-1.5">
+          <AppLogo className="h-6 w-6 shrink-0" />
+          <AppWordmark className="h-[18px] w-auto shrink-0" />
+          <span className="ml-1 rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] font-medium text-text-muted">
             v{currentVersion}
           </span>
         </div>

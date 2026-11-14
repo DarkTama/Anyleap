@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 620" width="1280" height="620"><title>AnyLeap Colour Palette</title><rect width="1280" height="620" fill="#F8FAFC"/>
+<text x="48" y="54" font-family="Segoe UI, system-ui, sans-serif" font-size="28" font-weight="700" fill="#1B1E2E">AnyLeap B1 — Flat Colour Palette &amp; Contrast</text>
+<text x="48" y="80" font-family="Segoe UI, system-ui, sans-serif" font-size="14" fill="#4F5575">Strict flat colours only — zero gradients, shadows, or glows. *Warm Gold (#D8B46A) is restricted to dark surfaces; use Deep Gold (#A9822F, 3.55:1) on light.</text>
+<line x1="48" y1="98" x2="1232" y2="98" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="48" y="118" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="62" y="132" width="84" height="120" rx="8" fill="#121420" stroke="#CBD5E1" stroke-width="1"/>
+<text x="162" y="152" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Recess Ink</text>
+<text x="162" y="174" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#121420  ·  RGB(18, 20, 32)</text>
+<text x="162" y="200" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Monitor screen cavity (dark/tile)</text>
+<rect x="162" y="216" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="170" y="232" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 18.31:1</text>
+<rect x="288" y="216" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="296" y="232" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 1.11:1</text>
+<rect x="451" y="118" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="465" y="132" width="84" height="120" rx="8" fill="#1B1E2E" stroke="#CBD5E1" stroke-width="1"/>
+<text x="565" y="152" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Deep Ink</text>
+<text x="565" y="174" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#1B1E2E  ·  RGB(27, 30, 46)</text>
+<text x="565" y="200" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Tile bg, light screen/depth, light &#x27;Any&#x27;</text>
+<rect x="565" y="216" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="573" y="232" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 16.51:1</text>
+<rect x="691" y="216" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="699" y="232" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 1.00:1</text>
+<rect x="854" y="118" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="868" y="132" width="84" height="120" rx="8" fill="#2D3147" stroke="#CBD5E1" stroke-width="1"/>
+<text x="968" y="152" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Slate Dark</text>
+<text x="968" y="174" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#2D3147  ·  RGB(45, 49, 71)</text>
+<text x="968" y="200" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Light-mode front bezel &amp; stand</text>
+<rect x="968" y="216" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="976" y="232" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 12.79:1</text>
+<rect x="1094" y="216" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="1102" y="232" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 1.29:1</text>
+<rect x="48" y="284" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="62" y="298" width="84" height="120" rx="8" fill="#3B3F59" stroke="#CBD5E1" stroke-width="1"/>
+<text x="162" y="318" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Slate Base</text>
+<text x="162" y="340" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#3B3F59  ·  RGB(59, 63, 89)</text>
+<text x="162" y="366" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Tile depth flank / light top edge</text>
+<rect x="162" y="382" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="170" y="398" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 10.29:1</text>
+<rect x="288" y="382" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="296" y="398" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 1.61:1</text>
+<rect x="451" y="284" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="465" y="298" width="84" height="120" rx="8" fill="#4F5575" stroke="#CBD5E1" stroke-width="1"/>
+<text x="565" y="318" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Slate Mid</text>
+<text x="565" y="340" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#4F5575  ·  RGB(79, 85, 117)</text>
+<text x="565" y="366" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Lifted tile front bezel &amp; stand</text>
+<rect x="565" y="382" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="573" y="398" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 7.27:1</text>
+<rect x="691" y="382" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="699" y="398" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 2.27:1</text>
+<rect x="854" y="284" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="868" y="298" width="84" height="120" rx="8" fill="#6A7196" stroke="#CBD5E1" stroke-width="1"/>
+<text x="968" y="318" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Slate Light</text>
+<text x="968" y="340" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#6A7196  ·  RGB(106, 113, 150)</text>
+<text x="968" y="366" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Lifted tile top edge &amp; base top</text>
+<rect x="968" y="382" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="976" y="398" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 4.76:1</text>
+<rect x="1094" y="382" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="1102" y="398" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 3.47:1</text>
+<rect x="48" y="450" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="62" y="464" width="84" height="120" rx="8" fill="#D8B46A" stroke="#CBD5E1" stroke-width="1"/>
+<text x="162" y="484" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Warm Gold</text>
+<text x="162" y="506" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#D8B46A  ·  RGB(216, 180, 106)</text>
+<text x="162" y="532" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Dark-mode accent &amp; &#x27;Leap&#x27; wordmark</text>
+<rect x="162" y="548" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="170" y="564" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 1.97:1*</text>
+<rect x="288" y="548" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="296" y="564" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 8.38:1</text>
+<rect x="451" y="450" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="465" y="464" width="84" height="120" rx="8" fill="#A9822F" stroke="#CBD5E1" stroke-width="1"/>
+<text x="565" y="484" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Deep Gold</text>
+<text x="565" y="506" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#A9822F  ·  RGB(169, 130, 47)</text>
+<text x="565" y="532" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Light-mode accent &amp; &#x27;Leap&#x27; wordmark</text>
+<rect x="565" y="548" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="573" y="564" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 3.55:1</text>
+<rect x="691" y="548" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="699" y="564" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 4.66:1</text>
+<rect x="854" y="450" width="378" height="148" rx="10" fill="#FFFFFF" stroke="#D5DEE7" stroke-width="1"/>
+<rect x="868" y="464" width="84" height="120" rx="8" fill="#B7C9D6" stroke="#CBD5E1" stroke-width="1"/>
+<text x="968" y="484" font-family="Segoe UI, sans-serif" font-size="16" font-weight="700" fill="#1B1E2E">Pale Blue</text>
+<text x="968" y="506" font-family="Consolas, monospace" font-size="14" font-weight="700" fill="#2D3147">#B7C9D6  ·  RGB(183, 201, 214)</text>
+<text x="968" y="532" font-family="Segoe UI, sans-serif" font-size="12" fill="#4F5575">Sparing rim &amp; dart facet (&gt;=32 px)</text>
+<rect x="968" y="548" width="118" height="24" rx="5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+<text x="976" y="564" font-family="Consolas, monospace" font-size="11" fill="#1B1E2E">vs #FFF: 1.70:1*</text>
+<rect x="1094" y="548" width="124" height="24" rx="5" fill="#1B1E2E"/>
+<text x="1102" y="564" font-family="Consolas, monospace" font-size="11" fill="#D8B46A">vs Ink: 9.70:1</text></svg>
