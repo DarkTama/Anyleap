@@ -264,12 +264,78 @@ fn evict_photo_cache_if_needed(cache_root: &Path) {
 }
 
 fn parse_flags_value(s: &str) -> Option<u32> {
-    let trimmed = s.trim().trim_end_matches(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X');
-    if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
-        u32::from_str_radix(hex, 16).ok()
-    } else {
-        trimmed.parse::<u32>().ok()
+    const FLAG_ONGOING_EVENT: u32 = 0x2;
+    const FLAG_AUTO_CANCEL: u32 = 0x10;
+    const FLAG_NO_CLEAR: u32 = 0x20;
+    const FLAG_FOREGROUND_SERVICE: u32 = 0x40;
+    const FLAG_GROUP_SUMMARY: u32 = 0x200;
+
+    let raw = s.trim();
+    if raw.is_empty() {
+        return None;
     }
+
+    let num_candidate = raw.trim_end_matches(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X');
+    if !num_candidate.is_empty() && raw.starts_with(|c: char| c.is_ascii_digit()) {
+        if let Some(hex) = num_candidate
+            .strip_prefix("0x")
+            .or_else(|| num_candidate.strip_prefix("0X"))
+        {
+            if let Ok(v) = u32::from_str_radix(hex, 16) {
+                return Some(v);
+            }
+        } else if let Ok(v) = num_candidate.parse::<u32>() {
+            return Some(v);
+        }
+    }
+
+    // Android 15/16+ dumpsys prints symbolic pipe-separated flag names (e.g. ONGOING_EVENT|CAN_COLORIZE).
+    let mut bits = 0u32;
+    let mut matched_any = false;
+    for part in raw.split('|') {
+        let token = part
+            .trim()
+            .trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+        if token.is_empty() {
+            continue;
+        }
+        matched_any = true;
+        match token {
+            "ONGOING_EVENT" | "FLAG_ONGOING_EVENT" => bits |= FLAG_ONGOING_EVENT,
+            "GROUP_SUMMARY" | "FLAG_GROUP_SUMMARY" | "AUTOGROUP_SUMMARY" => {
+                bits |= FLAG_GROUP_SUMMARY
+            }
+            "AUTO_CANCEL" | "FLAG_AUTO_CANCEL" => bits |= FLAG_AUTO_CANCEL,
+            "NO_CLEAR" | "FLAG_NO_CLEAR" => bits |= FLAG_NO_CLEAR,
+            "FOREGROUND_SERVICE" | "FLAG_FOREGROUND_SERVICE" => bits |= FLAG_FOREGROUND_SERVICE,
+            _ => {}
+        }
+    }
+    if matched_any {
+        Some(bits)
+    } else {
+        None
+    }
+}
+
+const ANDROID_WRAPPER_PREFIXES: &[&str] = &[
+    "String (",
+    "SpannableString (",
+    "SpannedString (",
+    "CharSequence (",
+    "SpannableStringBuilder (",
+    "StringBuilder (",
+    "java.lang.String (",
+    "android.text.SpannableString (",
+    "android.text.SpannedString (",
+    "java.lang.CharSequence (",
+];
+
+fn starts_with_android_wrapper(s: &str) -> bool {
+    let trimmed = s.trim_start();
+    ANDROID_WRAPPER_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
 }
 
 fn unwrap_android_value(raw: &str) -> String {
@@ -277,11 +343,10 @@ fn unwrap_android_value(raw: &str) -> String {
     if trimmed == "null" {
         return String::new();
     }
-    for prefix in ["String (", "SpannableString (", "CharSequence ("] {
+    for prefix in ANDROID_WRAPPER_PREFIXES {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
-            if let Some(inner) = rest.strip_suffix(')') {
-                return inner.to_string();
-            }
+            let inner = rest.strip_suffix(')').unwrap_or(rest);
+            return inner.trim().to_string();
         }
     }
     trimmed.to_string()
@@ -294,7 +359,9 @@ fn extract_token_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn parse_timestamp_secs(raw: &str) -> Option<i64> {
-    let val = raw.trim().parse::<i64>().ok()?;
+    // Android 16 prints `when=1794670451000/1794670451000`
+    let first = raw.trim().split('/').next()?.trim();
+    let val = first.parse::<i64>().ok()?;
     if val > 1_000_000_000_000 {
         Some(val / 1000)
     } else if val > 0 {
@@ -304,11 +371,28 @@ fn parse_timestamp_secs(raw: &str) -> Option<i64> {
     }
 }
 
+fn is_extras_key_line(trimmed: &str) -> Option<(&str, &str)> {
+    let eq = trimmed.find('=')?;
+    let key = &trimmed[..eq];
+    if key.is_empty() || key.contains(char::is_whitespace) {
+        return None;
+    }
+    Some((key, &trimmed[eq + 1..]))
+}
+
 /// Parse `adb shell dumpsys notification --noredact` output into read-only notifications.
 /// Unknown formats return an empty list, never an error.
 pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification> {
     const FLAG_ONGOING_EVENT: u32 = 0x2;
     const FLAG_GROUP_SUMMARY: u32 = 0x200;
+
+    #[derive(Clone, Copy)]
+    enum ExtraField {
+        Title,
+        Text,
+        BigText,
+        SubText,
+    }
 
     #[derive(Default)]
     struct RecordBuilder {
@@ -317,23 +401,48 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
         app_label: Option<String>,
         title: String,
         text: String,
+        big_text: String,
+        sub_text: String,
         posted_unix: i64,
         flags: u32,
         indent: usize,
+        in_extras: bool,
+        extras_indent: usize,
+        multiline: Option<(ExtraField, String)>,
     }
+
+    let apply_extra = |rec: &mut RecordBuilder, field: ExtraField, raw: &str| {
+        let val = unwrap_android_value(raw);
+        match field {
+            ExtraField::Title => rec.title = val,
+            ExtraField::Text => rec.text = val,
+            ExtraField::BigText => rec.big_text = val,
+            ExtraField::SubText => rec.sub_text = val,
+        }
+    };
 
     let mut out = Vec::new();
     let mut seen_keys = HashSet::new();
     let mut current: Option<RecordBuilder> = None;
 
-    let flush = |rec: RecordBuilder, out: &mut Vec<PhoneNotification>, seen: &mut HashSet<String>| {
+    let flush = |mut rec: RecordBuilder, out: &mut Vec<PhoneNotification>, seen: &mut HashSet<String>| {
+        if let Some((field, buf)) = rec.multiline.take() {
+            apply_extra(&mut rec, field, &buf);
+        }
         if (rec.flags & FLAG_ONGOING_EVENT) != 0 || (rec.flags & FLAG_GROUP_SUMMARY) != 0 {
             return;
         }
         if rec.key.is_empty() || rec.package.is_empty() {
             return;
         }
-        if rec.title.is_empty() && rec.text.is_empty() {
+        let body = if !rec.big_text.is_empty() {
+            rec.big_text
+        } else if !rec.text.is_empty() {
+            rec.text
+        } else {
+            rec.sub_text
+        };
+        if rec.title.is_empty() && body.is_empty() {
             return;
         }
         if seen.insert(rec.key.clone()) {
@@ -342,7 +451,7 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
                 package: rec.package,
                 app_label: rec.app_label,
                 title: rec.title,
-                text: rec.text,
+                text: body,
                 posted_unix: rec.posted_unix,
             });
         }
@@ -365,7 +474,12 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
                 rec.package = pkg.to_string();
             }
             if let Some(key) = extract_token_value(trimmed, "key=") {
-                rec.key = key.to_string();
+                rec.key = key.trim_end_matches(':').to_string();
+            }
+            if let Some(f_tok) = extract_token_value(trimmed, "flags=") {
+                if let Some(f) = parse_flags_value(f_tok) {
+                    rec.flags |= f;
+                }
             }
             current = Some(rec);
             continue;
@@ -375,9 +489,62 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
             continue;
         };
 
+        if let Some((field, mut buf)) = rec.multiline.take() {
+            let closes_extras = rec.in_extras && trimmed == "}" && indent <= rec.extras_indent;
+            let next_extra_key = rec.in_extras
+                && indent > rec.extras_indent
+                && is_extras_key_line(trimmed).is_some()
+                && buf.trim_end().ends_with(')');
+
+            if closes_extras || next_extra_key {
+                apply_extra(rec, field, &buf);
+                if closes_extras {
+                    rec.in_extras = false;
+                    continue;
+                }
+                // Fall through to process the new extras key line.
+            } else {
+                buf.push('\n');
+                buf.push_str(line);
+                rec.multiline = Some((field, buf));
+                continue;
+            }
+        }
+
+        if rec.in_extras {
+            if trimmed == "}" && indent <= rec.extras_indent {
+                rec.in_extras = false;
+                continue;
+            }
+            if let Some((key, val)) = is_extras_key_line(trimmed) {
+                let target = match key {
+                    "android.title" => Some(ExtraField::Title),
+                    "android.text" => Some(ExtraField::Text),
+                    "android.bigText" => Some(ExtraField::BigText),
+                    "android.subText" => Some(ExtraField::SubText),
+                    _ => None,
+                };
+                if let Some(field) = target {
+                    let val_trimmed = val.trim();
+                    if starts_with_android_wrapper(val_trimmed) && !val_trimmed.ends_with(')') {
+                        rec.multiline = Some((field, val_trimmed.to_string()));
+                    } else {
+                        apply_extra(rec, field, val_trimmed);
+                    }
+                }
+            }
+            continue;
+        }
+
         if !trimmed.is_empty() && indent <= rec.indent {
             let finished = current.take().unwrap();
             flush(finished, &mut out, &mut seen_keys);
+            continue;
+        }
+
+        if trimmed == "extras={" {
+            rec.in_extras = true;
+            rec.extras_indent = indent;
             continue;
         }
 
@@ -394,21 +561,23 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
             if let Some(f) = parse_flags_value(val) {
                 rec.flags |= f;
             }
-        } else if let Some(f_tok) = extract_token_value(trimmed, "flags=") {
-            if let Some(f) = parse_flags_value(f_tok) {
-                rec.flags |= f;
+        } else if trimmed.starts_with("notification=") {
+            if let Some(f_tok) = extract_token_value(trimmed, "flags=") {
+                if let Some(f) = parse_flags_value(f_tok) {
+                    rec.flags |= f;
+                }
             }
-        }
-
-        if let Some(val) = trimmed.strip_prefix("android.title=") {
-            rec.title = unwrap_android_value(val);
-        } else if let Some(val) = trimmed.strip_prefix("android.text=") {
-            rec.text = unwrap_android_value(val);
         } else if let Some(val) = trimmed.strip_prefix("postTime=") {
             if let Some(ts) = parse_timestamp_secs(val) {
                 rec.posted_unix = ts;
             }
         } else if let Some(val) = trimmed.strip_prefix("when=") {
+            if rec.posted_unix == 0 {
+                if let Some(ts) = parse_timestamp_secs(val) {
+                    rec.posted_unix = ts;
+                }
+            }
+        } else if let Some(val) = trimmed.strip_prefix("mCreationTimeMs=") {
             if rec.posted_unix == 0 {
                 if let Some(ts) = parse_timestamp_secs(val) {
                     rec.posted_unix = ts;
@@ -731,6 +900,73 @@ regular empty file|0|1700000000|/storage/emulated/0/Download/*\n\
         assert_eq!(parsed14[1].text, "main branch checks succeeded in 2m 14s");
 
         assert!(parse_dumpsys_notifications("random unrecognized output").is_empty());
+    }
+
+    #[test]
+    fn dumpsys_notification_parser_handles_android16_real_fixture_and_wrappers() {
+        let a16 = include_str!("../tests/fixtures/dumpsys_notification_android16_real.txt");
+        let parsed = parse_dumpsys_notifications(a16);
+        assert_eq!(parsed.len(), 9);
+
+        let wrapper_prefixes = [
+            "String (",
+            "SpannableString (",
+            "SpannedString (",
+            "CharSequence (",
+        ];
+        for n in &parsed {
+            for p in &wrapper_prefixes {
+                assert!(
+                    !n.title.starts_with(p),
+                    "title leaked wrapper {p}: {:?}",
+                    n.title
+                );
+                assert!(
+                    !n.text.starts_with(p),
+                    "text leaked wrapper {p}: {:?}",
+                    n.text
+                );
+            }
+            assert!(n.posted_unix > 0, "expected non-zero timestamp for {}", n.key);
+        }
+
+        // Ongoing and group-summary records must be filtered out
+        assert!(!parsed.iter().any(|n| n.package == "com.example.peerlink"));
+        assert!(!parsed.iter().any(|n| n.package == "eu.kanade.tachiyomi.sy"));
+        assert!(!parsed.iter().any(|n| n.package == "com.bitchat.droid"));
+        assert!(!parsed.iter().any(|n| n.title == "Telegram"));
+
+        // Multiline MessagingStyle Telegram notifications preserve internal ')' and unwrap cleanly
+        let security = parsed
+            .iter()
+            .find(|n| n.title == "SecurityBot")
+            .expect("SecurityBot notification");
+        assert!(security.text.starts_with("🚨 SECURITY ALERT: Admin Login Detected"));
+        assert!(security.text.contains("User: UserOne (Administrator / Full Access)"));
+        assert!(security.text.ends_with("secure the workstation."));
+
+        let service = parsed
+            .iter()
+            .find(|n| n.title == "ServiceBot")
+            .expect("ServiceBot notification");
+        assert!(service.text.starts_with("⚠️ API Migration Notice to example.invalid"));
+        assert!(service.text.ends_with("activate automatically."));
+
+        // bigText (SpannableString multiline) wins over text ("Tomorrow")
+        let cal = parsed
+            .iter()
+            .find(|n| n.package == "com.transsion.calendar")
+            .expect("calendar notification");
+        assert_eq!(cal.title, "Friend Birthday");
+        assert_eq!(cal.text, "Tomorrow\nCity Center");
+
+        // Direct wrapper unit checks
+        assert_eq!(unwrap_android_value("String (hello)"), "hello");
+        assert_eq!(unwrap_android_value("SpannableString (styled)"), "styled");
+        assert_eq!(unwrap_android_value("SpannedString (spanned)"), "spanned");
+        assert_eq!(unwrap_android_value("CharSequence (chars)"), "chars");
+        assert_eq!(unwrap_android_value("String (unclosed"), "unclosed");
+        assert_eq!(unwrap_android_value("null"), "");
     }
 
     #[test]
