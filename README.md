@@ -1,100 +1,106 @@
-# AnyLeap
+<div align="center">
 
-A desktop GUI that makes connecting your Android phone to your PC — **wired or wirelessly** — effortless, then mirrors and controls it using [scrcpy](https://github.com/Genymobile/scrcpy) under the hood.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/anyleap-horizontal-reversed.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/anyleap-horizontal.svg" />
+  <img alt="AnyLeap" src="assets/brand/anyleap-horizontal-reversed.svg" height="56" />
+</picture>
 
-Think "Tecno OneLeap, but universal": the easy one-tap / QR-code wireless experience, on *any* Android 11+ phone, with all of scrcpy's power exposed as a GUI instead of command-line flags.
+<p><strong>Local-first Android mirroring, phone companion tools, and Shared Mouse &amp; Keyboard for Windows PCs.</strong></p>
 
-> **Status:** Active development. Latest release: **v0.9.8** (Multi-PC Virtual KVM Computer Link, media clipboard and file transfer sync, silent auto-updater, Studio Deck workstation, Android Camera Studio mode, embedded mirror container).
+[![Latest Release](https://img.shields.io/github/v/release/DarkTama/Anyleap?color=D8B46A&labelColor=1B1E2E)](https://github.com/DarkTama/Anyleap/releases/latest)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-A9822F?labelColor=1B1E2E)](LICENSE)
+
+</div>
+
+AnyLeap connects your Android phone and Windows PCs over USB or local Wi-Fi in a single desktop workstation. Mirror and control your phone, browse device files, photos, and notifications without a companion app, and glide one physical mouse and keyboard across multiple Windows PCs. Everything runs directly between your devices—local-first, encrypted, and with no cloud accounts or relays.
 
 ## Features
 
-- **Phone Tab (Files, Photos & Notifications)** — Browse shared Android storage (`/storage/emulated/0`) with upload/download/delete, view Camera and Screenshot photos in a lazy-loaded grid with a 500 MB local cache, and read active phone notifications (with optional desktop pop-ups, read-only).
-- **Computer Link (Virtual KVM)** — Roam your physical mouse cursor and keyboard across multiple computers seamlessly over local Wi-Fi or USB. A single encrypted QUIC connection (UDP 4177) with one-time PIN pairing and certificate-fingerprint trust, unreliable-datagram mouse deltas that never queue behind file transfers, automatic keystroke forwarding, interactive 2D monitor topology arranger, bidirectional clipboard text synchronization, and emergency unhook failsafe (`ScrollLock`).
-- **Ink & Gold Console** — Flat, high-contrast Ink & Gold workstation with semantic theme tokens, tactile interaction physics, quick segmented navigation (Devices, Phone, Computers, Settings), and persistent hardware rack.
-- **Silent In-App Auto-Updater** — Seamless updates verified with Minisign Ed25519 cryptographic signatures, background download progress, zero-wizard silent installation, one-click app relaunch, and rich commit changelog viewer.
-- **Camera Studio (PC Webcam)** — Stream your phone's front or back camera sensors directly to your PC with custom resolutions (1080p, 720p, 4K), configurable frame rates, microphone audio capture, and in-session controls (torch toggle, zoom in/out, lens flip).
-- **Studio Deck Workstation** — Integrated control dashboard with the **Device Hero Card** (at-a-glance Android version, connection type, battery, and primary actions), **Activity Timeline** (local session & event history), **Command Palette** (`Ctrl+K` quick launcher), **Connection Doctor** (one-click ADB/scrcpy/wireless diagnostics), and the **Launch Matrix** supporting 4 distinct profiles:
-  - *Desktop Flex Mode* — Dynamic virtual display container with live DPI presets and visualizer.
-  - *Standard Mirror* — Low-latency native display replication.
-  - *Camera Studio* — Dedicated raw camera sensor streaming for calls and content creation.
-  - *High Fidelity* — 60 FPS, 20 Mbps AV1/HEVC pipeline for gaming and crisp media reproduction.
-- **Embedded Mirror Window** — Borderless, single-window embedded workstation container with integrated flush control toolbar.
-- **Effortless Wireless & USB** — One-tap pairing via **QR code** (scan with phone) or **6-digit mDNS auto-discovery**, persistent device storage, live battery telemetry, and automatic reconnects.
-- **Power & Productivity Controls** — Seamless screen power toggling (keep mirroring while phone display stays dark), wheel-to-swipe scrolling for Reels/Shorts, clipboard image sharing, drag-and-drop file transfer, and app launcher drawer.
-- **Adaptive Control Bar** — Context-aware floating or embedded controls for navigation, volume, sleep/wake, torch, and camera zoom.
-- **ADB Quick Actions Pack** — Open PC clipboard URLs directly on your phone, launch individual Android apps in their own virtual display windows, toggle Wi-Fi/Bluetooth/Do Not Disturb, record mirroring sessions to MP4 (`Videos\AnyLeap`), receive Windows battery low/full toast alerts, and place or end phone calls.
+### Phone
+- **Mirroring Modes (Launch Matrix)** — Choose from **Phone Mirror** (1:1 low-latency portrait feed with wheel-to-swipe scrolling), **Desktop Flex** (secondary virtual display with custom DPI scaling and multi-window apps), **Camera Studio** (stream front or rear phone lenses for calls and recording with torch, zoom, and lens flip), and **High Fidelity** (60 FPS, 20 Mbps AV1/HEVC).
+- **Files, Photos & Notifications (`Phone` tab)** — Browse `/storage/emulated/0` with upload, download, and delete; view Camera and Screenshot photos in a lazy-loaded grid backed by a 500 MB local disk cache; and read active phone notifications in memory (read-only, with optional desktop pop-ups).
+- **Quick Actions & Adaptive Controls** — Embedded or floating control bar for navigation, volume, screen-off mirroring, screenshots, and MP4 screen recording (`Videos\AnyLeap`), plus URL handoff from PC clipboard, per-app virtual display windows, Wi-Fi / Bluetooth / Do Not Disturb toggles, Windows battery alerts, and call placement/hangup.
+- **USB & Wireless Pairing** — Plug in over USB or pair wirelessly via QR code or 6-digit mDNS pairing code with saved devices and live battery telemetry.
 
-## Download
+### Shared Mouse & Keyboard
+- **Main PC & Linked PC Roles (`Computers` tab)** — Clear role model: the **Main PC** shares its physical mouse and keyboard; a **Linked PC** opts in via **Allow other PCs to control this PC**.
+- **Encrypted QUIC Link** — Mutually authenticated QUIC transport (UDP 4177) with unreliable datagrams for low-latency pointer motion and separate streams for clipboard text/images and drag-and-drop file transfers.
+- **One-Time Pairing Code & Fingerprint Trust** — First link verifies a 6-digit **Pairing code**; subsequent links authenticate automatically by pinned SHA-256 certificate fingerprint (revoke anytime with **Forget**).
+- **Offset-Aware 2D Layout** — Multi-monitor canvas to position the Linked PC along any screen edge (`left`, `right`, `top`, `bottom`) with pixel-offset alignment, edge deadzone/dwell tuning, and instant cursor release (`Scroll Lock`, `Pause`, `Ctrl+Alt+Esc`, or **Bring cursor back**).
 
-Grab the latest build from the [**Releases**](https://github.com/DarkTama/Anyleap/releases) page (Windows x64):
+### Desk
+- **Device Hero Card** — At-a-glance phone name, Android version, USB/Wi-Fi badge, battery level, live status, and primary actions.
+- **Activity Timeline** — Local history ring buffer (up to 200 entries) logging mirroring sessions, screenshots, transfers, app launches, and computer links.
+- **Command Palette (`Ctrl+K`)** — Zero-latency keyboard launcher for switching tabs, starting profiles, running diagnostics, and toggling Shared Mouse & Keyboard.
+- **Connection Doctor** — Step-by-step diagnostics for `adb`, `scrcpy`, device authorization, wireless TCP reachability, shell responsiveness, and Android version, with fix hints and report copy.
 
-- **`AnyLeap_*_x64-setup.exe`** — installer.
-- **`AnyLeap-*-portable-win64.zip`** — portable; unzip and run `anyleap.exe`.
+### App
+- **In-App Updater** — Background update checks and downloads verified with Minisign Ed25519 signatures, commit changelog viewer, and one-click relaunch.
+- **Ink & Gold Theme** — Flat, high-contrast dark surface hierarchy (`#12141F` / `#1B1E2E` / `#2A2D40`) with restrained gold accents, tactile press physics, keyboard focus rings, and `prefers-reduced-motion` support.
 
-Builds are currently **unsigned**, so Windows SmartScreen may warn on first run ("More info" → "Run anyway"). Requires the WebView2 runtime (preinstalled on Windows 11 / most Windows 10).
+## Requirements
 
-## Usage
+- **PC:** Windows 10 or Windows 11 (x64) with Microsoft Edge WebView2 Runtime (preinstalled on Windows 11 and most Windows 10 systems).
+- **Android:** Phone with **USB debugging** enabled (Android 11+ recommended for wireless QR/pairing-code setup and audio forwarding).
+- **Shared Mouse & Keyboard:** Two Windows PCs running AnyLeap on the same local network (UDP 4177 for QUIC, UDP 4179 for LAN discovery).
 
-1. **USB:** enable *USB debugging* on the phone, plug in, authorize the prompt → the device appears under **Devices** → **Mirror**.
-2. **Wireless:** on the phone, *Settings → Developer options → Wireless debugging*. In AnyLeap click **Add wireless device**:
-   - **QR code** (default) — scan the shown QR with the phone's *Pair device with QR code*; it pairs and connects automatically.
-   - **Auto-discover / Manual** — use the *Pair device with pairing code* screen and enter the 6-digit code.
-4. **Computer Link (Virtual KVM)**:
-   - Navigate to the **Computers** tab.
-   - Click **Start KVM Host** to begin listening on local network (UDP port 4177, QUIC).
-   - Nearby AnyLeap computers automatically appear via LAN discovery beacon. Click **Link PC** or enter direct IP address. The first link asks for the 6-digit PIN shown on the other PC; after that the peers recognise each other by certificate fingerprint (use **Forget this peer** to revoke).
-   - Arrange your screens in the interactive 2D layout canvas. Move your mouse across the monitor boundary to seamlessly control the adjacent PC. Press `ScrollLock` anytime to instantly release the cursor.
+## Install
 
-### Using Phone Camera for Google Meet, Zoom, or Discord (OBS Virtual Camera Workaround)
+Download the latest build from [**GitHub Releases**](https://github.com/DarkTama/Anyleap/releases):
 
-Windows web browsers and video conferencing apps (Google Meet, Zoom, Microsoft Teams, Discord) require a registered DirectShow virtual webcam device to recognize a camera source in their settings dropdown.
+- **`AnyLeap_<version>_x64-setup.exe`** — Windows installer.
+- **`AnyLeap-<version>-portable-win64.zip`** — Portable archive (unzip and run `anyleap.exe`).
 
-To stream your AnyLeap camera wirelessly into online meetings:
+> Builds are currently unsigned for Authenticode, so Windows SmartScreen may warn on first run (*More info → Run anyway*).
 
-1. Launch **Camera Studio** in AnyLeap for your connected phone.
-2. Open [**OBS Studio**](https://obsproject.com/) (free and open source).
-3. In OBS under **Sources**, click **`+` → Window Capture**.
-4. Choose **`AnyLeap Camera Studio`** as the window target and click **OK**.
-5. In the bottom-right OBS Controls dock, click **Start Virtual Camera**.
-6. In **Google Meet**, **Zoom**, or **Discord** video settings, select **OBS Virtual Camera** as your camera input.
+## Quick Start
 
-> **Tip for Android 14+ wired users:** If plugged in via USB, you can also swipe down on your phone, tap *USB charging notification*, and select **Webcam** for native plug-and-play driverless webcam mode.
-## Build from source
+### Mirror a phone
+1. Enable **USB debugging** under *Developer options* on your Android phone.
+2. Connect via USB (or enable **Wireless debugging**, click **Pair Device** in AnyLeap, and scan the QR code or enter the 6-digit pairing code).
+3. Select your phone in **Devices**, choose a profile in the Launch Matrix, and click **Mirror**.
 
-Prerequisites (Windows):
+### Link two PCs (Shared Mouse & Keyboard)
+1. On the **Linked PC**, open the **Computers** tab and turn on **Allow other PCs to control this PC**.
+2. On the **Main PC**, open **Computers**, select the discovered PC (or enter its IP), and click **Link**.
+3. Enter the 6-digit **Pairing code** displayed on the Linked PC (required on first link only; future links recognize its certificate fingerprint).
+4. Arrange the Linked PC in the 2D layout canvas and move your cursor across the shared edge. Press `Scroll Lock`, `Pause`, or `Ctrl+Alt+Esc` (or click **Bring cursor back**) anytime to return control to the Main PC.
 
-- **Rust** (MSVC toolchain): `rustup default stable-msvc`
-- **Visual Studio Build Tools** with the *Desktop development with C++* workload
+## Privacy & Security
+
+- **Local network only:** Phone mirroring runs over USB or local ADB; Shared Mouse & Keyboard communicates strictly over your LAN with no cloud servers or relays.
+- **Encrypted transport:** PC-to-PC input, clipboard, and file transfers run over mutually authenticated TLS 1.3 / QUIC (`anyleap-kvm/1`).
+- **Pairing code & trust list:** Unknown peers can only send a pairing request with the one-time 6-digit pairing code (regenerated automatically after repeated failures). Trusted certificate fingerprints are stored locally in `kvm_trusted_peers.json` and can be removed anytime via **Forget**.
+- **In-memory notifications & sanitized transfers:** Phone notifications are never persisted to disk, and incoming PC file transfers sanitize filenames to prevent path traversal.
+
+## Development
+
+### Prerequisites (Windows)
+- **Rust** (`stable-msvc` toolchain)
+- **Visual Studio Build Tools** with *Desktop development with C++*
 - **Node.js** LTS
-- WebView2 (already on Windows 11)
+- **WebView2 Runtime**
 
+### Run locally
 ```bash
-npm install          # also runs scripts/fetch-binaries.ps1 (downloads pinned scrcpy + adb)
-npm run tauri dev    # run in development
-npm run tauri build  # produce the NSIS installer (src-tauri/target/release/bundle/nsis)
+npm install          # installs dependencies and fetches pinned adb + scrcpy binaries
+npm run tauri dev    # starts Vite + Tauri in development mode
 ```
 
-Notes:
-- The bundled `adb`/`scrcpy` binaries are **not** in git; `npm install` (or `npm run fetch-binaries`) downloads a pinned scrcpy release into `src-tauri/binaries/`.
-- Before re-running a build, stop any running app first (`adb kill-server` + close the app) so the staged sidecars aren't locked.
+### Quality gates
+All checks must pass before committing:
+```bash
+npm test
+cargo check --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run build
+```
 
-## How it works
+## Contributing
 
-AnyLeap is a thin **Tauri 2** (Rust) shell + **React/Vite** UI that drives the bundled `adb` and `scrcpy` as sidecar processes — it does **not** reimplement mirroring. Wireless discovery/pairing delegates to adb (`adb mdns services`, `adb pair`, `adb connect`); the control bar sends `adb shell input` key events.
-
-## Tech stack
-
-Tauri 2 · React 19 + TypeScript + Vite · Tailwind v4 · Zustand · qrcode.react · bundled scrcpy (Apache-2.0) + Android platform-tools (Apache-2.0).
-
-## Docs
-
-Design/architecture notes live in [`docs/`](docs/): [PLAN](docs/PLAN.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [WIRELESS](docs/WIRELESS.md) · [SETTINGS-MAP](docs/SETTINGS-MAP.md) · [BACKLOG](docs/BACKLOG.md).
-
-## Prior art
-
-- [escrcpy](https://github.com/viarotel-org/escrcpy) — the closest existing GUI (Electron); a key reference for UX.
-- [scrcpy](https://github.com/Genymobile/scrcpy) — the mirroring engine AnyLeap wraps.
+See [AGENTS.md](AGENTS.md) for the pull-request workflow, commit formatting, documentation sync rules, and quality gates.
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE). Bundled third-party components are attributed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Apache-2.0 — see [LICENSE](LICENSE). Bundled third-party components (`scrcpy`, Android platform-tools, and the Plus Jakarta Sans font in `assets/brand/fonts/`) are attributed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and [assets/brand/fonts/OFL.txt](assets/brand/fonts/OFL.txt).
