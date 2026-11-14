@@ -1,6 +1,6 @@
 # SPEC-22: Computer Link — Input Fidelity & Reliability Fixes
 
-> **Status:** Implemented (merged to main 2026-11-13; ships in next release) | Target Version: `v1.0.1`
+> **Status:** Implemented / Shipped in v1.0.0
 > Scope: `(kvm)`. Follows SPEC-19 (QUIC transport). Fixes defects found in a code audit of the Computer Link feature.
 
 ## 1. Audit findings

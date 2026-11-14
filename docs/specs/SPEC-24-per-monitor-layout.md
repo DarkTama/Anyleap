@@ -1,6 +1,6 @@
 # SPEC-24: Per-Monitor Layout Mapping (Display-Settings Style)
 
-> **Status:** Implemented (merged to main 2026-11-14; ships in next release)
+> **Status:** Implemented / Shipped in v1.0.0
 
 ## Goal
 

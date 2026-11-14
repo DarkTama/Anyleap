@@ -1,6 +1,6 @@
 # SPEC-18: Dashboard — Device Hero Card, Activity Timeline, Command Palette, Connection Doctor
 
-> **Status:** Implemented (merged to main 2026-11-13; ships in next release) | Target Version: `v1.1.0`
+> **Status:** Implemented / Shipped in v1.0.0
 > Scope: `(deck)`. Builds on SPEC-17 (Graphite). Adds layout patterns only; visual identity stays Graphite.
 
 ## 1. Overview
