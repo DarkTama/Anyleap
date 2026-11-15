@@ -145,6 +145,12 @@ See [AGENTS.md](AGENTS.md) for the full contributor protocol. In short:
 
 ---
 
+## Dependencies
+
+Dependabot opens grouped minor and patch PRs for Cargo, npm, and GitHub Actions (see [`.github/dependabot.yml`](.github/dependabot.yml)); these are merged once CI is green, while security updates continue to flow ungrouped. Major dependency upgrades are ignored by automated version updates and are done deliberately in their own PR with manual testing. Tauri core and plugins are upgraded manually in a single PR that bumps both the Rust crate and npm package together (CI enforces matching `major.minor` versions).
+
+---
+
 ## Good First Areas
 
 These items from [docs/BACKLOG.md](docs/BACKLOG.md) are good places to explore (no timelines or promises implied):

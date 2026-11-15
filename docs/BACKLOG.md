@@ -32,3 +32,13 @@ Items observed during M2 testing, to be sequenced into future milestones.
 - **Windows 11 top-level Explorer context menu entry**: add a packaged shell extension / sparse package so **Open on Linked PC** appears directly in the Windows 11 top-level context menu instead of under *Show more options*.
 - **Strict stream-to-offer binding**: bind incoming `DragFile` and `ClipFile` unidirectional QUIC streams strictly to active offer IDs and declared file sizes.
 - **Intermittent receiver-side Cancel**: investigate rare cases where transfer **Cancel** only took effect from the sender (could not reproduce during SPEC-25 verification).
+
+## Dependencies
+
+Planned manual major upgrades (require two-PC testing and/or release verification):
+
+- **`windows` / `windows-core` `0.61` → `0.62`**: touches unsafe Win32/COM code across audio loopback, input hooks, and OLE drag & drop; verify `PROPVARIANT` and drop semantics with two-PC testing.
+- **`rcgen` `0.13` → `0.14`**: pairing certificate generation and TLS identity (`identity.rs`); verify pairing and fingerprint pinning across two PCs.
+- **`sha2` `0.10` → `0.11`**: certificate fingerprint hashing; verify pairing and existing trusted peer compatibility across two PCs.
+- **`tauri-apps/tauri-action` `0` → `1`**: release bundling and updater signing; verify with a manual `release` workflow test build.
+- **GitHub Actions (`actions/checkout`, `actions/setup-node`, `actions/upload-artifact`) `v4` → `v7`**: review workflow compatibility and verify with CI and a release test build.
