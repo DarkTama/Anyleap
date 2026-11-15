@@ -1004,16 +1004,16 @@ mod tests {
             parse_open_on_linked_arg(&[
                 "anyleap.exe".into(),
                 "--open-on-linked".into(),
-                r"C:\Users\Tama\doc.pdf".into()
+                r"C:\Users\example\doc.pdf".into()
             ]),
-            Some(r"C:\Users\Tama\doc.pdf".into())
+            Some(r"C:\Users\example\doc.pdf".into())
         );
         assert_eq!(
             parse_open_on_linked_arg(&[
                 "anyleap.exe".into(),
-                r"--open-on-linked=C:\Users\Tama\doc.pdf".into()
+                r"--open-on-linked=C:\Users\example\doc.pdf".into()
             ]),
-            Some(r"C:\Users\Tama\doc.pdf".into())
+            Some(r"C:\Users\example\doc.pdf".into())
         );
         assert_eq!(
             parse_open_on_linked_arg(&["anyleap.exe".into(), "--open-on-linked".into()]),

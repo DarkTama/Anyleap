@@ -38,6 +38,17 @@ The spatial transition mechanism that lets a cursor move seamlessly between PCs 
 - **Remote Origin (`remote_origin`)**: Optional `Point { x, y }` placement of the Linked PC's virtual-desktop origin `(0, 0)` inside the Main PC's virtual-desktop coordinates (physical px). Supersedes single-edge `TopologyLink` offsets (and auto-migrates from legacy links when absent).
 - **Seam (`Seam` / `LinkedSeam`)**: A strictly positive overlapping segment where a Main PC monitor edge touches a Linked PC monitor edge with zero gap and zero overlap. Controller leaps (`CursorEnter`) and receiver returns (`CursorReturn`) trigger only across active seams (with per-seam `dwell_ms` and end-of-seam `deadzone_px`) and carry `target_monitor` (`device_name`) and `along_px` (local pixel coordinate along the target monitor's entry edge). Crossing an uncovered edge clamps inside the local desktop.
 
+### Continuity (`SPEC-25`)
+Cross-PC workstation continuity features layered over the authenticated QUIC link (Windows):
+- **Staging**: Receiving incoming cross-PC file transfers into a sanitized temporary staging directory over unidirectional QUIC streams before committing them to the local clipboard (`CF_HDROP`), OLE drop target, or shell-open handler.
+- **Clip Offer / Prefetch Limit / Fetch**: File copy-paste broadcasts a `ClipFileOffer` metadata packet first; transfers within the configured **prefetch limit** (`stagingLimitMb`, default 100 MB) stream immediately, while larger offers wait for the user to click **Fetch** on the receiving PC.
+- **Transfer Bar**: In-app progress banner tracking active cross-PC file transfers with **Cancel** support on both sender and receiver (`TransferCancel`).
+- **Edge Catcher & Drag Mode**: An invisible, topmost, non-activating 2-px OLE drop-target strip (`WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE`) shown along active seams when **Drag & drop** (Experimental, off by default) is enabled and a mouse button is held; catching `CF_HDROP` cancels the local drag and leaps in **drag mode** across the seam.
+- **Audio Bridge**: Unidirectional 48 kHz stereo PCM audio streaming from Linked PC to Main PC using tagged (`0x41`) QUIC datagrams and a ~40 ms sequence-ordered jitter buffer, with media/volume keys following whichever PC produced active audio within the last 10 seconds.
+- **Process Loopback & Linked Mute**: WASAPI `VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK` (`PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE`) capture paired with `IAudioEndpointVolume::SetMute` (**Linked mute**, persisted via a crash marker in `%LOCALAPPDATA%\AnyLeap\audio_mute_marker.json`) so the Linked PC's local speakers stay silent without muting the bridged stream.
+- **Session Sync**: Propagating Windows session lock (`WM_WTSSESSION_CHANGE`) and suspend (`WM_POWERBROADCAST`) events to the linked peer with echo-suppression windows; unlock is never automated.
+- **Open on Linked PC**: Handoff of a local file (via the `HKCU` Windows Explorer context menu `--open-on-linked`, under *Show more options* on Windows 11) or URL (via Command Palette **Open URL on Linked PC**) to open on the linked peer with scheme and executable safety guards.
+
 ### Deck Macro Surface
 A touch-grid interface (phone, tablet, or secondary window) presenting interactive buttons, hardware vital gauges, and application shortcut triggers.
 

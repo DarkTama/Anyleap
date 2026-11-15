@@ -36,6 +36,7 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 
 ### v1.0 — Workstation Hub (Android + Multi-PC Link)
 - **Computer Link (Virtual KVM)**: Roam mouse and keyboard across connected PCs, 2D monitor layout canvas, clipboard sync.
+- **Continuity (v1.1.0 / SPEC-25)**: Cross-PC file copy-paste (with prefetch limit, Fetch prompt, Cancel, and transfer bar), Experimental cross-PC drag & drop, Linked→Main audio bridge with Linked-speaker mute, active-audio media key routing, lock/sleep session sync, Open on Linked PC (Explorer context menu + Command Palette URL handoff), and optional pointer scheme sync.
 - Device list: USB devices + wireless devices (via `adb mdns services`) in one view.
 - Pairing wizard:
   - **QR code** (primary) — phone scans a QR shown by the app.

@@ -20,9 +20,10 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | 9 | Per-monitor layout mapping | SPEC-24 | shipped | Backend (`spec24/backend`) + Frontend (`spec24/frontend`) in parallel. |
 | — | **Release v1.0.0** | — | shipped | Version bump + release after pre-release polish. |
 | — | **Release v1.0.1 (notification parser fix, stable phone identity + auto reconnect)** | — | shipped | Version bump + patch release (#17, #18). |
-| 10a | Continuity — Drag & drop files across PCs, file clipboard, pointer scheme sync | SPEC-25a | in-progress | Edge catcher OLE drop target, pre-staging (`stagingLimitMb`), CF_HDROP clipboard, `SetSystemCursor` + `SPI_SETCURSORS` restore. |
-| 10b | Continuity — Audio bridge + media keys follow active audio | SPEC-25b | in-progress | WASAPI loopback 48 kHz stereo PCM over QUIC datagrams (`0x41`), jitter buffer, keyboard-hook media key routing. |
-| 10c | Continuity — Session sync (lock/sleep together) + Open on Linked PC | SPEC-25c | in-progress | Hidden window session/power notifications, HKCU Explorer context menu + single-instance `--open-on-linked`, URL/executable safety guards. |
+| 10a | Continuity — Drag & drop files across PCs, file clipboard, pointer scheme sync | SPEC-25a, ADR-0004 | shipped | Edge catcher OLE drop target, pre-staging (`stagingLimitMb`), CF_HDROP clipboard, `SetSystemCursor` + `SPI_SETCURSORS` restore. |
+| 10b | Continuity — Audio bridge + media keys follow active audio | SPEC-25b, ADR-0004 | shipped | WASAPI loopback 48 kHz stereo PCM over QUIC datagrams (`0x41`), jitter buffer, keyboard-hook media key routing. |
+| 10c | Continuity — Session sync (lock/sleep together) + Open on Linked PC | SPEC-25c, ADR-0004 | shipped | Hidden window session/power notifications, HKCU Explorer context menu + single-instance `--open-on-linked`, URL/executable safety guards. |
+| — | **Release v1.1.0 (Continuity: cross-PC files, audio bridge, session sync & Open on Linked PC)** | SPEC-25 | shipped | Version bump + feature release (#20, #21, #22, #23). |
 | 11 | Phone hub | SPEC-27 | queued | Queued after SPEC-25 continuity work. |
 | 12 | New app icons from the Ink & Gold logo kit | — | review | Brand assets (`assets/brand/`), app/tray/web icons, header logo, and README refresh (`feat/brand-ink-gold`). |
 | 13 | Cross-platform Linux/macOS input adapters | — | queued | Blocked on testers; Windows first. |

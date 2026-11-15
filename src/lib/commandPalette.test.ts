@@ -128,7 +128,7 @@ describe("filterAndRankCommands", () => {
     expect(normalizeOpenableUrl("")).toBeNull();
   });
 
-  it("ranks direct URL query as top 'Open <url> on Linked PC' result with phone link second", () => {
+  it("ranks direct URL query as top 'Open <url> on Linked PC' result with the phone open-link command second", () => {
     const openUrlOnLinkedPc = vi.fn();
     const openLinkOnPhone = vi.fn();
     const cmds = buildCommands(
