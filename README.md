@@ -17,6 +17,8 @@ AnyLeap connects your Android phone and Windows PCs over USB or local Wi-Fi in a
 
 > **Nothing to install on your phone** — AnyLeap uses Android's built-in USB/Wireless debugging.
 
+> **Status & safety:** AnyLeap is in **beta** and is currently **Windows-first**. The Windows installer is not Authenticode-signed yet, so Windows SmartScreen may warn on first run. Because **Shared Mouse & Keyboard** uses low-level keyboard/mouse hooks and input injection, some antivirus tools may also flag it—the source code is open, and official builds come directly from GitHub Actions. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) for details.
+
 ## Features
 
 ### Phone
@@ -106,7 +108,7 @@ npm run build
 
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for the pull-request workflow, commit formatting, documentation sync rules, and quality gates.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture, and how to contribute, and [AGENTS.md](AGENTS.md) for the pull-request workflow, commit formatting, documentation sync rules, and quality gates.
 
 ## License
 

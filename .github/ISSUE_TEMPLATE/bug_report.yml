@@ -11,44 +11,42 @@ body:
     id: version
     attributes:
       label: AnyLeap Version
-      description: What version of AnyLeap are you running? (e.g. v0.8.0)
-      placeholder: v0.8.0
+      description: What version of AnyLeap are you running? (e.g. v1.1.0)
+      placeholder: v1.1.0
     validations:
       required: true
   - type: dropdown
     id: os
     attributes:
       label: Operating System
-      description: What operating system are you using?
+      description: What operating system are you using? (AnyLeap is currently Windows-first.)
       options:
         - Windows 11
         - Windows 10
-        - macOS (Apple Silicon)
-        - macOS (Intel)
-        - Linux (Ubuntu / Debian)
-        - Linux (Arch / Fedora)
         - Other
     validations:
       required: true
   - type: input
     id: device
     attributes:
-      label: Android Device & OS
-      description: Phone / tablet model and Android version (e.g. Samsung Galaxy S23, Android 14)
+      label: Android Device & OS (if applicable)
+      description: Phone / tablet model and Android version (e.g. Samsung Galaxy S23, Android 14). Leave blank for Shared Mouse & Keyboard issues.
       placeholder: "Samsung S23, Android 14"
     validations:
-      required: true
+      required: false
   - type: dropdown
     id: connection_type
     attributes:
-      label: Connection Mode
-      description: How is the device connected?
+      label: Connection Mode (if applicable)
+      description: How is the device or PC connected?
       options:
         - USB Cable
         - Wireless (Wi-Fi QR Code / Pairing Code)
         - Both
+        - Shared Mouse & Keyboard (LAN)
+        - N/A
     validations:
-      required: true
+      required: false
   - type: textarea
     id: description
     attributes:
