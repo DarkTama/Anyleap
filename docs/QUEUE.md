@@ -24,6 +24,7 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | 10b | Continuity — Audio bridge + media keys follow active audio | SPEC-25b, ADR-0004 | shipped | WASAPI loopback 48 kHz stereo PCM over QUIC datagrams (`0x41`), jitter buffer, keyboard-hook media key routing. |
 | 10c | Continuity — Session sync (lock/sleep together) + Open on Linked PC | SPEC-25c, ADR-0004 | shipped | Hidden window session/power notifications, HKCU Explorer context menu + single-instance `--open-on-linked`, URL/executable safety guards. |
 | — | **Release v1.1.0 (Continuity: cross-PC files, audio bridge, session sync & Open on Linked PC)** | SPEC-25 | shipped | Version bump + feature release (#20, #21, #22, #23). |
+| — | **Release v1.1.1 (security & dependency patch: zip 9.5 in updater, rustls 0.23.46, Tauri plugins aligned, npm toolchain advisories)** | — | shipped | Version bump + security & dependency patch release. |
 | 11 | Phone hub | SPEC-27 | queued | Queued after SPEC-25 continuity work. |
 | 12 | New app icons from the Ink & Gold logo kit | — | review | Brand assets (`assets/brand/`), app/tray/web icons, header logo, and README refresh (`feat/brand-ink-gold`). |
 | 13 | Cross-platform Linux/macOS input adapters | — | queued | Blocked on testers; Windows first. |
