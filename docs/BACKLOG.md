@@ -24,3 +24,11 @@ Items observed during M2 testing, to be sequenced into future milestones.
   the standard Android navigation (Back / Home / Recents) plus extras — volume
   up/down, screenshot, power, notifications, rotate, etc. scrcpy supports these via
   key injection; expose them as buttons.
+
+## Continuity / Shared Mouse & Keyboard (post-SPEC-25)
+
+- **Cross-PC drag & drop reliability (Experimental → stable)**: investigate drops rejected with `DROPEFFECT_NONE` (`effect = 0`) and Linked→Main mouse capture/button ownership edge cases so drag & drop can graduate from Experimental.
+- **Cursor smoothness on Linked PC during large outbound transfers**: pointer motion feels less smooth when the Linked PC sends large files to the Main PC than in the Main→Linked direction; profile QUIC pacing / datagram scheduling under load.
+- **Windows 11 top-level Explorer context menu entry**: add a packaged shell extension / sparse package so **Open on Linked PC** appears directly in the Windows 11 top-level context menu instead of under *Show more options*.
+- **Strict stream-to-offer binding**: bind incoming `DragFile` and `ClipFile` unidirectional QUIC streams strictly to active offer IDs and declared file sizes.
+- **Intermittent receiver-side Cancel**: investigate rare cases where transfer **Cancel** only took effect from the sender (could not reproduce during SPEC-25 verification).

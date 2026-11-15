@@ -1,6 +1,6 @@
 # SPEC-25a — Files Across PCs + Pointer Scheme
 
-> **Status:** Approved 2026-11-15
+> **Status:** Implemented / Shipped in v1.1.0
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # SPEC-25b: Audio Bridge & Media Keys Follow Active Audio
 
-> **Status:** Approved 2026-11-15
+> **Status:** Implemented / Shipped in v1.1.0
 
 ## Goal
 

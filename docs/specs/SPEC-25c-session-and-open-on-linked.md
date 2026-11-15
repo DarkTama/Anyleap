@@ -1,6 +1,6 @@
 # SPEC-25c: Continuity — Session Sync & Open on Linked PC
 
-> **Status:** Approved 2026-11-15
+> **Status:** Implemented / Shipped in v1.1.0
 > **Scope:** `(kvm)` — Part of SPEC-25 Continuity (Windows only). Builds on SPEC-19 (authenticated QUIC transport) and SPEC-23/SPEC-24 (Main PC / Linked PC link lifecycle).
 
 ## 1. Goal

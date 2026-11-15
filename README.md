@@ -27,9 +27,12 @@ AnyLeap connects your Android phone and Windows PCs over USB or local Wi-Fi in a
 
 ### Shared Mouse & Keyboard
 - **Main PC & Linked PC Roles (`Computers` tab)** — Clear role model: the **Main PC** shares its physical mouse and keyboard; a **Linked PC** opts in via **Allow other PCs to control this PC**.
-- **Encrypted QUIC Link** — Mutually authenticated QUIC transport (UDP 4177) with unreliable datagrams for low-latency pointer motion and separate streams for clipboard text/images and drag-and-drop file transfers.
+- **Encrypted QUIC Link** — Mutually authenticated QUIC transport (UDP 4177) with unreliable datagrams for low-latency pointer motion and audio, plus separate unidirectional streams for clipboard text/images and file transfers.
 - **One-Time Pairing Code & Fingerprint Trust** — First link verifies a 6-digit **Pairing code**; subsequent links authenticate automatically by pinned SHA-256 certificate fingerprint (revoke anytime with **Forget**).
 - **Offset-Aware 2D Layout** — Multi-monitor canvas to position the Linked PC along any screen edge (`left`, `right`, `top`, `bottom`) with pixel-offset alignment, edge deadzone/dwell tuning, and instant cursor release (`Scroll Lock`, `Pause`, `Ctrl+Alt+Esc`, or **Bring cursor back**).
+- **Continuity — Cross-PC File Copy-Paste & Drag & Drop** — Copy and paste files between Main PC and Linked PC (auto-prefetched up to 100 MB by default; larger transfers wait for the **Fetch** button above, with **Cancel** on both PCs and a live **transfer bar**). Cross-PC drag & drop is available as **(Experimental, off by default)**.
+- **Continuity — Audio Bridge & Media Keys** — Stream Linked PC audio to the Main PC with a volume slider and optional Linked-speaker mute (using Windows process loopback so bridged audio doesn't echo), while media and volume keys automatically follow whichever PC produced active audio.
+- **Continuity — Session Sync, Open on Linked PC & Pointer Sync** — Optionally lock or sleep both PCs together (unlock is never automated), right-click files in Explorer (**Open on Linked PC**, under *Show more options* on Windows 11) or run **Open URL on Linked PC** from the Command Palette (including typing a URL directly), and optionally sync the Main PC's pointer scheme to the Linked PC.
 
 ### Desk
 - **Device Hero Card** — At-a-glance phone name, Android version, USB/Wi-Fi badge, battery level, live status, and primary actions.
