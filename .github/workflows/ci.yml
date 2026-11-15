@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows Checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Rust first: fetch-binaries.js derives the target triple from rustc.
+      - name: Setup Rust (stable-msvc)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      # postinstall runs scripts/fetch-binaries.js (downloads + SHA-256-verifies
+      # scrcpy v4.0 into src-tauri/binaries/) — the gitignored sidecars/resources.
+      - name: Install deps (runs fetch-binaries via postinstall)
+        run: npm ci
+
+      - name: Ensure bundled binaries present
+        run: npm run fetch-binaries
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: TypeScript / Vite build
+        run: npm run build
+
+      - name: Rust check (all targets)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  linux-check:
+    name: Linux Check (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # tauri_build validates frontendDist, externalBin, and resource globs at compile time.
+      - name: Prepare frontendDist and sidecar placeholders
+        run: |
+          mkdir -p dist src-tauri/binaries/dll
+          touch dist/index.html
+          touch \
+            src-tauri/binaries/adb-x86_64-unknown-linux-gnu \
+            src-tauri/binaries/scrcpy-x86_64-unknown-linux-gnu \
+            src-tauri/binaries/scrcpy-server \
+            src-tauri/binaries/dll/placeholder.dll \
+            src-tauri/binaries/placeholder.png
+
+      - name: Rust check (Linux)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
