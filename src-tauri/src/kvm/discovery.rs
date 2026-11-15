@@ -53,9 +53,17 @@ pub struct DiscoveredNode {
     pub last_seen_secs: u64,
 }
 
+type DiscoveredPeersMap = HashMap<String, (PeerBeacon, String, Instant)>;
+
 pub struct DiscoveryManager {
-    peers: Arc<Mutex<HashMap<String, (PeerBeacon, String, Instant)>>>,
+    peers: Arc<Mutex<DiscoveredPeersMap>>,
     running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for DiscoveryManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiscoveryManager {

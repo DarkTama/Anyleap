@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri_plugin_shell::process::CommandChild;
 
+#[derive(Default)]
 pub struct KvmState {
     pub server: Option<KvmServerHandle>,
     pub client: Option<KvmClientHandle>,
@@ -18,20 +19,6 @@ pub struct KvmState {
     pub connected_peers: Vec<String>,
     /// Lazily created on first KVM use (needs the app data dir).
     pub security: Option<(Arc<Identity>, Arc<TrustStore>)>,
-}
-
-impl Default for KvmState {
-    fn default() -> Self {
-        Self {
-            server: None,
-            client: None,
-            discovery: DiscoveryManager::new(),
-            hooks: HookController::new(),
-            topology: TopologyConfig::default(),
-            connected_peers: Vec::new(),
-            security: None,
-        }
-    }
 }
 
 /// A running scrcpy mirror session.

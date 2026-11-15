@@ -59,10 +59,12 @@ Whenever a new feature, specification, or architectural capability is completed,
 
 ## 2. Quality Gates Before Committing
 
-Every commit must satisfy three non-negotiable verification gates:
+Every commit must satisfy five non-negotiable verification gates:
 1. **Frontend Tests**: `npm test` (Vitest) must pass 100% of test suites.
-2. **Backend Rust Check**: `cargo check --manifest-path src-tauri/Cargo.toml` must compile with 0 errors.
-3. **TypeScript / Vite Build**: `npm run build` must produce production assets in `dist/` with 0 type errors.
+2. **Backend Rust Format**: `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` must pass with 0 formatting diffs.
+3. **Backend Rust Clippy**: `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings` must pass with 0 warnings.
+4. **Backend Rust Check**: `cargo check --manifest-path src-tauri/Cargo.toml` must compile with 0 errors.
+5. **TypeScript / Vite Build**: `npm run build` must produce production assets in `dist/` with 0 type errors.
 
 ---
 

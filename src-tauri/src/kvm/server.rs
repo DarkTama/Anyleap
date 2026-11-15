@@ -1707,6 +1707,7 @@ mod tests {
 
     // --- SPEC-25a ---
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // Serializes global files settings across sync and async tests.
     async fn loopback_drag_offer_drag_file_and_drag_ready() {
         let _settings_lock = crate::kvm::dragdrop::test_files_settings_lock();
         struct RestoreDragSettings;

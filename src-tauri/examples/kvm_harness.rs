@@ -981,8 +981,8 @@ Options:
 
         println!("\n=== KVM Receiver Harness Summary ===");
         println!(
-            "{:<4} | {:<11} | {:<6} | {:<8} | {:<8} | {:<28} | {}",
-            "Run", "Scenario", "Result", "Expected", "Got", "Foreground Proc", "Notes"
+            "{:<4} | {:<11} | {:<6} | {:<8} | {:<8} | {:<28} | Notes",
+            "Run", "Scenario", "Result", "Expected", "Got", "Foreground Proc"
         );
         println!("{}", "-".repeat(92));
         let mut any_fail = false;

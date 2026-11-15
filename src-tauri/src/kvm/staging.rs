@@ -252,11 +252,11 @@ pub fn top_level_staged_paths(base_dir: &Path, files: &[FileMeta]) -> Vec<PathBu
     out
 }
 
+pub type CollectedFileSources = (Vec<FileMeta>, Vec<(String, PathBuf)>);
+
 /// Walk local filesystem paths (real files/directories only; symlinks skipped)
 /// into `FileMeta` entries and `(rel_path, disk_path)` pairs for streaming.
-pub fn collect_paths_to_file_meta(
-    paths: &[PathBuf],
-) -> Result<(Vec<FileMeta>, Vec<(String, PathBuf)>), String> {
+pub fn collect_paths_to_file_meta(paths: &[PathBuf]) -> Result<CollectedFileSources, String> {
     let mut metas = Vec::new();
     let mut sources = Vec::new();
     let mut used_top_names = HashSet::new();
@@ -519,10 +519,10 @@ pub fn register_transfer_offer(
                 continue;
             };
             let top = first.as_os_str().to_string_lossy().into_owned();
-            if !top_name_map.contains_key(&top) {
-                let unique = unique_path(&base_dir, &top);
+            if let std::collections::hash_map::Entry::Vacant(e) = top_name_map.entry(top) {
+                let unique = unique_path(&base_dir, e.key());
                 if let Some(u_name) = unique.file_name().and_then(|n| n.to_str()) {
-                    top_name_map.insert(top, u_name.to_string());
+                    e.insert(u_name.to_string());
                 }
             }
         }

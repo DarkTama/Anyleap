@@ -61,6 +61,7 @@ pub fn is_volume_key(vk: u16) -> bool {
 ///   than muting/unmuting the muted Linked PC endpoint.
 /// - Transport keys (`Play/Pause`, `Next`, `Prev`, `Stop`) always follow
 ///   `decide_media_key_target`.
+#[allow(clippy::too_many_arguments)] // Pure decision function takes explicit state snapshot fields.
 pub fn decide_media_key_target_for_vk(
     vk: u16,
     audio_streaming: bool,

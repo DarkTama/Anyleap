@@ -111,6 +111,9 @@ pub fn build_dropfiles_bytes(paths: &[std::path::PathBuf]) -> Vec<u8> {
     out
 }
 
+/// # Safety
+///
+/// `hdrop` must be a valid `HDROP` handle obtained from an open clipboard or drop event.
 #[cfg(windows)]
 pub unsafe fn read_hdrop_paths(hdrop: windows::Win32::UI::Shell::HDROP) -> Vec<std::path::PathBuf> {
     use std::ffi::OsString;
