@@ -28,4 +28,8 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
+  ; --- SPEC-25c ---
+  DetailPrint "Removing AnyLeap Explorer context menu..."
+  DeleteRegKey HKCU "Software\Classes\*\shell\AnyLeapOpenOnLinked"
+  ; --- end SPEC-25c ---
 !macroend

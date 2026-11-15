@@ -274,6 +274,17 @@ pub fn foreground_hwnd_raw() -> isize {
 }
 
 #[inline]
+pub fn note(build: impl FnOnce() -> String) {
+    if is_enabled() {
+        record_event(DebugEvent::Note {
+            ts_us: now_us(),
+            hwnd: foreground_hwnd_raw(),
+            text: build(),
+        });
+    }
+}
+
+#[inline]
 pub fn foreground_focus_hwnd_raw(fg_hwnd_raw: isize) -> Option<isize> {
     #[cfg(windows)]
     unsafe {
@@ -992,6 +1003,15 @@ mod tests {
         assert!(backup_content.contains("line-1"));
         assert!(active_content.contains("line-2"));
         assert!(!active_content.contains("line-1"));
+
+        // Second rotation must replace the older .log.1 rather than failing or truncating everything.
+        writer.write_line("line-3-cccccccccccccccccccccccccccc\n").unwrap();
+        writer.flush();
+        let active_after = std::fs::read_to_string(&log_path).unwrap();
+        let backup_after = std::fs::read_to_string(&backup).unwrap();
+        assert!(backup_after.contains("line-2"));
+        assert!(!backup_after.contains("line-1"));
+        assert!(active_after.contains("line-3"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

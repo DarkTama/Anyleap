@@ -130,6 +130,19 @@ pub enum KvmPacket {
     PeerDisconnected {
         computer_id: String,
     },
+    // --- SPEC-25c ---
+    SessionLock,
+    SessionSleep,
+    OpenUrl {
+        url: String,
+    },
+    OpenFile {
+        transfer_id: String,
+    },
+    TransferCancel {
+        id: String,
+    },
+    // --- end SPEC-25c ---
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,6 +200,12 @@ pub struct KvmStatus {
 pub enum Outbound {
     Packet(KvmPacket),
     Image { format: String, data: Vec<u8> },
+    // --- SPEC-25c ---
+    OpenFile {
+        transfer_id: String,
+        path: std::path::PathBuf,
+    },
+    // --- end SPEC-25c ---
 }
 
 /// Bulk transfers completed on a unidirectional stream.
@@ -194,6 +213,34 @@ pub enum Outbound {
 pub enum TransferEvent {
     File { name: String, size: u64 },
     ClipboardImage { data: Vec<u8> },
+    // --- SPEC-25c ---
+    OpenFile {
+        transfer_id: String,
+        name: String,
+        size: u64,
+        saved_path: std::path::PathBuf,
+    },
+    Progress {
+        id: String,
+        kind: String,
+        name: String,
+        pct: u8,
+        state: String,
+        size_bytes: u64,
+    },
+    Cancelled {
+        id: String,
+        kind: String,
+        name: String,
+        size_bytes: u64,
+    },
+    Failed {
+        id: String,
+        kind: String,
+        name: String,
+        reason: String,
+    },
+    // --- end SPEC-25c ---
 }
 
 /// Header at the start of every unidirectional stream (raw bytes follow).
@@ -202,6 +249,13 @@ pub enum TransferEvent {
 pub enum StreamHeader {
     File { name: String, size: u64 },
     ClipboardImage { format: String },
+    // --- SPEC-25c ---
+    OpenFile {
+        transfer_id: String,
+        name: String,
+        size: u64,
+    },
+    // --- end SPEC-25c ---
 }
 
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
