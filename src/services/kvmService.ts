@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DiscoveredPeer,
+  KvmAudioStatePayload,
+  KvmContinuityNoticePayload,
   KvmStatus,
+  KvmTransferProgressPayload,
   TopologyConfig,
   TrustedPeerInfo,
 } from "@/types/kvm";
@@ -88,4 +92,94 @@ export async function kvmOpenDebugLogFolder(): Promise<void> {
 
 export async function kvmDebugNote(text: string): Promise<void> {
   return await invoke<void>("kvm_debug_note", { text });
+}
+
+// --- SPEC-25a: Files & Pointer ---
+export async function kvmSetFilesSettings(
+  dragDrop: boolean,
+  fileClipboard: boolean,
+  stagingLimitMb: number,
+  pointerScheme: boolean,
+  clipPrefetchLimitMb = 100
+): Promise<void> {
+  return await invoke<void>("kvm_set_files_settings", {
+    dragDrop,
+    fileClipboard,
+    stagingLimitMb,
+    pointerScheme,
+    clipPrefetchLimitMb,
+  });
+}
+
+export async function kvmCancelTransfer(id: string): Promise<void> {
+  return await invoke<void>("kvm_cancel_transfer", { id });
+}
+
+export async function kvmFetchClip(offerId: string): Promise<void> {
+  return await invoke<void>("kvm_fetch_clip", { offerId });
+}
+
+// --- SPEC-25b: Audio & Media Keys ---
+export async function kvmSetAudioSettings(
+  audioBridge: boolean,
+  audioVolume: number,
+  mediaKeysFollowAudio: boolean,
+  muteLinkedWhileBridging = true
+): Promise<void> {
+  return await invoke<void>("kvm_set_audio_settings", {
+    audioBridge,
+    audioVolume,
+    mediaKeysFollowAudio,
+    muteLinkedWhileBridging,
+  });
+}
+
+export async function kvmGetAudioState(): Promise<KvmAudioStatePayload> {
+  return await invoke<KvmAudioStatePayload>("kvm_get_audio_state");
+}
+
+// --- SPEC-25c: Session & Open on Linked PC ---
+export async function kvmSetSessionSettings(
+  lockTogether: boolean,
+  sleepTogether: boolean,
+  openOnLinkedMenu: boolean
+): Promise<void> {
+  return await invoke<void>("kvm_set_session_settings", {
+    lockTogether,
+    sleepTogether,
+    openOnLinkedMenu,
+  });
+}
+
+export async function kvmOpenUrlOnLinked(url: string): Promise<void> {
+  return await invoke<void>("kvm_open_url_on_linked", { url });
+}
+
+export async function kvmOpenFileOnLinked(path: string): Promise<void> {
+  return await invoke<void>("kvm_open_file_on_linked", { path });
+}
+
+// --- SPEC-25 Events ---
+export function listenKvmTransferProgress(
+  handler: (payload: KvmTransferProgressPayload) => void
+): Promise<UnlistenFn> {
+  return listen<KvmTransferProgressPayload>("kvm-transfer-progress", (e) =>
+    handler(e.payload)
+  );
+}
+
+export function listenKvmAudioState(
+  handler: (payload: KvmAudioStatePayload) => void
+): Promise<UnlistenFn> {
+  return listen<KvmAudioStatePayload>("kvm-audio-state", (e) =>
+    handler(e.payload)
+  );
+}
+
+export function listenKvmContinuityNotice(
+  handler: (payload: KvmContinuityNoticePayload) => void
+): Promise<UnlistenFn> {
+  return listen<KvmContinuityNoticePayload>("kvm-continuity-notice", (e) =>
+    handler(e.payload)
+  );
 }

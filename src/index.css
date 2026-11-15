@@ -175,6 +175,34 @@ body {
   transition: opacity 150ms var(--ease-out);
 }
 
+/* HUD continuity notices: enter from scale(0.95) + opacity 0, exit faster */
+.hud-notice {
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    transform 200ms var(--ease-out),
+    opacity 200ms var(--ease-out);
+}
+
+@starting-style {
+  .hud-notice {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+.hud-notice[data-state="closing"] {
+  opacity: 0;
+  transform: scale(0.95);
+  transition-duration: 140ms;
+}
+
+/* Honest linear progress bar (compositor transform, no decorative shimmer) */
+.progress-bar-fill {
+  transform-origin: left;
+  transition: transform 120ms linear;
+}
+
 /* Topology canvas monitor & seam snap transition (disabled while dragging) */
 .canvas-snap-transition {
   transition:
@@ -221,10 +249,15 @@ body {
   .drawer-panel,
   .popover-panel,
   .hud-pill,
+  .hud-notice,
   .canvas-snap-transition,
   .photo-tile-img {
     transition-property: opacity, background-color, border-color, color;
     transition-duration: 120ms;
+  }
+
+  .progress-bar-fill {
+    transition: none;
   }
 
   .btn-tactile:active:not(:disabled) {
@@ -233,20 +266,23 @@ body {
 
   .modal-panel,
   .drawer-panel,
-  .popover-panel {
+  .popover-panel,
+  .hud-notice {
     transform: none;
   }
 
   @starting-style {
     .modal-panel,
     .drawer-panel,
-    .popover-panel {
+    .popover-panel,
+    .hud-notice {
       transform: none;
     }
   }
 
   .modal-panel[data-state="closing"],
-  .drawer-panel[data-state="closing"] {
+  .drawer-panel[data-state="closing"],
+  .hud-notice[data-state="closing"] {
     transform: none;
   }
 }

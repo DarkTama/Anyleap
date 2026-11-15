@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildCommands,
   filterAndRankCommands,
+  normalizeOpenableUrl,
   type PaletteCommand,
   type CommandPaletteContext,
 } from "./commandPalette";
@@ -13,6 +14,7 @@ function makeCtx(overrides: Partial<CommandPaletteContext> = {}): CommandPalette
     hasActiveSession: false,
     isRecording: false,
     kvmRunning: false,
+    kvmHasPeers: true,
     switchTab: vi.fn(),
     startMode: vi.fn(),
     stopMirroring: vi.fn(),
@@ -27,6 +29,8 @@ function makeCtx(overrides: Partial<CommandPaletteContext> = {}): CommandPalette
     openTimeline: vi.fn(),
     checkForUpdates: vi.fn(),
     toggleKvmServer: vi.fn(),
+    openUrlOnLinkedPc: vi.fn(),
+    toggleAudioBridge: vi.fn(),
     ...overrides,
   };
 }
@@ -66,5 +70,84 @@ describe("filterAndRankCommands", () => {
     const running = buildCommands(makeCtx({ kvmRunning: true }));
     expect(stopped.find((c) => c.id === "toggle-kvm")?.label).toBe("Start KVM server");
     expect(running.find((c) => c.id === "toggle-kvm")?.label).toBe("Stop KVM server");
+  });
+
+  it("includes Open URL on Linked PC and Toggle audio bridge entries", () => {
+    const openUrlOnLinkedPc = vi.fn();
+    const toggleAudioBridge = vi.fn();
+
+    const noPeer = buildCommands(makeCtx({ kvmHasPeers: false }));
+    const openCmdNoPeer = noPeer.find((c) => c.id === "open-url-on-linked-pc");
+    expect(openCmdNoPeer?.label).toBe("Open URL on Linked PC");
+    expect(openCmdNoPeer?.disabled).toBe("No linked PC connected");
+
+    const withPeer = buildCommands(
+      makeCtx({ kvmHasPeers: true, openUrlOnLinkedPc, toggleAudioBridge })
+    );
+    const openCmd = withPeer.find((c) => c.id === "open-url-on-linked-pc");
+    const audioCmd = withPeer.find((c) => c.id === "toggle-audio-bridge");
+
+    expect(openCmd?.disabled).toBeUndefined();
+    expect(openCmd?.hint).toBe("Opens in the default browser of the Linked PC");
+    expect(openCmd?.prompt?.placeholder).toBe("https://…");
+    expect(openCmd?.prompt?.hint).toBe("Opens in the default browser of the Linked PC");
+    expect(audioCmd?.label).toBe("Toggle audio bridge");
+    expect(audioCmd?.disabled).toBeUndefined();
+
+    // Selecting plain command does not send on its own; only prompt.onSubmit sends
+    openCmd?.run();
+    expect(openUrlOnLinkedPc).not.toHaveBeenCalled();
+
+    openCmd?.prompt?.onSubmit("youtube.com");
+    audioCmd?.run();
+    expect(openUrlOnLinkedPc).toHaveBeenCalledWith("https://youtube.com");
+    expect(toggleAudioBridge).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes http/https/mailto and bare domains while rejecting other schemes", () => {
+    expect(normalizeOpenableUrl("http://youtube.com")).toBe("http://youtube.com");
+    expect(normalizeOpenableUrl("  https://example.com/watch?v=1  ")).toBe(
+      "https://example.com/watch?v=1",
+    );
+    expect(normalizeOpenableUrl("mailto:team@example.com")).toBe(
+      "mailto:team@example.com",
+    );
+    expect(normalizeOpenableUrl("youtube.com")).toBe("https://youtube.com");
+    expect(normalizeOpenableUrl("docs.rs/tokio/latest")).toBe(
+      "https://docs.rs/tokio/latest",
+    );
+
+    // Reject non-allowlisted schemes and plain search queries
+    expect(normalizeOpenableUrl("javascript:alert(1)")).toBeNull();
+    expect(normalizeOpenableUrl("file:///C:/Windows/System32")).toBeNull();
+    expect(normalizeOpenableUrl("ftp://files.example.com")).toBeNull();
+    expect(normalizeOpenableUrl("data:text/plain,hello")).toBeNull();
+    expect(normalizeOpenableUrl("http://")).toBeNull();
+    expect(normalizeOpenableUrl("mailto:")).toBeNull();
+    expect(normalizeOpenableUrl("pair new device")).toBeNull();
+    expect(normalizeOpenableUrl("")).toBeNull();
+  });
+
+  it("ranks direct URL query as top 'Open <url> on Linked PC' result with phone link second", () => {
+    const openUrlOnLinkedPc = vi.fn();
+    const openLinkOnPhone = vi.fn();
+    const cmds = buildCommands(
+      makeCtx({ kvmHasPeers: true, openUrlOnLinkedPc, openLinkOnPhone }),
+    );
+
+    const results = filterAndRankCommands(cmds, "http://youtube.com");
+    expect(results[0]?.id).toBe("open-url-on-linked-pc");
+    expect(results[0]?.label).toBe("Open http://youtube.com on Linked PC");
+    expect(results[0]?.prompt).toBeUndefined();
+    expect(results[1]?.id).toBe("open-link-on-phone");
+
+    results[0]?.run();
+    expect(openUrlOnLinkedPc).toHaveBeenCalledWith("http://youtube.com");
+
+    results[1]?.run();
+    expect(openLinkOnPhone).toHaveBeenCalledWith("http://youtube.com");
+
+    const bareResults = filterAndRankCommands(cmds, "youtube.com");
+    expect(bareResults[0]?.label).toBe("Open https://youtube.com on Linked PC");
   });
 });

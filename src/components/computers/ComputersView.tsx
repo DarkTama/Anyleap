@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Trash2,
   Unlink,
+  Volume2,
 } from "lucide-react";
 import type { DiscoveredPeer } from "@/types/kvm";
 import { useKvmStore } from "@/stores/kvmStore";
@@ -39,6 +40,17 @@ export function ComputersView() {
   const forgetPeer = useKvmStore((s) => s.forgetPeer);
   const emergencyRelease = useKvmStore((s) => s.emergencyRelease);
   const openPairingModal = useKvmStore((s) => s.openPairingModal);
+  const continuityAudioBridge = useKvmStore(
+    (s) => s.settings.continuityAudioBridge
+  );
+  const continuityAudioVolume = useKvmStore(
+    (s) => s.settings.continuityAudioVolume
+  );
+  const continuityMuteLinkedWhileBridging = useKvmStore(
+    (s) => s.settings.continuityMuteLinkedWhileBridging
+  );
+  const updateSettings = useKvmStore((s) => s.updateSettings);
+  const audioState = useKvmStore((s) => s.audioState);
 
   const [manualIp, setManualIp] = useState("");
 
@@ -262,6 +274,109 @@ export function ComputersView() {
             <Unlink className="h-3.5 w-3.5" />
             <span>Unlink</span>
           </button>
+        </div>
+      )}
+
+      {/* Compact Continuity Audio Bridge Control (Main PC interactive, Linked PC read-only) */}
+      {role === "main" && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-ink-700 bg-ink-900 px-4 py-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <Volume2 className="h-4 w-4 shrink-0 text-gold-400" />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={continuityAudioBridge}
+                onChange={(e) =>
+                  updateSettings({ continuityAudioBridge: e.target.checked })
+                }
+                className="accent-gold-400 cursor-pointer"
+              />
+              <span className="font-medium text-text-strong">Audio bridge</span>
+            </label>
+            <label
+              title={
+                audioState.linkedMute === "unsupported"
+                  ? "Not supported on the Linked PC"
+                  : undefined
+              }
+              className={`flex items-center gap-2 ${
+                audioState.linkedMute === "unsupported"
+                  ? "cursor-not-allowed text-text-muted opacity-60"
+                  : "cursor-pointer"
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={continuityMuteLinkedWhileBridging}
+                disabled={audioState.linkedMute === "unsupported"}
+                onChange={(e) =>
+                  updateSettings({
+                    continuityMuteLinkedWhileBridging: e.target.checked,
+                  })
+                }
+                className="accent-gold-400"
+              />
+              <span className="font-medium text-text">Mute Linked PC</span>
+              {audioState.linkedMute === "unsupported" && (
+                <span className="text-[11px] text-text-muted">
+                  (Not supported on the Linked PC)
+                </span>
+              )}
+            </label>
+            {audioState.streaming && (
+              <span className="rounded border border-status-success/40 bg-status-success-bg px-1.5 py-0.5 font-mono text-[10px] text-status-success">
+                Streaming
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            {audioState.streaming && (
+              <div
+                aria-label="Audio streaming level"
+                className="h-1.5 w-20 overflow-hidden rounded-full bg-ink-950 border border-ink-700"
+              >
+                <div
+                  className="progress-bar-fill h-full w-full bg-gold-400"
+                  style={{
+                    transform: `scaleX(${Math.max(0, Math.min(1, audioState.level))})`,
+                  }}
+                />
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="computers-audio-volume"
+                className="text-text-muted"
+              >
+                Volume
+              </label>
+              <input
+                id="computers-audio-volume"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={continuityAudioVolume}
+                onChange={(e) =>
+                  updateSettings({
+                    continuityAudioVolume: Number(e.target.value),
+                  })
+                }
+                className="w-24 accent-gold-400 cursor-pointer"
+              />
+              <span className="w-8 text-right font-mono text-gold-400 font-semibold">
+                {continuityAudioVolume}%
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {role === "linked" && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-ink-700 bg-ink-900 px-4 py-3 text-xs text-text-muted">
+          <Volume2 className="h-4 w-4 shrink-0 text-text-muted" />
+          <span>Audio bridge is controlled from the Main PC</span>
         </div>
       )}
 

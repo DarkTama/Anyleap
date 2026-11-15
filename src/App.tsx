@@ -37,9 +37,9 @@ import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
 import { UpdateModal } from "@/components/shell/UpdateModal";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { loadAllowControl, useKvmStore } from "@/stores/kvmStore";
-import { kvmDebugNote, kvmSetDebugLog } from "@/services/kvmService";
+import { kvmDebugNote, kvmOpenUrlOnLinked, kvmSetDebugLog } from "@/services/kvmService";
 import { logActivity, useActivityStore } from "@/stores/activityStore";
-import { buildCommands } from "@/lib/commandPalette";
+import { buildCommands, normalizeOpenableUrl } from "@/lib/commandPalette";
 import type { StudioMode } from "@/components/deck/LaunchMatrix";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -282,6 +282,8 @@ function App() {
     void useActivityStore.getState().load();
     void useKvmStore.getState().setAllowControl(loadAllowControl());
     void kvmSetDebugLog(Boolean(useKvmStore.getState().settings.debugLog)).catch(() => {});
+    useKvmStore.getState().syncContinuitySettings();
+    void useKvmStore.getState().init();
   }, [setSettings, setPreset, setAppPrefs, setNicknames]);
 
   // Global Ctrl+K shortcut for Command Palette
@@ -394,6 +396,8 @@ function App() {
   const kvmIndicatorHud = useKvmStore((s) => s.settings.indicatorHud);
   const kvmHudCorner = useKvmStore((s) => s.settings.indicatorHudCorner);
   const kvmHasPeers = useKvmStore((s) => s.status.connected_peers.length > 0 || s.topology.computers.length > 1);
+  const continuityTransfers = useKvmStore((s) => s.continuityTransfers);
+  const continuityNotice = useKvmStore((s) => s.continuityNotice);
   // The cursor is on this machine when it is a controller that is not trapped,
   // or a receiver that a remote controller has entered.
   const kvmOwnsCursor = useKvmStore(
@@ -488,6 +492,73 @@ function App() {
     }
   }, [hudNotice, openHudWindow, closeHudWindow]);
 
+  // Manage native OS topmost floating Transfer Bar window (independent of leap HUD)
+  const closeTransferBarWindow = useCallback(async () => {
+    const w = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
+    if (w) {
+      await w.close().catch(() => {});
+    }
+  }, []);
+
+  const openTransferBarWindow = useCallback(async () => {
+    const existing = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
+    if (existing) return;
+
+    const BAR_WIDTH = 340;
+    const BAR_HEIGHT = 40;
+    const MARGIN_BOTTOM = 24;
+    const screenW = window.screen.availWidth || 1920;
+    const screenH = window.screen.availHeight || 1080;
+    const x = Math.max(0, Math.round((screenW - BAR_WIDTH) / 2));
+    const y = Math.max(0, screenH - BAR_HEIGHT - MARGIN_BOTTOM);
+
+    const state = useKvmStore.getState();
+    const initPayload = JSON.stringify({
+      transfers: state.continuityTransfers,
+      notice: state.continuityNotice?.text ?? null,
+    });
+
+    try {
+      const w = new WebviewWindow("kvm-transfer-bar", {
+        url: `index.html?kvm_transfer_bar=1&init=${encodeURIComponent(initPayload)}`,
+        title: "AnyLeap Continuity Transfers",
+        width: BAR_WIDTH,
+        height: BAR_HEIGHT,
+        x,
+        y,
+        resizable: false,
+        decorations: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        transparent: true,
+        shadow: false,
+        focus: false,
+      });
+      w.once("tauri://error", (e) => console.error("kvm-transfer-bar window error:", e));
+    } catch (e) {
+      console.error("Failed to spawn floating transfer bar:", e);
+    }
+  }, []);
+
+  const hadTransferBarContentRef = useRef(false);
+  const transferBarTriggerKey = `${continuityTransfers.map((t) => t.id).join(",")}|${continuityNotice?.id ?? ""}`;
+  useEffect(() => {
+    const hasContent = continuityTransfers.length > 0 || continuityNotice !== null;
+    if (hasContent) {
+      hadTransferBarContentRef.current = true;
+      void openTransferBarWindow();
+    } else if (hadTransferBarContentRef.current) {
+      hadTransferBarContentRef.current = false;
+      void closeTransferBarWindow();
+    }
+  }, [
+    transferBarTriggerKey,
+    continuityTransfers.length,
+    continuityNotice,
+    openTransferBarWindow,
+    closeTransferBarWindow,
+  ]);
+
   const paletteCommands = useMemo(() => {
     const hasOnlineDevice = Boolean(
       selectedSerial &&
@@ -513,6 +584,7 @@ function App() {
       hasActiveSession: Boolean(activeSession),
       isRecording,
       kvmRunning,
+      kvmHasPeers,
       switchTab: setActiveTab,
       startMode: (mode: StudioMode) => {
         const store = useAppStore.getState();
@@ -546,17 +618,18 @@ function App() {
         const op = isRecording ? stopRecording(selectedSerial) : startRecording(selectedSerial);
         void op.then(upsertSession).catch((err) => setError(String(err)));
       },
-      openLinkOnPhone: () => {
+      openLinkOnPhone: (urlArg?: string) => {
         if (!selectedSerial) return;
         void (async () => {
-          let initial = "";
-          try {
-            const clip = (await navigator.clipboard.readText()).trim();
-            if (/^(https?:\/\/|geo:|mailto:)/i.test(clip)) initial = clip;
-          } catch {
-            // clipboard unavailable
+          let url = urlArg?.trim() || "";
+          if (!url) {
+            try {
+              const clip = (await navigator.clipboard.readText()).trim();
+              if (/^(https?:\/\/|geo:|mailto:)/i.test(clip)) url = clip;
+            } catch {
+              // clipboard unavailable
+            }
           }
-          const url = initial || window.prompt("Enter URL to open on phone:")?.trim() || "";
           if (!url) return;
           await openUrlOnDevice(selectedSerial, url);
           logActivity({ kind: "device", title: "Opened link on phone", detail: url });
@@ -595,8 +668,24 @@ function App() {
         const enabled = kvm.status.allow_control ?? kvm.status.is_host_running;
         void kvm.setAllowControl(!enabled);
       },
+      openUrlOnLinkedPc: (urlArg?: string) => {
+        void (async () => {
+          const normalized = normalizeOpenableUrl(urlArg ?? "");
+          if (!normalized) return;
+          await kvmOpenUrlOnLinked(normalized);
+          logActivity({ kind: "device", title: "Opened URL on Linked PC", detail: normalized });
+        })().catch((err) => setError(String(err)));
+      },
+      toggleAudioBridge: () => {
+        const kvm = useKvmStore.getState();
+        const next = !kvm.settings.continuityAudioBridge;
+        kvm.updateSettings({ continuityAudioBridge: next });
+        setToast(next ? "Audio bridge enabled" : "Audio bridge disabled");
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast(null), 2500);
+      },
     });
-  }, [selectedSerial, devices, sessions, kvmRunning, openDoctor, setTimelineOpen, setError]);
+  }, [selectedSerial, devices, sessions, kvmRunning, kvmHasPeers, openDoctor, setTimelineOpen, setError]);
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-ink-950 text-text">

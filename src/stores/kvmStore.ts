@@ -1,11 +1,16 @@
 import { create } from "zustand";
 import type {
   ComputerNode,
+  ContinuityNotice,
   DiscoveredPeer,
   EdgeSide,
   KvmActivityItem,
+  KvmAudioStatePayload,
+  KvmContinuityNoticePayload,
   KvmSettingsConfig,
   KvmStatus,
+  KvmTransferProgressPayload,
+  LinkedMuteState,
   MonitorDisplay,
   ScreenRect,
   TopologyConfig,
@@ -27,6 +32,13 @@ import {
   kvmSendFile,
   kvmSetSyncSettings,
   kvmSetDebugLog,
+  kvmSetFilesSettings,
+  kvmSetAudioSettings,
+  kvmGetAudioState,
+  kvmSetSessionSettings,
+  listenKvmTransferProgress,
+  listenKvmAudioState,
+  listenKvmContinuityNotice,
 } from "@/services/kvmService";
 import { listen } from "@tauri-apps/api/event";
 import { logActivity } from "./activityStore";
@@ -58,10 +70,16 @@ export interface KvmState {
   activityFeed: KvmActivityItem[];
   cursorPos: { normX: number; normY: number } | null;
   monitorChangeNotice: string | null;
+  continuityTransfers: KvmTransferProgressPayload[];
+  continuityNotice: ContinuityNotice | null;
+  audioState: KvmAudioStatePayload;
 
   init: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   dismissMonitorChangeNotice: () => void;
+  dismissContinuityNotice: () => void;
+  dismissTransferProgress: (id: string) => void;
+  syncContinuitySettings: () => void;
   setAllowControl: (enabled: boolean) => Promise<void>;
   startServer: () => Promise<void>;
   stopServer: () => Promise<void>;
@@ -114,7 +132,83 @@ const defaultSettings: KvmSettingsConfig = {
   syncClipboardImage: true,
   syncFileTransfer: true,
   debugLog: false,
+  continuityDragDropExperimental: false,
+  continuityFileClipboard: true,
+  continuityStagingLimitMb: 2048,
+  continuityClipPrefetchLimitMb: 100,
+  continuityPointerScheme: false,
+  continuityAudioBridge: false,
+  continuityAudioVolume: 100,
+  continuityMediaKeysFollowAudio: true,
+  continuityMuteLinkedWhileBridging: true,
+  continuityLockTogether: true,
+  continuitySleepTogether: false,
+  continuityOpenOnLinkedMenu: true,
 };
+
+export function reduceTransferProgress(
+  transfers: KvmTransferProgressPayload[],
+  payload: KvmTransferProgressPayload
+): KvmTransferProgressPayload[] {
+  const pct =
+    payload.state === "awaiting_fetch"
+      ? 0
+      : Math.max(0, Math.min(100, Math.round(payload.pct)));
+  const item: KvmTransferProgressPayload = { ...payload, pct };
+  const idx = transfers.findIndex((t) => t.id === payload.id);
+  if (idx >= 0) {
+    const next = [...transfers];
+    next[idx] = item;
+    return next;
+  }
+  return [...transfers, item];
+}
+
+export function removeTransferProgress(
+  transfers: KvmTransferProgressPayload[],
+  id: string
+): KvmTransferProgressPayload[] {
+  return transfers.filter((t) => t.id !== id);
+}
+
+export function reduceContinuityNotice(
+  _current: ContinuityNotice | null,
+  payload: KvmContinuityNoticePayload,
+  now = Date.now()
+): ContinuityNotice | null {
+  const text = payload.text.trim();
+  if (!text) return null;
+  return {
+    id: `notice-${now}`,
+    text,
+    timestamp: now,
+  };
+}
+
+const VALID_LINKED_MUTES: readonly LinkedMuteState[] = [
+  "unsupported",
+  "muted",
+  "unmuted",
+  "unknown",
+];
+
+export function reduceAudioState(
+  current: KvmAudioStatePayload,
+  payload: KvmAudioStatePayload
+): KvmAudioStatePayload {
+  const level = Number.isFinite(payload.level)
+    ? Math.max(0, Math.min(1, payload.level))
+    : 0;
+  const linkedMute: LinkedMuteState =
+    payload.linkedMute && VALID_LINKED_MUTES.includes(payload.linkedMute)
+      ? payload.linkedMute
+      : (current.linkedMute ?? "unknown");
+  return {
+    streaming: Boolean(payload.streaming),
+    level,
+    linkedMute,
+  };
+}
 
 const defaultTopology: TopologyConfig = {
   computers: [
@@ -130,17 +224,27 @@ const defaultTopology: TopologyConfig = {
   remote_origin: null,
 };
 
+export function parseSavedSettings(raw: string | null): KvmSettingsConfig {
+  if (!raw) return defaultSettings;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return defaultSettings;
+    }
+    const { continuityDragDrop: _legacyDragDrop, ...rest } = parsed;
+    return { ...defaultSettings, ...rest } as KvmSettingsConfig;
+  } catch {
+    return defaultSettings;
+  }
+}
+
 function loadSavedSettings(): KvmSettingsConfig {
   if (typeof window === "undefined") return defaultSettings;
   try {
-    const raw = localStorage.getItem("anyleap_kvm_settings");
-    if (raw) {
-      return { ...defaultSettings, ...JSON.parse(raw) };
-    }
+    return parseSavedSettings(localStorage.getItem("anyleap_kvm_settings"));
   } catch {
-    // fallback
+    return defaultSettings;
   }
-  return defaultSettings;
 }
 
 function saveSettings(settings: KvmSettingsConfig) {
@@ -334,8 +438,38 @@ export const useKvmStore = create<KvmState>((set, get) => ({
   activityFeed: [],
   cursorPos: null,
   monitorChangeNotice: null,
+  continuityTransfers: [],
+  continuityNotice: null,
+  audioState: { streaming: false, level: 0, linkedMute: "unknown" },
 
   dismissMonitorChangeNotice: () => set({ monitorChangeNotice: null }),
+  dismissContinuityNotice: () => set({ continuityNotice: null }),
+  dismissTransferProgress: (id: string) =>
+    set((state) => ({
+      continuityTransfers: removeTransferProgress(state.continuityTransfers, id),
+    })),
+
+  syncContinuitySettings: () => {
+    const s = get().settings;
+    void kvmSetFilesSettings(
+      s.continuityDragDropExperimental,
+      s.continuityFileClipboard,
+      s.continuityStagingLimitMb,
+      s.continuityPointerScheme,
+      s.continuityClipPrefetchLimitMb
+    ).catch(() => {});
+    void kvmSetAudioSettings(
+      s.continuityAudioBridge,
+      s.continuityAudioVolume,
+      s.continuityMediaKeysFollowAudio,
+      s.continuityMuteLinkedWhileBridging
+    ).catch(() => {});
+    void kvmSetSessionSettings(
+      s.continuityLockTogether,
+      s.continuitySleepTogether,
+      s.continuityOpenOnLinkedMenu
+    ).catch(() => {});
+  },
 
   init: async () => {
     try {
@@ -461,6 +595,84 @@ export const useKvmStore = create<KvmState>((set, get) => ({
         void listen<KvmActivityItem>("kvm-activity", (event) => {
           get().addActivity(event.payload);
         });
+        const staleDragTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        void listenKvmTransferProgress((payload) => {
+          const prevTimer = staleDragTimers.get(payload.id);
+          if (prevTimer) {
+            clearTimeout(prevTimer);
+            staleDragTimers.delete(payload.id);
+          }
+
+          set((state) => ({
+            continuityTransfers: reduceTransferProgress(state.continuityTransfers, payload),
+          }));
+          const isDone =
+            payload.state === "done" ||
+            (payload.state === undefined && payload.pct >= 100);
+          const isFailedOrCancelled =
+            payload.state === "failed" || payload.state === "cancelled";
+          if (isDone || isFailedOrCancelled) {
+            const delayMs = isDone ? 1500 : 4000;
+            setTimeout(() => {
+              const current = get().continuityTransfers.find(
+                (t) => t.id === payload.id
+              );
+              if (!current) return;
+              const stillTerminal =
+                current.state === "done" ||
+                current.state === "failed" ||
+                current.state === "cancelled" ||
+                (current.state === undefined && current.pct >= 100);
+              if (stillTerminal) {
+                get().dismissTransferProgress(payload.id);
+              }
+            }, delayMs);
+          } else if (
+            payload.kind === "drag" &&
+            payload.state === "active" &&
+            payload.pct >= 100
+          ) {
+            const timer = setTimeout(() => {
+              staleDragTimers.delete(payload.id);
+              const current = get().continuityTransfers.find(
+                (t) => t.id === payload.id
+              );
+              if (
+                current &&
+                current.kind === "drag" &&
+                current.state === "active" &&
+                current.pct >= 100
+              ) {
+                get().dismissTransferProgress(payload.id);
+              }
+            }, 15_000);
+            staleDragTimers.set(payload.id, timer);
+          }
+        });
+        void listenKvmAudioState((payload) => {
+          set((state) => ({
+            audioState: reduceAudioState(state.audioState, payload),
+          }));
+        });
+        void listenKvmContinuityNotice((payload) => {
+          const next = reduceContinuityNotice(get().continuityNotice, payload);
+          set({ continuityNotice: next });
+          if (next) {
+            const id = next.id;
+            setTimeout(() => {
+              if (get().continuityNotice?.id === id) {
+                set({ continuityNotice: null });
+              }
+            }, 4000);
+          }
+        });
+        void kvmGetAudioState()
+          .then((audioState) =>
+            set((state) => ({
+              audioState: reduceAudioState(state.audioState, audioState),
+            }))
+          )
+          .catch(() => {});
       }
     } catch {
       // best-effort
@@ -827,6 +1039,48 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       void kvmSetDebugLog(Boolean(next.debugLog)).catch(() => {});
     }
 
+    if (
+      partial.continuityDragDropExperimental !== undefined ||
+      partial.continuityFileClipboard !== undefined ||
+      partial.continuityStagingLimitMb !== undefined ||
+      partial.continuityPointerScheme !== undefined ||
+      partial.continuityClipPrefetchLimitMb !== undefined
+    ) {
+      void kvmSetFilesSettings(
+        next.continuityDragDropExperimental,
+        next.continuityFileClipboard,
+        next.continuityStagingLimitMb,
+        next.continuityPointerScheme,
+        next.continuityClipPrefetchLimitMb
+      ).catch(() => {});
+    }
+
+    if (
+      partial.continuityAudioBridge !== undefined ||
+      partial.continuityAudioVolume !== undefined ||
+      partial.continuityMediaKeysFollowAudio !== undefined ||
+      partial.continuityMuteLinkedWhileBridging !== undefined
+    ) {
+      void kvmSetAudioSettings(
+        next.continuityAudioBridge,
+        next.continuityAudioVolume,
+        next.continuityMediaKeysFollowAudio,
+        next.continuityMuteLinkedWhileBridging
+      ).catch(() => {});
+    }
+
+    if (
+      partial.continuityLockTogether !== undefined ||
+      partial.continuitySleepTogether !== undefined ||
+      partial.continuityOpenOnLinkedMenu !== undefined
+    ) {
+      void kvmSetSessionSettings(
+        next.continuityLockTogether,
+        next.continuitySleepTogether,
+        next.continuityOpenOnLinkedMenu
+      ).catch(() => {});
+    }
+
     const currentTopology = get().topology;
     if (currentTopology.links.length > 0) {
       const updatedLinks = currentTopology.links.map((link) => ({
@@ -873,5 +1127,8 @@ export const useKvmStore = create<KvmState>((set, get) => ({
       activityFeed: [],
       cursorPos: null,
       monitorChangeNotice: null,
+      continuityTransfers: [],
+      continuityNotice: null,
+      audioState: { streaming: false, level: 0, linkedMute: "unknown" },
     }),
 }));

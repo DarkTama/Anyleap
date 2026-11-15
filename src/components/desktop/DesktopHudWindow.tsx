@@ -55,7 +55,7 @@ export function DesktopHudWindow() {
   if (notice) {
     return (
       <div className="flex h-screen w-screen items-center justify-center select-none overflow-hidden bg-transparent pointer-events-none px-2">
-        <div className="hud-pill flex max-w-full items-center gap-1.5 rounded-full border border-status-warning/60 bg-ink-900 px-3 py-1.5 text-[11px] text-status-warning pointer-events-none shadow-elevated">
+        <div className="hud-notice flex max-w-full items-center gap-1.5 rounded-full border border-status-warning/60 bg-ink-900 px-3 py-1.5 text-[11px] text-status-warning pointer-events-none shadow-elevated">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" />
           <span className="truncate font-medium">{notice}</span>
         </div>
