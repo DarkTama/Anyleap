@@ -24,6 +24,8 @@ jobs:
       # Rust first: fetch-binaries.js derives the target triple from rustc.
       - name: Setup Rust (stable-msvc)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -49,6 +51,12 @@ jobs:
 
       - name: TypeScript / Vite build
         run: npm run build
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Rust clippy (all targets)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Rust check (all targets)
         run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked

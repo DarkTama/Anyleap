@@ -45,6 +45,7 @@ pub fn send_delta(conn: &quinn::Connection, d: &UdpMouseDelta) {
 /// Connect, present our certificate, and complete the `Pair`/`PairAck` exchange.
 /// `pin = Some(..)` pairs (and pins the server fingerprint); `None` requires a
 /// previously paired peer whose fingerprint must still match.
+#[allow(clippy::too_many_arguments)] // Protocol handshake takes explicit connection and identity parameters.
 pub async fn handshake(
     ip: &str,
     port: u16,
@@ -144,6 +145,7 @@ pub async fn handshake(
 }
 
 impl KvmClientHandle {
+    #[allow(clippy::too_many_arguments)] // Public entry point forwards explicit session and trust parameters.
     pub async fn connect(
         ip: &str,
         port: u16,

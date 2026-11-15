@@ -2143,7 +2143,6 @@ pub(crate) fn query_virtual_display(
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
@@ -2338,10 +2337,10 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert_eq!(s.camera_id, None);
         assert_eq!(s.size, None);
         assert_eq!(s.fps, None);
-        assert_eq!(s.high_speed, false);
-        assert_eq!(s.torch, false);
-        assert_eq!(s.no_audio, false);
-        assert_eq!(s.embedded, false);
+        assert!(!s.high_speed);
+        assert!(!s.torch);
+        assert!(!s.no_audio);
+        assert!(!s.embedded);
         assert_eq!(s.orientation, None);
         assert_eq!(s.video_bit_rate, None);
         assert_eq!(s.video_buffer, None);

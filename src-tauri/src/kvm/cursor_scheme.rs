@@ -119,7 +119,7 @@ fn read_local_cursor_scheme_win() -> Vec<CursorRoleFile> {
         }
         let u16_len = (buf_len as usize) / 2;
         let mut raw_u16 = Vec::with_capacity(u16_len);
-        for chunk in buf_bytes[..u16_len * 2].chunks_exact(2) {
+        for chunk in buf_bytes[..u16_len * 2].as_chunks::<2>().0 {
             raw_u16.push(u16::from_le_bytes([chunk[0], chunk[1]]));
         }
         if raw_u16.last().copied() != Some(0) {

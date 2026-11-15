@@ -16,6 +16,8 @@
 ## Quality Gates
 <!-- All gates in AGENTS.md §2 must pass before requesting review/merge. -->
 - [ ] `npm test` (Vitest)
+- [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`
+- [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings`
 - [ ] `cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked`
 - [ ] `npm run build` (`tsc && vite build`)
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml --locked`

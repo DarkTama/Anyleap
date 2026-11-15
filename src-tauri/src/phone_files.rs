@@ -604,7 +604,7 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
         flush(last, &mut out, &mut seen_keys);
     }
 
-    out.sort_by(|a, b| b.posted_unix.cmp(&a.posted_unix));
+    out.sort_by_key(|b| std::cmp::Reverse(b.posted_unix));
     out
 }
 

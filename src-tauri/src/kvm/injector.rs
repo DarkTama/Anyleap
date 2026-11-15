@@ -127,7 +127,7 @@ pub fn current_input_desktop_name() -> String {
             }
             return "unknown".to_string();
         }
-        return "open_err".to_string();
+        "open_err".to_string()
     }
     #[cfg(not(windows))]
     {

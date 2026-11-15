@@ -341,11 +341,9 @@ impl ProgressThrottle {
 }
 
 pub fn pct_for_bytes(done: u64, total: u64) -> u8 {
-    if total == 0 {
-        100
-    } else {
-        ((done.saturating_mul(100)) / total).min(100) as u8
-    }
+    done.saturating_mul(100)
+        .checked_div(total)
+        .map_or(100, |pct| pct.min(100) as u8)
 }
 
 /// Reduce an untrusted name to a safe single path component, or `None`.
@@ -941,6 +939,7 @@ fn emit_bulk_failed(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Internal stream receiver passes transfer context directly.
 async fn receive_staged_bulk_file<R: AsyncRead + Unpin>(
     r: &mut R,
     fallback_dir: &Path,
@@ -1250,6 +1249,7 @@ pub async fn send_clip_file_with_progress<F: FnMut(u64, u64)>(
 
 /// Streams a `DragFile` or `ClipFile` while logging lifecycle events and driving
 /// throttled progress updates via `on_progress`.
+#[allow(clippy::too_many_arguments)] // Public helper forwards stream metadata and progress callback.
 pub async fn send_tracked_bulk_file(
     conn: &quinn::Connection,
     kind: BulkTransferKind,

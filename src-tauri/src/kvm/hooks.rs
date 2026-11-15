@@ -47,9 +47,10 @@ const SECURITY_MANDATORY_MEDIUM_RID: u32 = 0x2000;
 const SECURITY_MANDATORY_HIGH_RID: u32 = 0x3000;
 
 pub type LeapBlockedCallback = Arc<dyn Fn(&str) + Send + Sync>;
+type MouseDeltaSender = mpsc::Sender<(i32, i32)>;
 
 static PACKET_SENDER: OnceLock<Mutex<Option<mpsc::Sender<KvmPacket>>>> = OnceLock::new();
-static MOUSE_DELTA_SENDER: OnceLock<Mutex<Option<mpsc::Sender<(i32, i32)>>>> = OnceLock::new();
+static MOUSE_DELTA_SENDER: OnceLock<Mutex<Option<MouseDeltaSender>>> = OnceLock::new();
 static LEAP_BLOCKED_CALLBACK: OnceLock<Mutex<Option<LeapBlockedCallback>>> = OnceLock::new();
 static LOCAL_MONITORS: OnceLock<Mutex<Vec<MonitorDisplay>>> = OnceLock::new();
 static CONTROLLER_LAYOUT: OnceLock<Mutex<ControllerLayout>> = OnceLock::new();
@@ -270,6 +271,12 @@ fn should_perform_engage(hook_active: bool, is_trapped: bool, engage_pending: bo
 
 pub struct HookController {
     _running: Arc<AtomicBool>,
+}
+
+impl Default for HookController {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HookController {
@@ -1018,11 +1025,8 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
                 super::dragdrop::on_target_physical_mouse_up(btn);
             }
             if MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) == 0
-                && super::dragdrop::is_edge_catcher_visible()
-            {
-                super::dragdrop::on_hook_mouse_up();
-            } else if button_from_mouse_up_msg(msg).is_some()
-                && MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) == 0
+                && (super::dragdrop::is_edge_catcher_visible()
+                    || button_from_mouse_up_msg(msg).is_some())
             {
                 super::dragdrop::on_hook_mouse_up();
             }

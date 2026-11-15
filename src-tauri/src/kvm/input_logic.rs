@@ -12,6 +12,7 @@ pub enum Edge {
 }
 
 impl Edge {
+    #[allow(clippy::should_implement_trait)] // Config parser returns Option<Self> rather than Result.
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "right" => Some(Self::Right),
@@ -980,7 +981,7 @@ pub fn preset_remote_origin(
     }
 
     let local_u = union_rect(main_monitors);
-    let fallback = match side {
+    match side {
         Edge::Right => Point {
             x: local_u.x + local_u.width - linked_u.x,
             y: anchor.y - linked_u.y,
@@ -997,8 +998,7 @@ pub fn preset_remote_origin(
             x: anchor.x - linked_u.x,
             y: local_u.y - linked_u.height - linked_u.y,
         },
-    };
-    fallback
+    }
 }
 
 /// Infers the dominant side (`Left | Right | Top | Bottom`) of Main PC where Linked PC sits.
@@ -1288,7 +1288,7 @@ pub fn receiver_step_with_seams(
         ),
     ];
     // Prefer the axis with larger overshoot when crossing near a corner.
-    crossings.sort_by(|a, b| b.2.cmp(&a.2));
+    crossings.sort_by_key(|b| std::cmp::Reverse(b.2));
 
     let mut matched_seam: Option<(usize, Edge, i32, &LinkedSeam)> = None;
     for (edge, perp, _, is_crossed) in crossings {
@@ -1517,11 +1517,11 @@ impl PressedInputTracker {
     }
 
     pub fn release_keys(&mut self) -> Vec<TrackedKey> {
-        self.keys.drain(..).collect()
+        std::mem::take(&mut self.keys)
     }
 
     pub fn release_all(&mut self) -> (Vec<TrackedKey>, Vec<u8>) {
-        let keys = self.keys.drain(..).collect();
+        let keys = std::mem::take(&mut self.keys);
         let mut buttons = Vec::new();
         for b in 1..=5u8 {
             if (self.buttons_mask & (1u8 << (b - 1))) != 0 {
@@ -1793,7 +1793,7 @@ mod tests {
         assert_eq!(controller_return_pos(&m, Edge::Right, 0.5), (1917, 540));
         assert_eq!(controller_return_pos(&m, Edge::Left, 0.5), (2, 540));
         assert_eq!(
-            detect_controller_edge((1917, 540), &[m.clone()], Edge::Right, 48),
+            detect_controller_edge((1917, 540), std::slice::from_ref(&m), Edge::Right, 48),
             None
         );
         assert_eq!(detect_controller_edge((2, 540), &[m], Edge::Left, 48), None);

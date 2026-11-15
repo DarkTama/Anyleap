@@ -408,8 +408,8 @@ pub fn merge_devices(
             }
         }
 
-        usb_items.sort_by(|a, b| state_rank(&b.state).cmp(&state_rank(&a.state)));
-        wifi_items.sort_by(|a, b| state_rank(&b.state).cmp(&state_rank(&a.state)));
+        usb_items.sort_by_key(|b| std::cmp::Reverse(state_rank(&b.state)));
+        wifi_items.sort_by_key(|b| std::cmp::Reverse(state_rank(&b.state)));
 
         let best_usb = usb_items.first().cloned();
         let best_wifi = wifi_items.first().cloned();

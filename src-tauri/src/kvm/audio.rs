@@ -299,7 +299,7 @@ pub fn apply_volume_pcm16(pcm: &mut [u8], volume_pct: u8) {
         return;
     }
     let v = vol as i32;
-    for chunk in pcm.chunks_exact_mut(2) {
+    for chunk in pcm.as_chunks_mut::<2>().0 {
         let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as i32;
         let scaled = ((sample * v) / 100).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         let bytes = scaled.to_le_bytes();
@@ -311,7 +311,7 @@ pub fn apply_volume_pcm16(pcm: &mut [u8], volume_pct: u8) {
 /// Peak absolute sample amplitude in `0.0..=1.0` for 16-bit little-endian PCM.
 pub fn compute_pcm16_peak(pcm: &[u8]) -> f32 {
     let mut max_abs = 0i32;
-    for chunk in pcm.chunks_exact(2) {
+    for chunk in pcm.as_chunks::<2>().0 {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]) as i32;
         let abs = s.abs();
         if abs > max_abs {
@@ -462,6 +462,8 @@ impl JitterBuffer {
     }
 }
 
+type AudioStateEmitter = Arc<dyn Fn(AudioStatePayload) + Send + Sync>;
+
 struct AudioController {
     audio_bridge: AtomicBool,
     audio_volume: AtomicU8,
@@ -475,7 +477,7 @@ struct AudioController {
 
     client_packet_tx: Mutex<Option<mpsc::Sender<KvmPacket>>>,
     linked_outgoing_tx: Mutex<Option<broadcast::Sender<Outbound>>>,
-    emitter: Mutex<Option<Arc<dyn Fn(AudioStatePayload) + Send + Sync>>>,
+    emitter: Mutex<Option<AudioStateEmitter>>,
     jitter_buffer: Arc<Mutex<JitterBuffer>>,
 
     playback_stop: Mutex<Option<Arc<AtomicBool>>>,
@@ -1220,6 +1222,7 @@ mod wasapi {
         remove_mute_marker_at(&marker_path);
     }
 
+    #[allow(clippy::too_many_arguments)] // Capture worker takes explicit shared atomics and channels.
     pub fn run_loopback_capture(
         stop: Arc<AtomicBool>,
         mute_local: bool,
@@ -2068,7 +2071,7 @@ mod tests {
         for u in script.encode_utf16() {
             bytes.extend_from_slice(&u.to_le_bytes());
         }
-        let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
         for chunk in bytes.chunks(3) {
             let b0 = chunk[0] as usize;
             let b1 = *chunk.get(1).unwrap_or(&0) as usize;

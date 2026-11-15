@@ -2284,7 +2284,7 @@ mod win_ole {
                         HWND::default()
                     };
 
-                    if nudges == 0 || nudges % 5 == 0 {
+                    if nudges == 0 || nudges.is_multiple_of(5) {
                         crate::kvm::debug_log::note(|| {
                             format!(
                                 "TARGET_DND_WATCHDOG_FORCE id={} tid={tid} reason={reason} nudge={nudges} elapsed_ms={elapsed_ms} since_query_ms={since_last_query_ms} tid_cap=0x{:X}",
@@ -2607,12 +2607,10 @@ mod win_ole {
             } else {
                 ctrl.take_decision_reason()
                     .or_else(|| ctrl.effective_cancel_reason())
-                    .unwrap_or_else(|| {
-                        if (hr.0 as u32 & 0x8000_0000) != 0 {
-                            "ole_error"
-                        } else {
-                            "ole_cancel"
-                        }
+                    .unwrap_or(if (hr.0 as u32 & 0x8000_0000) != 0 {
+                        "ole_error"
+                    } else {
+                        "ole_cancel"
                     })
             };
 
@@ -2990,7 +2988,9 @@ mod tests {
     #[test]
     fn drag_drop_defaults_to_disabled_and_gates_edge_catcher() {
         let _lock = test_files_settings_lock();
-        assert!(!DEFAULT_DRAG_DROP_ENABLED);
+        const {
+            assert!(!DEFAULT_DRAG_DROP_ENABLED);
+        }
         struct RestoreGuard;
         impl Drop for RestoreGuard {
             fn drop(&mut self) {

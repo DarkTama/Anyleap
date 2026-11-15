@@ -9,6 +9,7 @@ pub const DEBUG_LOG_FILE_NAME: &str = "kvm-debug.log";
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 const CHANNEL_CAPACITY: usize = 2048;
 
+#[allow(clippy::large_enum_variant)] // Kept unboxed so hook callbacks enqueue events without heap allocation.
 enum LogCommand {
     Event(DebugEvent),
     Flush(mpsc::SyncSender<()>),
@@ -245,6 +246,7 @@ pub struct WindowDetails {
     pub elevation: ElevationState,
 }
 
+#[allow(clippy::large_enum_variant)] // Kept unboxed to avoid heap allocation inside low-level hook callbacks.
 #[derive(Debug, Clone)]
 pub enum DebugEvent {
     Key {

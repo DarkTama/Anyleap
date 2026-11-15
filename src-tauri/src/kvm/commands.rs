@@ -3943,8 +3943,10 @@ mod tests {
         .await
         .unwrap();
 
-        let mut kvm = KvmState::default();
-        kvm.server = Some(local_srv);
+        let mut kvm = KvmState {
+            server: Some(local_srv),
+            ..Default::default()
+        };
         kvm.topology.computers.push(ComputerNode {
             id: "remote".into(),
             name: "Remote".into(),
@@ -4036,8 +4038,10 @@ mod tests {
         .await
         .unwrap();
 
-        let mut kvm = KvmState::default();
-        kvm.server = Some(srv);
+        let mut kvm = KvmState {
+            server: Some(srv),
+            ..Default::default()
+        };
         kvm.connected_peers.push("Client".into());
         kvm.topology.computers.push(ComputerNode {
             id: "cli".into(),

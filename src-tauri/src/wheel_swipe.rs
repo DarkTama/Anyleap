@@ -222,7 +222,8 @@ mod imp {
             tick = tick.wrapping_add(1);
 
             // Snapshot sessions (tiny lock scope — see state.rs).
-            let sessions: Vec<(String, Option<u32>, Option<(u32, u32)>, bool)> = {
+            type SessionSnapshot = (String, Option<u32>, Option<(u32, u32)>, bool);
+            let sessions: Vec<SessionSnapshot> = {
                 let Some(state) = app.try_state::<AppState>() else {
                     continue;
                 };
@@ -260,7 +261,7 @@ mod imp {
 
             // Flex sessions: refresh virtual display id/size occasionally
             // (flex resizes the display when the window resizes).
-            if tick % VD_REFRESH_TICKS == 0 {
+            if tick.is_multiple_of(VD_REFRESH_TICKS) {
                 if let Some(adb) = &adb {
                     for (serial, ..) in sessions.iter().filter(|s| s.3) {
                         if let Some((did, size)) = query_virtual_display(adb, serial) {
