@@ -20,7 +20,9 @@ pub fn open_staging_root() -> PathBuf {
     #[cfg(windows)]
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
         if !local_app_data.trim().is_empty() {
-            return PathBuf::from(local_app_data).join("AnyLeap").join("staging");
+            return PathBuf::from(local_app_data)
+                .join("AnyLeap")
+                .join("staging");
         }
     }
     std::env::temp_dir().join("AnyLeap").join("staging")
@@ -32,7 +34,9 @@ pub fn open_staging_subdir_name(transfer_id: &str) -> Option<String> {
         || trimmed == "."
         || trimmed == ".."
         || trimmed.contains("..")
-        || trimmed.chars().any(|c| c.is_control() || "/\\<>:\"|?*".contains(c))
+        || trimmed
+            .chars()
+            .any(|c| c.is_control() || "/\\<>:\"|?*".contains(c))
     {
         return None;
     }
@@ -577,9 +581,7 @@ pub async fn send_open_file_with_events(
         res = s.stopped() => res,
     };
     match stopped_res {
-        Ok(Some(code))
-            if code.into_inner() == super::files::QUIC_CANCEL_ERROR_CODE as u64 =>
-        {
+        Ok(Some(code)) if code.into_inner() == super::files::QUIC_CANCEL_ERROR_CODE as u64 => {
             handle_cancelled(&mut s);
             return Err(super::files::TRANSFER_CANCELLED_ERR.to_string());
         }
@@ -596,7 +598,11 @@ pub async fn send_open_file_with_events(
     Ok(())
 }
 
-fn record_transfer_ready_in(state: &mut PendingOpenState, transfer_id: &str, path: PathBuf) -> Option<PathBuf> {
+fn record_transfer_ready_in(
+    state: &mut PendingOpenState,
+    transfer_id: &str,
+    path: PathBuf,
+) -> Option<PathBuf> {
     if state.requested_ids.remove(transfer_id) {
         Some(path)
     } else {
@@ -773,7 +779,10 @@ pub fn handle_cli_open_on_linked(app: &AppHandle, path: PathBuf) {
     if !path.is_file() {
         emit_continuity_notice(
             app,
-            format!("Cannot open on linked PC: \"{}\" is not a file.", path.display()),
+            format!(
+                "Cannot open on linked PC: \"{}\" is not a file.",
+                path.display()
+            ),
         );
         return;
     }
@@ -795,9 +804,8 @@ pub async fn send_and_open_file_from_app(app: &AppHandle, path: PathBuf) -> Resu
     let limit_mb = super::staging::staging_limit_mb();
     if file_size > super::staging::staging_limit_bytes(limit_mb) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-        let msg = format!(
-            "Cannot open \"{name}\" on linked PC: exceeds {limit_mb} MB staging limit"
-        );
+        let msg =
+            format!("Cannot open \"{name}\" on linked PC: exceeds {limit_mb} MB staging limit");
         emit_continuity_notice(app, msg.clone());
         return Err(msg);
     }
@@ -810,7 +818,10 @@ pub async fn send_and_open_file_from_app(app: &AppHandle, path: PathBuf) -> Resu
 
     let transport = {
         let state = app.state::<AppState>();
-        let kvm = state.kvm.lock().map_err(|e| format!("Mutex lock poisoned: {e}"))?;
+        let kvm = state
+            .kvm
+            .lock()
+            .map_err(|e| format!("Mutex lock poisoned: {e}"))?;
         if let Some(ref client) = kvm.client {
             if client.is_connected.load(Ordering::Relaxed) {
                 Transport::Client(client.conn.clone(), client.send_packet_tx.clone())
@@ -850,7 +861,10 @@ pub async fn send_and_open_file_from_app(app: &AppHandle, path: PathBuf) -> Resu
 
 pub fn send_open_url_from_state(state: &AppState, raw_url: &str) -> Result<(), String> {
     let url = validate_open_url(raw_url)?;
-    let kvm = state.kvm.lock().map_err(|e| format!("Mutex lock poisoned: {e}"))?;
+    let kvm = state
+        .kvm
+        .lock()
+        .map_err(|e| format!("Mutex lock poisoned: {e}"))?;
     if let Some(ref client) = kvm.client {
         if client.is_connected.load(Ordering::Relaxed) {
             return client
@@ -1056,7 +1070,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("anyleap-open-stage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
 
-        assert_eq!(open_staging_subdir_name("abc-123").as_deref(), Some("open-abc-123"));
+        assert_eq!(
+            open_staging_subdir_name("abc-123").as_deref(),
+            Some("open-abc-123")
+        );
         assert_eq!(open_staging_subdir_name("../evil"), None);
         assert_eq!(open_staging_subdir_name(""), None);
         assert_eq!(
@@ -1076,7 +1093,11 @@ mod tests {
         let before_24h = modified + std::time::Duration::from_secs(23 * 3600);
         let at_24h = modified + OPEN_TEMP_MAX_AGE;
         let after_24h = modified + OPEN_TEMP_MAX_AGE + std::time::Duration::from_secs(5);
-        assert!(!is_open_temp_expired(modified, before_24h, OPEN_TEMP_MAX_AGE));
+        assert!(!is_open_temp_expired(
+            modified,
+            before_24h,
+            OPEN_TEMP_MAX_AGE
+        ));
         assert!(!is_open_temp_expired(modified, at_24h, OPEN_TEMP_MAX_AGE));
         assert!(is_open_temp_expired(modified, after_24h, OPEN_TEMP_MAX_AGE));
 

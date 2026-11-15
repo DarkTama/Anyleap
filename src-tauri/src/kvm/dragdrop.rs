@@ -45,10 +45,7 @@ pub fn set_files_settings(
         DRAG_LEAP_IN_PROGRESS.store(false, Ordering::Release);
         hide_edge_catcher();
         cancel_active_target_drag_with_reason("disabled");
-    } else if edge_config()
-        .lock()
-        .is_ok_and(|g| !g.strips.is_empty())
-    {
+    } else if edge_config().lock().is_ok_and(|g| !g.strips.is_empty()) {
         ensure_edge_catcher_thread();
     }
     post_edge_catcher_msg(WM_EC_RELOAD_STRIPS);
@@ -391,10 +388,22 @@ pub struct WatchdogCancelAction {
 /// so forced termination can only cancel `DoDragDrop` and never trigger a drop.
 pub fn watchdog_cancel_messages() -> [WatchdogCancelAction; 4] {
     [
-        WatchdogCancelAction { msg: 0x001F, wparam: 0 },    // WM_CANCELMODE
-        WatchdogCancelAction { msg: 0x0100, wparam: 0x1B }, // WM_KEYDOWN (VK_ESCAPE)
-        WatchdogCancelAction { msg: 0x0101, wparam: 0x1B }, // WM_KEYUP (VK_ESCAPE)
-        WatchdogCancelAction { msg: 0x0200, wparam: 0 },    // WM_MOUSEMOVE
+        WatchdogCancelAction {
+            msg: 0x001F,
+            wparam: 0,
+        }, // WM_CANCELMODE
+        WatchdogCancelAction {
+            msg: 0x0100,
+            wparam: 0x1B,
+        }, // WM_KEYDOWN (VK_ESCAPE)
+        WatchdogCancelAction {
+            msg: 0x0101,
+            wparam: 0x1B,
+        }, // WM_KEYUP (VK_ESCAPE)
+        WatchdogCancelAction {
+            msg: 0x0200,
+            wparam: 0,
+        }, // WM_MOUSEMOVE
     ]
 }
 
@@ -837,7 +846,8 @@ impl TargetDragControl {
     ) -> Option<u64> {
         if physical_down || remote_down {
             self.seen_button_down.store(true, Ordering::Release);
-            self.neither_down_since_ms.store(u64::MAX, Ordering::Release);
+            self.neither_down_since_ms
+                .store(u64::MAX, Ordering::Release);
             None
         } else {
             let prev = self.neither_down_since_ms.compare_exchange(
@@ -1041,7 +1051,9 @@ pub fn set_remote_drag_button_state(button: u8, is_down: bool) {
 pub fn cancel_active_target_drag_with_reason(reason: &'static str) {
     let tid = TARGET_DRAG_TID.load(Ordering::Acquire);
     let hwnd = TARGET_DRAG_HWND.load(Ordering::Acquire);
-    let max_seq = NEXT_TARGET_DRAG_SEQ.load(Ordering::Acquire).saturating_sub(1);
+    let max_seq = NEXT_TARGET_DRAG_SEQ
+        .load(Ordering::Acquire)
+        .saturating_sub(1);
     if max_seq > 0 {
         GLOBAL_CANCEL_REASON_CODE.store(cancel_reason_to_code(reason), Ordering::Release);
         GLOBAL_CANCEL_UP_TO_SEQ.fetch_max(max_seq, Ordering::AcqRel);
@@ -1216,15 +1228,17 @@ mod win_ole {
         E_NOTIMPL, HGLOBAL, HWND, LPARAM, LRESULT, OLE_E_ADVISENOTSUPPORTED, POINTL, S_OK, WPARAM,
     };
     use windows::Win32::System::Com::{
-        IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, IAdviseSink,
-        DATADIR_GET, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+        IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DATADIR_GET,
+        DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
     };
     use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT};
+    use windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
+    };
     use windows::Win32::System::Ole::{
-        DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl,
-        OleInitialize, OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
-        DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+        DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize,
+        OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, DROPEFFECT,
+        DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
     use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -1300,8 +1314,10 @@ mod win_ole {
                 if let Some(cb) = cb_opt {
                     std::thread::spawn(move || {
                         // Cancel the local OLE DoDragDrop cleanly from a helper thread (never a hook callback).
-                        let (d_sent, d_err) = super::super::injector::inject_key(0x1B, 0x01, true, false);
-                        let (u_sent, u_err) = super::super::injector::inject_key(0x1B, 0x01, false, false);
+                        let (d_sent, d_err) =
+                            super::super::injector::inject_key(0x1B, 0x01, true, false);
+                        let (u_sent, u_err) =
+                            super::super::injector::inject_key(0x1B, 0x01, false, false);
                         crate::kvm::debug_log::note(|| {
                             format!(
                                 "DRAG_ESCAPE_INJECT down_sent={d_sent}(err={d_err}) up_sent={u_sent}(err={u_err})"
@@ -1358,7 +1374,7 @@ mod win_ole {
         lparam: LPARAM,
     ) -> LRESULT {
         match msg {
-            WM_NCHITTEST => LRESULT(1), // HTCLIENT
+            WM_NCHITTEST => LRESULT(1),     // HTCLIENT
             WM_MOUSEACTIVATE => LRESULT(3), // MA_NOACTIVATE
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
@@ -1366,7 +1382,8 @@ mod win_ole {
 
     fn register_catcher_class(class_name: PCWSTR) {
         unsafe {
-            let hinst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+            let hinst =
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 lpfnWndProc: Some(edge_wnd_proc),
@@ -1380,7 +1397,8 @@ mod win_ole {
 
     fn create_hidden_ole_window(class_name: PCWSTR) -> Option<HWND> {
         unsafe {
-            let hinst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+            let hinst =
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 class_name,
@@ -1396,7 +1414,12 @@ mod win_ole {
                 None,
             )
             .ok()?;
-            let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 1, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(
+                hwnd,
+                windows::Win32::Foundation::COLORREF(0),
+                1,
+                LWA_ALPHA,
+            );
             Some(hwnd)
         }
     }
@@ -1650,9 +1673,8 @@ mod win_ole {
 
     impl DropDataObject {
         fn new(paths: &[PathBuf]) -> Self {
-            let cf_preferred_effect = unsafe {
-                RegisterClipboardFormatW(w!("Preferred DropEffect")) as u16
-            };
+            let cf_preferred_effect =
+                unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) as u16 };
             Self {
                 hdrop_bytes: super::super::clipboard::build_dropfiles_bytes(paths),
                 cf_preferred_effect,
@@ -1674,8 +1696,9 @@ mod win_ole {
 
         fn alloc_hglobal(bytes: &[u8]) -> windows::core::Result<STGMEDIUM> {
             unsafe {
-                let h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len())
-                    .map_err(|_| windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY))?;
+                let h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len()).map_err(|_| {
+                    windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY)
+                })?;
                 let ptr = GlobalLock(h);
                 if ptr.is_null() {
                     return Err(windows::Win32::Foundation::E_OUTOFMEMORY.into());
@@ -1684,7 +1707,9 @@ mod win_ole {
                 let _ = GlobalUnlock(h);
                 Ok(STGMEDIUM {
                     tymed: TYMED_HGLOBAL.0 as u32,
-                    u: STGMEDIUM_0 { hGlobal: HGLOBAL(h.0) },
+                    u: STGMEDIUM_0 {
+                        hGlobal: HGLOBAL(h.0),
+                    },
                     pUnkForRelease: ManuallyDrop::new(None),
                 })
             }
@@ -1899,7 +1924,8 @@ mod win_ole {
                         // Keep OLE QueryContinueDrag alive when user pauses pointer while still holding.
                         if !capture.0.is_null() {
                             let mk = mk_flag_for_mouse_button(ctrl.button) as usize;
-                            let _ = PostMessageW(Some(capture), WM_MOUSEMOVE, WPARAM(mk), LPARAM(0));
+                            let _ =
+                                PostMessageW(Some(capture), WM_MOUSEMOVE, WPARAM(mk), LPARAM(0));
                         }
                     } else {
                         if let TargetDragDecision::Cancel(r) = decision {
@@ -1907,12 +1933,7 @@ mod win_ole {
                             ctrl.request_cancel(r);
                         }
                         if !capture.0.is_null() {
-                            let _ = PostMessageW(
-                                Some(capture),
-                                WM_MOUSEMOVE,
-                                WPARAM(0),
-                                LPARAM(0),
-                            );
+                            let _ = PostMessageW(Some(capture), WM_MOUSEMOVE, WPARAM(0), LPARAM(0));
                         } else {
                             let _ = PostThreadMessageW(
                                 GetCurrentThreadId(),
@@ -1958,7 +1979,8 @@ mod win_ole {
 
     fn register_drag_source_class(class_name: PCWSTR) {
         unsafe {
-            let hinst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+            let hinst =
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 lpfnWndProc: Some(drag_source_wndproc),
@@ -1970,9 +1992,16 @@ mod win_ole {
         }
     }
 
-    fn create_drag_source_window(class_name: PCWSTR, x: i32, y: i32, w: i32, h: i32) -> Option<HWND> {
+    fn create_drag_source_window(
+        class_name: PCWSTR,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> Option<HWND> {
         unsafe {
-            let hinst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+            let hinst =
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
                 class_name,
@@ -1988,7 +2017,12 @@ mod win_ole {
                 None,
             )
             .ok()?;
-            let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 1, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(
+                hwnd,
+                windows::Win32::Foundation::COLORREF(0),
+                1,
+                LWA_ALPHA,
+            );
             Some(hwnd)
         }
     }
@@ -2002,9 +2036,9 @@ mod win_ole {
             let elapsed_ms = self.ctrl.note_query_continue();
             let physical_down = (grfkeystate.0 & self.expected_mk) != 0;
             let remote_down = self.ctrl.remote_button_down.load(Ordering::Acquire);
-            let neither_ms =
-                self.ctrl
-                    .update_neither_down(physical_down, remote_down, elapsed_ms);
+            let neither_ms = self
+                .ctrl
+                .update_neither_down(physical_down, remote_down, elapsed_ms);
             let decision = decide_target_drag_continue(TargetDragQueryInput {
                 escape_pressed: fescapepressed.as_bool(),
                 cancel_reason: self.ctrl.effective_cancel_reason(),
@@ -2173,7 +2207,9 @@ mod win_ole {
         }
     }
 
-    fn spawn_target_drag_watchdog(ctrl: Arc<TargetDragControl>) -> Option<std::thread::JoinHandle<()>> {
+    fn spawn_target_drag_watchdog(
+        ctrl: Arc<TargetDragControl>,
+    ) -> Option<std::thread::JoinHandle<()>> {
         std::thread::Builder::new()
             .name(format!("drag-wd-{}", ctrl.seq))
             .spawn(move || unsafe {
@@ -2632,10 +2668,16 @@ mod tests {
     #[test]
     fn edge_catcher_trigger_decision_respects_all_guards() {
         assert!(should_show_edge_catcher(true, true, false, 1, false, false));
-        assert!(!should_show_edge_catcher(false, true, false, 1, false, false));
-        assert!(!should_show_edge_catcher(true, false, false, 1, false, false));
+        assert!(!should_show_edge_catcher(
+            false, true, false, 1, false, false
+        ));
+        assert!(!should_show_edge_catcher(
+            true, false, false, 1, false, false
+        ));
         assert!(!should_show_edge_catcher(true, true, true, 1, false, false));
-        assert!(!should_show_edge_catcher(true, true, false, 0, false, false));
+        assert!(!should_show_edge_catcher(
+            true, true, false, 0, false, false
+        ));
         assert!(!should_show_edge_catcher(true, true, false, 1, true, false));
         assert!(!should_show_edge_catcher(true, true, false, 1, false, true));
     }
@@ -3088,7 +3130,9 @@ mod tests {
             })
         );
         assert!(reg.is_finished("d-stage"));
-        assert!(reg.complete_terminal("d-stage", DragOutcome::Done).is_none());
+        assert!(reg
+            .complete_terminal("d-stage", DragOutcome::Done)
+            .is_none());
 
         // 2. Cancel during waiting-for-drop emits terminal cancelled once.
         reg.register_staging("d-wait", "doc.pdf", 2048);
@@ -3116,34 +3160,45 @@ mod tests {
             reg.cancel_at_any_stage("d-done"),
             CancelDragAction::ClearedFinished
         );
-        assert_eq!(reg.cancel_at_any_stage("d-done"), CancelDragAction::NotTracked);
+        assert_eq!(
+            reg.cancel_at_any_stage("d-done"),
+            CancelDragAction::NotTracked
+        );
 
         // 4. Failed -> cancel_at_any_stage clears finished entry without re-emitting.
         reg.register_staging("d-fail", "bad.png", 512);
-        let fail_ev = reg.complete_terminal("d-fail", DragOutcome::Failed).unwrap();
+        let fail_ev = reg
+            .complete_terminal("d-fail", DragOutcome::Failed)
+            .unwrap();
         assert_eq!(fail_ev.pct, 0);
         assert_eq!(fail_ev.state, "failed");
         assert_eq!(
             reg.cancel_at_any_stage("d-fail"),
             CancelDragAction::ClearedFinished
         );
-        assert_eq!(reg.cancel_at_any_stage("d-fail"), CancelDragAction::NotTracked);
+        assert_eq!(
+            reg.cancel_at_any_stage("d-fail"),
+            CancelDragAction::NotTracked
+        );
     }
 
     #[cfg(windows)]
     #[ignore = "Requires an interactive Windows desktop session"]
     #[test]
     fn target_drag_terminates_within_2s_when_wedged_or_capture_owned() {
-        use std::sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc, Arc,
+        };
         use windows::core::w;
         use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
         use windows::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
-            RegisterClassExW, ShowWindow, TranslateMessage, MSG, PM_REMOVE, SW_SHOWNOACTIVATE,
-            WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
-            SetLayeredWindowAttributes, LWA_ALPHA,
+            RegisterClassExW, SetLayeredWindowAttributes, ShowWindow, TranslateMessage, LWA_ALPHA,
+            MSG, PM_REMOVE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_POPUP,
         };
 
         unsafe extern "system" fn helper_wndproc(
@@ -3155,10 +3210,8 @@ mod tests {
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
 
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "anyleap-drag-gate-{}",
-            std::process::id()
-        ));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("anyleap-drag-gate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp_dir);
         let log_path = tmp_dir.join("gate-debug.log");
         crate::kvm::debug_log::set_enabled(true, log_path.clone());

@@ -2,19 +2,19 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
 use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
+#[cfg(test)]
+pub use crate::device_identity::SVC_PAIRING;
 pub use crate::device_identity::{
     decide_reconnect, finalize_reconnect_result, find_mdns_connect_match, is_auth_connect_error,
     is_wifi_serial, merge_devices, parse_adb_devices, parse_hw_serial_shell_output,
     parse_mdns_services, DeviceInfo, MdnsService, ReconnectDecision, ReconnectResult,
     ReconnectTarget, HW_SERIAL_PROP_SEP,
 };
-#[cfg(test)]
-pub use crate::device_identity::SVC_PAIRING;
 use crate::state::{poison_error, AppState, Session};
 
 /// Filename of the bundled adb sidecar (target-triple suffixed by Tauri).
@@ -152,7 +152,10 @@ pub(crate) fn adb_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Co
 /// Locate the scrcpy-server jar across production (bundled resource) and dev layouts.
 fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     // Production: bundled as a resource under scrcpy/.
-    if let Ok(p) = app.path().resolve("scrcpy/scrcpy-server", BaseDirectory::Resource) {
+    if let Ok(p) = app
+        .path()
+        .resolve("scrcpy/scrcpy-server", BaseDirectory::Resource)
+    {
         if p.exists() {
             return Some(p);
         }
@@ -164,7 +167,10 @@ fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
                 dir.join("scrcpy-server"),
                 dir.join("scrcpy").join("scrcpy-server"),
                 // dev: src-tauri/target/debug -> src-tauri/binaries/scrcpy-server
-                dir.join("..").join("..").join("binaries").join("scrcpy-server"),
+                dir.join("..")
+                    .join("..")
+                    .join("binaries")
+                    .join("scrcpy-server"),
             ];
             for cand in candidates {
                 if cand.exists() {
@@ -568,23 +574,45 @@ pub(crate) fn parse_virtual_display(dumpsys: &str) -> Option<(u32, (u32, u32))> 
         if !line.contains("DisplayInfo{\"scrcpy\"") {
             continue;
         }
-        let Some(rest) = line.split("displayId ").nth(1) else { continue };
+        let Some(rest) = line.split("displayId ").nth(1) else {
+            continue;
+        };
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let Ok(id) = digits.parse::<u32>() else { continue };
-        let Some(real) = line.split(" real ").nth(1) else { continue };
-        let Some((w_str, h_rest)) = real.split_once(" x ") else { continue };
+        let Ok(id) = digits.parse::<u32>() else {
+            continue;
+        };
+        let Some(real) = line.split(" real ").nth(1) else {
+            continue;
+        };
+        let Some((w_str, h_rest)) = real.split_once(" x ") else {
+            continue;
+        };
         let h_digits: String = h_rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let Ok(w) = w_str.trim().parse::<u32>() else { continue };
-        let Ok(h) = h_digits.parse::<u32>() else { continue };
+        let Ok(w) = w_str.trim().parse::<u32>() else {
+            continue;
+        };
+        let Ok(h) = h_digits.parse::<u32>() else {
+            continue;
+        };
         return Some((id, (w, h)));
     }
     None
 }
 
 /// Record a discovered virtual display id/size on a tracked session.
-fn note_virtual_display(app: &AppHandle, session_id: &str, id: u32, size: (u32, u32)) -> Result<(), String> {
+fn note_virtual_display(
+    app: &AppHandle,
+    session_id: &str,
+    id: u32,
+    size: (u32, u32),
+) -> Result<(), String> {
     if let Some(st) = app.try_state::<AppState>() {
-        if let Some(s) = st.sessions.lock().map_err(poison_error)?.get_mut(session_id) {
+        if let Some(s) = st
+            .sessions
+            .lock()
+            .map_err(poison_error)?
+            .get_mut(session_id)
+        {
             s.display_id = Some(id);
             s.virtual_size = Some(size);
         }
@@ -671,7 +699,11 @@ fn spawn_session_inner(
             "mirror-{}",
             serial
                 .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                })
                 .collect::<String>()
         );
         if let Some(w) = app.get_webview_window(&mirror_label) {
@@ -695,20 +727,24 @@ fn spawn_session_inner(
         recording_path: recording_path_from_args(&args),
     };
 
-    app.state::<AppState>().sessions.lock().map_err(poison_error)?.insert(
-        id.clone(),
-        Session {
-            id: id.clone(),
-            serial: serial.clone(),
-            pid,
-            started_at,
-            child,
-            args: args.clone(),
-            display_id: None,
-            virtual_size: None,
-            mode: mode.to_string(),
-        },
-    );
+    app.state::<AppState>()
+        .sessions
+        .lock()
+        .map_err(poison_error)?
+        .insert(
+            id.clone(),
+            Session {
+                id: id.clone(),
+                serial: serial.clone(),
+                pid,
+                started_at,
+                child,
+                args: args.clone(),
+                display_id: None,
+                virtual_size: None,
+                mode: mode.to_string(),
+            },
+        );
 
     let _ = app.emit("session-started", info.clone());
 
@@ -758,7 +794,11 @@ fn spawn_session_inner(
                         "mirror-{}",
                         serial2
                             .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                c
+                            } else {
+                                '_'
+                            })
                             .collect::<String>()
                     );
                     if let Some(w) = app2.get_webview_window(&mirror_label) {
@@ -775,9 +815,11 @@ fn spawn_session_inner(
                             }
                         }
                     });
-                    let is_flex = args2
-                        .iter()
-                        .any(|a| a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display="));
+                    let is_flex = args2.iter().any(|a| {
+                        a == "--flex-display"
+                            || a == "--new-display"
+                            || a.starts_with("--new-display=")
+                    });
                     if is_flex {
                         let has_other_vd = if let Some(st) = app2.try_state::<AppState>() {
                             st.sessions
@@ -808,8 +850,7 @@ fn spawn_session_inner(
                     }
                     let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                     let early = now_ms() - started_at < 3000;
-                    if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf)
-                    {
+                    if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf) {
                         // Clear the old session in the UI (no error), then retry on safe flags.
                         let _ = app2.emit(
                             "session-exited",
@@ -822,7 +863,14 @@ fn spawn_session_inner(
                                 stderr: stderr_buf.clone(),
                             },
                         );
-                        let _ = spawn_session_inner(&app2, serial2.clone(), toggle_record_args(&degrade_args(&args2), None), true, &mode2, true);
+                        let _ = spawn_session_inner(
+                            &app2,
+                            serial2.clone(),
+                            toggle_record_args(&degrade_args(&args2), None),
+                            true,
+                            &mode2,
+                            true,
+                        );
                         break;
                     }
                     let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
@@ -891,11 +939,7 @@ pub async fn start_camera_mirror(
 }
 
 #[tauri::command]
-pub fn send_camera_shortcut(
-    app: AppHandle,
-    serial: String,
-    action: String,
-) -> Result<(), String> {
+pub fn send_camera_shortcut(app: AppHandle, serial: String, action: String) -> Result<(), String> {
     #[cfg(windows)]
     {
         use windows::core::BOOL;
@@ -929,8 +973,8 @@ pub fn send_camera_shortcut(
             BOOL(1)
         }
 
-        let embedded_hwnd = crate::embed::get_embedded_scrcpy_hwnd(&serial)
-            .map(|h| HWND(h as *mut _));
+        let embedded_hwnd =
+            crate::embed::get_embedded_scrcpy_hwnd(&serial).map(|h| HWND(h as *mut _));
 
         let hwnd = if let Some(h) = embedded_hwnd {
             Some(h)
@@ -947,7 +991,9 @@ pub fn send_camera_shortcut(
                     target_pid: pid,
                     hwnd: None,
                 };
-                let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
+                let _ = unsafe {
+                    EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize))
+                };
                 by_pid = data.hwnd;
             }
 
@@ -1101,7 +1147,9 @@ pub async fn restart_with_screen_off(
                 target_pid: pid,
                 hwnd: None,
             };
-            let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
+            let _ = unsafe {
+                EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize))
+            };
 
             let hwnd = crate::embed::get_embedded_scrcpy_hwnd(&serial)
                 .map(|h| HWND(h as *mut _))
@@ -1136,9 +1184,13 @@ pub async fn restart_with_screen_off(
                         let _ = AttachThreadInput(current_thread, target_thread, 0);
                     }
                     // Also post direct key message as fallback guarantee for SDL window
-                    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSKEYDOWN, WM_SYSKEYUP};
-                    const VK_O_WPARAM: windows::Win32::Foundation::WPARAM = windows::Win32::Foundation::WPARAM(0x4F);
-                    const ALT_LPARAM: windows::Win32::Foundation::LPARAM = windows::Win32::Foundation::LPARAM(1 << 29);
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        PostMessageW, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                    };
+                    const VK_O_WPARAM: windows::Win32::Foundation::WPARAM =
+                        windows::Win32::Foundation::WPARAM(0x4F);
+                    const ALT_LPARAM: windows::Win32::Foundation::LPARAM =
+                        windows::Win32::Foundation::LPARAM(1 << 29);
                     let _ = PostMessageW(Some(hwnd), WM_SYSKEYDOWN, VK_O_WPARAM, ALT_LPARAM);
                     let _ = PostMessageW(Some(hwnd), WM_SYSKEYUP, VK_O_WPARAM, ALT_LPARAM);
                 }
@@ -1216,7 +1268,8 @@ async fn stop_child_gracefully(
             target_pid: pid,
             hwnds: Vec::new(),
         };
-        let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumPids as isize)) };
+        let _ =
+            unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumPids as isize)) };
         if let Some(emb) = crate::embed::get_embedded_scrcpy_hwnd(serial) {
             if !data.hwnds.contains(&emb) {
                 data.hwnds.push(emb);
@@ -1225,7 +1278,9 @@ async fn stop_child_gracefully(
 
         if !data.hwnds.is_empty() {
             for h in &data.hwnds {
-                let _ = unsafe { PostMessageW(Some(HWND(*h as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+                let _ = unsafe {
+                    PostMessageW(Some(HWND(*h as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0))
+                };
             }
             let exited = tokio::task::spawn_blocking(move || unsafe {
                 if let Ok(handle) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
@@ -1259,14 +1314,18 @@ pub async fn stop_mirror(
     session_id: String,
 ) -> Result<(), String> {
     // Take ownership out of the map, then stop outside the lock.
-    let session = state.sessions.lock().map_err(poison_error)?.remove(&session_id);
+    let session = state
+        .sessions
+        .lock()
+        .map_err(poison_error)?
+        .remove(&session_id);
     if let Some(s) = session {
         let serial = s.serial.clone();
         let pid = s.pid;
         let is_flex = s.display_id.is_some()
-            || s.args
-                .iter()
-                .any(|a| a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display="));
+            || s.args.iter().any(|a| {
+                a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display=")
+            });
         if is_flex {
             let has_other_vd = state
                 .sessions
@@ -1291,7 +1350,11 @@ pub async fn stop_mirror(
             "mirror-{}",
             serial
                 .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                })
                 .collect::<String>()
         );
         if let Some(w) = app.get_webview_window(&mirror_label) {
@@ -1317,10 +1380,16 @@ pub async fn stop_mirror(
 /// so physical phone display icons and grid layout are restored to native metrics.
 pub async fn cleanup_flex_display(app: &AppHandle, serial: &str) {
     if let Ok(cmd) = adb_cmd(app) {
-        let _ = cmd.args(["-s", serial, "shell", "wm", "density", "reset"]).output().await;
+        let _ = cmd
+            .args(["-s", serial, "shell", "wm", "density", "reset"])
+            .output()
+            .await;
     }
     if let Ok(cmd) = adb_cmd(app) {
-        let _ = cmd.args(["-s", serial, "shell", "wm", "size", "reset"]).output().await;
+        let _ = cmd
+            .args(["-s", serial, "shell", "wm", "size", "reset"])
+            .output()
+            .await;
     }
     let mut launcher_pkg: Option<String> = None;
     if let Ok(cmd) = adb_cmd(app) {
@@ -1355,11 +1424,17 @@ pub async fn cleanup_flex_display(app: &AppHandle, serial: &str) {
     }
     if let Some(pkg) = launcher_pkg {
         if let Ok(cmd) = adb_cmd(app) {
-            let _ = cmd.args(["-s", serial, "shell", "am", "force-stop", &pkg]).output().await;
+            let _ = cmd
+                .args(["-s", serial, "shell", "am", "force-stop", &pkg])
+                .output()
+                .await;
         }
     }
     if let Ok(cmd) = adb_cmd(app) {
-        let _ = cmd.args(["-s", serial, "shell", "input", "keyevent", "3"]).output().await;
+        let _ = cmd
+            .args(["-s", serial, "shell", "input", "keyevent", "3"])
+            .output()
+            .await;
     }
 }
 
@@ -1405,7 +1480,9 @@ pub async fn discover_wireless(app: AppHandle) -> Result<Vec<MdnsService>, Strin
             return Err(format!("adb mdns services failed: {err}"));
         }
     }
-    Ok(parse_mdns_services(&String::from_utf8_lossy(&output.stdout)))
+    Ok(parse_mdns_services(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 /// Pair with a device using a 6-digit pairing code (Android 11+ wireless debugging).
@@ -1710,7 +1787,14 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
 #[tauri::command]
 pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), String> {
     let output = adb_cmd(&app)?
-        .args(["-s", &serial, "shell", "cmd", "statusbar", "expand-notifications"])
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "cmd",
+            "statusbar",
+            "expand-notifications",
+        ])
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -1727,7 +1811,16 @@ pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), St
 #[tauri::command]
 pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result<String, String> {
     let auto = adb_cmd(&app)?
-        .args(["-s", &serial, "shell", "settings", "put", "system", "accelerometer_rotation", "0"])
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "settings",
+            "put",
+            "system",
+            "accelerometer_rotation",
+            "0",
+        ])
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -1736,7 +1829,15 @@ pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result
     }
 
     let get = adb_cmd(&app)?
-        .args(["-s", &serial, "shell", "settings", "get", "system", "user_rotation"])
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "settings",
+            "get",
+            "system",
+            "user_rotation",
+        ])
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -1748,7 +1849,16 @@ pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result
     // 1/3 = landscape / reverse landscape; anything else (0/2/unset) = portrait.
     let next = if raw == "1" || raw == "3" { "0" } else { "1" };
     let output = adb_cmd(&app)?
-        .args(["-s", &serial, "shell", "settings", "put", "system", "user_rotation", next])
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "settings",
+            "put",
+            "system",
+            "user_rotation",
+            next,
+        ])
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -1791,12 +1901,12 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
     {
         use std::mem::size_of;
         use windows::core::PCWSTR;
+        use windows::Win32::Foundation::POINT;
         use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::ClientToScreen;
         use windows::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
         };
-        use windows::Win32::Foundation::POINT;
-        use windows::Win32::Graphics::Gdi::ClientToScreen;
         use windows::Win32::UI::WindowsAndMessaging::{
             FindWindowW, GetClientRect, GetForegroundWindow, GetWindowRect, GetWindowTextW,
             IsIconic,
@@ -1875,7 +1985,10 @@ pub async fn handle_dropped_files(
             let stderr = String::from_utf8_lossy(&out.stderr);
             let combined = format!("{stdout}\n{stderr}");
             if !out.status.success() || combined.contains("Failure") {
-                return Err(format!("APK install failed for {path}: {}", combined.trim()));
+                return Err(format!(
+                    "APK install failed for {path}: {}",
+                    combined.trim()
+                ));
             }
             installed += 1;
         } else {
@@ -1893,7 +2006,9 @@ pub async fn handle_dropped_files(
             pushed += 1;
         }
     }
-    Ok(format!("Installed {installed} APK(s), pushed {pushed} file(s)"))
+    Ok(format!(
+        "Installed {installed} APK(s), pushed {pushed} file(s)"
+    ))
 }
 
 /// Parse package lines from `pm list packages -3` output.
@@ -1919,10 +2034,7 @@ fn parse_installed_packages(text: &str) -> Vec<String> {
 
 /// List third-party installed packages on the device.
 #[tauri::command]
-pub async fn list_installed_apps(
-    app: AppHandle,
-    serial: String,
-) -> Result<Vec<String>, String> {
+pub async fn list_installed_apps(app: AppHandle, serial: String) -> Result<Vec<String>, String> {
     let output = adb_cmd(&app)?
         .args(["-s", &serial, "shell", "pm", "list", "packages", "-3"])
         .output()
@@ -1934,7 +2046,9 @@ pub async fn list_installed_apps(
         return Err(format!("Failed to list packages: {}", err.trim()));
     }
 
-    Ok(parse_installed_packages(&String::from_utf8_lossy(&output.stdout)))
+    Ok(parse_installed_packages(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 /// Launch an app by package name via Android's monkey launcher intent.
@@ -2014,7 +2128,10 @@ pub fn get_system_resolution() -> (u32, u32) {
     (1920, 1080)
 }
 
-pub(crate) fn query_virtual_display(adb: &std::path::Path, serial: &str) -> Option<(u32, (u32, u32))> {
+pub(crate) fn query_virtual_display(
+    adb: &std::path::Path,
+    serial: &str,
+) -> Option<(u32, (u32, u32))> {
     let out = std::process::Command::new(adb)
         .args(["-s", serial, "shell", "dumpsys", "display"])
         .output()
@@ -2215,7 +2332,8 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
     #[test]
     fn test_camera_settings_deserialization_defaults() {
         let json = r#"{"facing":"back"}"#;
-        let s: CameraSettings = serde_json::from_str(json).expect("should deserialize with defaults");
+        let s: CameraSettings =
+            serde_json::from_str(json).expect("should deserialize with defaults");
         assert_eq!(s.facing, "back");
         assert_eq!(s.camera_id, None);
         assert_eq!(s.size, None);
@@ -2241,7 +2359,10 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         let with_off = toggle_screen_off_args(&base, true);
         assert!(with_off.contains(&"--turn-screen-off".to_string()));
         assert_eq!(
-            with_off.iter().filter(|a| *a == "--turn-screen-off").count(),
+            with_off
+                .iter()
+                .filter(|a| *a == "--turn-screen-off")
+                .count(),
             1
         );
 
@@ -2268,9 +2389,17 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
     }
     #[test]
     fn parses_installed_packages_output() {
-        let text = "package:com.android.chrome\r\npackage:org.mozilla.firefox\npackage:com.example.app\n";
+        let text =
+            "package:com.android.chrome\r\npackage:org.mozilla.firefox\npackage:com.example.app\n";
         let pkgs = parse_installed_packages(text);
-        assert_eq!(pkgs, vec!["com.android.chrome", "com.example.app", "org.mozilla.firefox"]);
+        assert_eq!(
+            pkgs,
+            vec![
+                "com.android.chrome",
+                "com.example.app",
+                "org.mozilla.firefox"
+            ]
+        );
     }
     #[test]
     fn parses_installed_packages_output_ignores_daemon_and_warning_noise() {
@@ -2313,7 +2442,6 @@ emulator-5554          device product:sdk_gphone64 model:Pixel_7 device:emulator
         assert_eq!(devs[1].serial, "192.168.1.50:5555");
         assert_eq!(devs[1].state, "unauthorized");
     }
-
 }
 
 /// Save and push an image from clipboard directly to device's /sdcard/Download folder
@@ -2406,10 +2534,7 @@ pub(crate) fn parse_battery_info(output: &str) -> BatteryInfo {
 }
 
 #[tauri::command]
-pub async fn get_battery_info(
-    app: AppHandle,
-    serial: String,
-) -> Result<BatteryInfo, String> {
+pub async fn get_battery_info(app: AppHandle, serial: String) -> Result<BatteryInfo, String> {
     let output = adb_cmd(&app)?
         .args(["-s", &serial, "shell", "dumpsys", "battery"])
         .output()
@@ -2482,10 +2607,7 @@ fn validate_serial(serial: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_device_details(
-    app: AppHandle,
-    serial: String,
-) -> Result<DeviceDetails, String> {
+pub async fn get_device_details(app: AppHandle, serial: String) -> Result<DeviceDetails, String> {
     validate_serial(&serial)?;
     let output = adb_cmd(&app)?
         .args(["-s", &serial, "shell", "getprop"])
@@ -2498,7 +2620,10 @@ pub async fn get_device_details(
         return Err(format!("adb getprop failed: {}", err.trim()));
     }
 
-    Ok(parse_getprop(&String::from_utf8_lossy(&output.stdout), &serial))
+    Ok(parse_getprop(
+        &String::from_utf8_lossy(&output.stdout),
+        &serial,
+    ))
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -2578,7 +2703,9 @@ pub(crate) fn sequence_doctor_checks(input: &DoctorCheckInput) -> Vec<DoctorChec
                     label: "ADB server".into(),
                     status: "fail".into(),
                     detail: err.clone(),
-                    fix_hint: Some("Restart the ADB server or check if port 5037 is blocked.".into()),
+                    fix_hint: Some(
+                        "Restart the ADB server or check if port 5037 is blocked.".into(),
+                    ),
                 });
                 false
             }
@@ -2612,7 +2739,9 @@ pub(crate) fn sequence_doctor_checks(input: &DoctorCheckInput) -> Vec<DoctorChec
                 label: "scrcpy binary & server".into(),
                 status: "fail".into(),
                 detail: err.clone(),
-                fix_hint: Some("Run npm run fetch-binaries to restore scrcpy and scrcpy-server.".into()),
+                fix_hint: Some(
+                    "Run npm run fetch-binaries to restore scrcpy and scrcpy-server.".into(),
+                ),
             });
         }
     }
@@ -2679,7 +2808,9 @@ pub(crate) fn sequence_doctor_checks(input: &DoctorCheckInput) -> Vec<DoctorChec
                     label: "Target device".into(),
                     status: "fail".into(),
                     detail: format!("Device {} not found in adb devices", serial),
-                    fix_hint: Some("Check USB cable or wireless ADB connection, then refresh.".into()),
+                    fix_hint: Some(
+                        "Check USB cable or wireless ADB connection, then refresh.".into(),
+                    ),
                 });
                 false
             }
@@ -3186,11 +3317,7 @@ pub(crate) fn validate_device_url(raw: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn open_url_on_device(
-    app: AppHandle,
-    serial: String,
-    url: String,
-) -> Result<(), String> {
+pub async fn open_url_on_device(app: AppHandle, serial: String, url: String) -> Result<(), String> {
     let valid_url = validate_device_url(&url)?;
     let quoted = sh_quote(&valid_url);
     let output = adb_cmd(&app)?
@@ -3274,7 +3401,10 @@ pub(crate) fn build_app_window_args(
 ) -> Vec<String> {
     let mut args = build_scrcpy_args(serial, settings);
     args.retain(|a| !a.starts_with("--window-title="));
-    if !args.iter().any(|a| a == "--new-display" || a.starts_with("--new-display=")) {
+    if !args
+        .iter()
+        .any(|a| a == "--new-display" || a.starts_with("--new-display="))
+    {
         args.push("--new-display".to_string());
     }
     args.push(format!("--start-app={}", package));
@@ -3326,7 +3456,11 @@ pub struct PhoneToggles {
 }
 
 pub(crate) fn parse_setting_bool(output: &str) -> bool {
-    output.trim().parse::<i32>().map(|v| v != 0).unwrap_or(false)
+    output
+        .trim()
+        .parse::<i32>()
+        .map(|v| v != 0)
+        .unwrap_or(false)
 }
 
 async fn adb_settings_get_global(app: &AppHandle, serial: &str, key: &str) -> Result<bool, String> {
@@ -3342,10 +3476,7 @@ async fn adb_settings_get_global(app: &AppHandle, serial: &str, key: &str) -> Re
 }
 
 #[tauri::command]
-pub async fn get_phone_toggles(
-    app: AppHandle,
-    serial: String,
-) -> Result<PhoneToggles, String> {
+pub async fn get_phone_toggles(app: AppHandle, serial: String) -> Result<PhoneToggles, String> {
     let (wifi, bluetooth, dnd) = tokio::join!(
         adb_settings_get_global(&app, &serial, "wifi_on"),
         adb_settings_get_global(&app, &serial, "bluetooth_on"),
@@ -3369,9 +3500,31 @@ pub async fn set_phone_toggle(
         return Err("Turning Wi-Fi off would disconnect this wireless session".into());
     }
     let args: Vec<&str> = match toggle.as_str() {
-        "wifi" => vec!["-s", &serial, "shell", "svc", "wifi", if on { "enable" } else { "disable" }],
-        "bluetooth" => vec!["-s", &serial, "shell", "svc", "bluetooth", if on { "enable" } else { "disable" }],
-        "dnd" => vec!["-s", &serial, "shell", "cmd", "notification", "set_dnd", if on { "on" } else { "off" }],
+        "wifi" => vec![
+            "-s",
+            &serial,
+            "shell",
+            "svc",
+            "wifi",
+            if on { "enable" } else { "disable" },
+        ],
+        "bluetooth" => vec![
+            "-s",
+            &serial,
+            "shell",
+            "svc",
+            "bluetooth",
+            if on { "enable" } else { "disable" },
+        ],
+        "dnd" => vec![
+            "-s",
+            &serial,
+            "shell",
+            "cmd",
+            "notification",
+            "set_dnd",
+            if on { "on" } else { "off" },
+        ],
         other => return Err(format!("Unknown toggle: {}", other)),
     };
     let out = adb_cmd(&app)?
@@ -3424,7 +3577,10 @@ fn format_timestamp_yyyymmdd_hhmmss(secs: u64) -> String {
     format!("{:04}{:02}{:02}-{:02}{:02}{:02}", y, m, d, hour, min, sec)
 }
 
-fn build_recording_path(model_or_serial: &str, now_secs: u64) -> Result<std::path::PathBuf, String> {
+fn build_recording_path(
+    model_or_serial: &str,
+    now_secs: u64,
+) -> Result<std::path::PathBuf, String> {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from)
@@ -3432,7 +3588,13 @@ fn build_recording_path(model_or_serial: &str, now_secs: u64) -> Result<std::pat
     let dir = home.join("Videos").join("AnyLeap");
     let sanitized: String = model_or_serial
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let model = sanitized.trim_matches('_');
     let prefix = if model.is_empty() { "device" } else { model };
@@ -3542,11 +3704,7 @@ pub(crate) fn validate_phone_number(raw: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn place_call(
-    app: AppHandle,
-    serial: String,
-    number: String,
-) -> Result<String, String> {
+pub async fn place_call(app: AppHandle, serial: String, number: String) -> Result<String, String> {
     let clean = validate_phone_number(&number)?;
     let tel_uri = format!("tel:{}", sh_quote(&clean));
     let out = adb_cmd(&app)?
@@ -3662,7 +3820,10 @@ mod spec20_tests {
 
     #[test]
     fn phone_number_validator() {
-        assert_eq!(validate_phone_number("+1 (555) 123-4567").unwrap(), "+15551234567");
+        assert_eq!(
+            validate_phone_number("+1 (555) 123-4567").unwrap(),
+            "+15551234567"
+        );
         assert_eq!(validate_phone_number("*123#").unwrap(), "*123#");
         assert_eq!(validate_phone_number("911").unwrap(), "911");
 

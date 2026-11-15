@@ -36,8 +36,8 @@ mod imp {
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, FindWindowW, GetAncestor, GetMessageW, SetWindowsHookExW,
-        WindowFromPoint, GA_ROOT, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEWHEEL,
+        CallNextHookEx, FindWindowW, GetAncestor, GetMessageW, SetWindowsHookExW, WindowFromPoint,
+        GA_ROOT, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEWHEEL,
     };
 
     use crate::commands::{adb_path, parse_virtual_display};
@@ -136,8 +136,8 @@ mod imp {
         // Resolve everything before mutating state, so a failed enable leaves
         // the registry untouched (the UI shows the error and stays off).
         let resolved = if enabled {
-            let hwnd = resolve_mirror_hwnd(serial)
-                .ok_or_else(|| "Mirror window not found".to_string())?;
+            let hwnd =
+                resolve_mirror_hwnd(serial).ok_or_else(|| "Mirror window not found".to_string())?;
             let size = virtual_size
                 .or_else(|| adb_path().and_then(|adb| query_device_size(&adb, serial)))
                 .ok_or_else(|| "Could not determine device screen size".to_string())?;
@@ -185,10 +185,7 @@ mod imp {
 
     unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         // HC_ACTION only, wheel only, and the atomic gate before anything else.
-        if code >= 0
-            && wparam.0 as u32 == WM_MOUSEWHEEL
-            && ANY_ENABLED.load(Ordering::Relaxed)
-        {
+        if code >= 0 && wparam.0 as u32 == WM_MOUSEWHEEL && ANY_ENABLED.load(Ordering::Relaxed) {
             let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
             let hwnd = WindowFromPoint(info.pt);
             let root = GetAncestor(hwnd, GA_ROOT);
@@ -226,7 +223,9 @@ mod imp {
 
             // Snapshot sessions (tiny lock scope — see state.rs).
             let sessions: Vec<(String, Option<u32>, Option<(u32, u32)>, bool)> = {
-                let Some(state) = app.try_state::<AppState>() else { continue };
+                let Some(state) = app.try_state::<AppState>() else {
+                    continue;
+                };
                 let list = match state.sessions.lock() {
                     Ok(map) => map
                         .values()
@@ -247,13 +246,14 @@ mod imp {
                 list
             };
 
-            let Ok(mut reg) = lock_registry() else { continue };
+            let Ok(mut reg) = lock_registry() else {
+                continue;
+            };
             if reg.enabled.values().all(|&e| !e) {
                 // Nothing enabled: drop stale targets and stand down.
                 reg.targets.clear();
-                reg.enabled.retain(|serial, _| {
-                    sessions.iter().any(|(s, ..)| s == serial)
-                });
+                reg.enabled
+                    .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
                 ANY_ENABLED.store(false, Ordering::Relaxed);
                 continue;
             }
@@ -267,7 +267,9 @@ mod imp {
                             if let Some(state) = app.try_state::<AppState>() {
                                 match state.sessions.lock() {
                                     Ok(mut map) => {
-                                        if let Some(s) = map.values_mut().find(|s| &s.serial == serial) {
+                                        if let Some(s) =
+                                            map.values_mut().find(|s| &s.serial == serial)
+                                        {
                                             s.display_id = Some(did);
                                             s.virtual_size = Some(size);
                                         }
@@ -288,7 +290,9 @@ mod imp {
                 if !enabled {
                     continue;
                 }
-                let Some(hwnd) = resolve_mirror_hwnd(serial) else { continue };
+                let Some(hwnd) = resolve_mirror_hwnd(serial) else {
+                    continue;
+                };
                 let size = virtual_size.or_else(|| {
                     if let Some(s) = size_cache.get(serial) {
                         return Some(*s);
@@ -312,7 +316,8 @@ mod imp {
                 );
             }
             reg.targets = targets;
-            reg.enabled.retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
+            reg.enabled
+                .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
             let any = reg.enabled.values().any(|&e| e);
             ANY_ENABLED.store(any, Ordering::Relaxed);
         }
@@ -321,12 +326,15 @@ mod imp {
     fn resolve_mirror_hwnd(serial: &str) -> Option<isize> {
         let title = format!("AnyLeap — {}", serial);
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-        let hwnd: HWND =
-            unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok()?;
+        let hwnd: HWND = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok()?;
         Some(hwnd.0 as isize)
     }
 
-    fn adb_shell_output(adb: &std::path::Path, serial: &str, shell_args: &[&str]) -> Option<String> {
+    fn adb_shell_output(
+        adb: &std::path::Path,
+        serial: &str,
+        shell_args: &[&str],
+    ) -> Option<String> {
         use std::os::windows::process::CommandExt;
         let out = std::process::Command::new(adb)
             .args(["-s", serial, "shell"])
@@ -342,9 +350,13 @@ mod imp {
         let mut physical = None;
         let mut override_ = None;
         for line in text.lines() {
-            let Some((label, value)) = line.split_once(':') else { continue };
+            let Some((label, value)) = line.split_once(':') else {
+                continue;
+            };
             let value = value.trim();
-            let Some((w, h)) = value.split_once('x') else { continue };
+            let Some((w, h)) = value.split_once('x') else {
+                continue;
+            };
             let parsed = match (w.trim().parse::<u32>(), h.trim().parse::<u32>()) {
                 (Ok(w), Ok(h)) => Some((w, h)),
                 _ => None,
@@ -443,7 +455,10 @@ mod imp {
 
         #[test]
         fn wm_size_physical_only() {
-            assert_eq!(parse_wm_size("Physical size: 1080x2436\n"), Some((1080, 2436)));
+            assert_eq!(
+                parse_wm_size("Physical size: 1080x2436\n"),
+                Some((1080, 2436))
+            );
         }
 
         #[test]

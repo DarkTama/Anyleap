@@ -124,7 +124,11 @@ pub fn plan_staging_eviction(
         .iter()
         .filter(|e| !is_staging_cap_protected(&e.name) && !e.is_active)
         .collect();
-    evictable.sort_by(|a, b| a.modified.cmp(&b.modified).then_with(|| a.name.cmp(&b.name)));
+    evictable.sort_by(|a, b| {
+        a.modified
+            .cmp(&b.modified)
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
     let mut remaining = total_bytes;
     let mut freed_bytes = 0u64;
@@ -598,9 +602,11 @@ pub async fn resolve_transfer_target(
     for attempt in 0..2 {
         if let Some(target) = {
             let reg = registry().lock().unwrap();
-            reg.get(id)
-                .filter(|entry| entry.kind == kind)
-                .map(|entry| entry.base_dir.join(remap_rel_path(&rel, &entry.top_name_map)))
+            reg.get(id).filter(|entry| entry.kind == kind).map(|entry| {
+                entry
+                    .base_dir
+                    .join(remap_rel_path(&rel, &entry.top_name_map))
+            })
         } {
             return Ok(target);
         }
@@ -610,8 +616,8 @@ pub async fn resolve_transfer_target(
         }
     }
 
-    let base = staging_dir_for(fallback_root, id)
-        .ok_or_else(|| format!("rejected transfer id {id:?}"))?;
+    let base =
+        staging_dir_for(fallback_root, id).ok_or_else(|| format!("rejected transfer id {id:?}"))?;
     Ok(base.join(rel))
 }
 
@@ -629,7 +635,10 @@ pub fn record_transfer_bytes_progress(id: &str, delta_bytes: u64) -> Option<(u64
 
 /// Record one completed file for `id`; returns `Some(TransferCompletion)` when
 /// every expected file in the offer has arrived. Also returns current `(received_bytes, total_bytes)`.
-pub fn record_file_received(id: &str, size: u64) -> (Option<TransferCompletion>, Option<(u64, u64)>) {
+pub fn record_file_received(
+    id: &str,
+    size: u64,
+) -> (Option<TransferCompletion>, Option<(u64, u64)>) {
     let mut reg = registry().lock().unwrap();
     let Some(entry) = reg.get_mut(id) else {
         return (None, None);
@@ -718,7 +727,11 @@ pub fn scan_staging_entries(
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+        let Some(name) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+        else {
             continue;
         };
         if name == "_cursors" {
@@ -838,7 +851,8 @@ pub struct PendingOutboundClip {
     pub created_at: Instant,
 }
 
-static PENDING_INBOUND_CLIPS: OnceLock<Mutex<HashMap<String, PendingInboundClip>>> = OnceLock::new();
+static PENDING_INBOUND_CLIPS: OnceLock<Mutex<HashMap<String, PendingInboundClip>>> =
+    OnceLock::new();
 static PENDING_OUTBOUND_CLIPS: OnceLock<Mutex<HashMap<String, PendingOutboundClip>>> =
     OnceLock::new();
 
@@ -862,7 +876,10 @@ pub fn take_pending_inbound_clip(offer_id: &str) -> Option<PendingInboundClip> {
 }
 
 pub fn has_pending_inbound_clip(offer_id: &str) -> bool {
-    pending_inbound_clips().lock().unwrap().contains_key(offer_id)
+    pending_inbound_clips()
+        .lock()
+        .unwrap()
+        .contains_key(offer_id)
 }
 
 pub fn sweep_expired_pending_inbound_clips(ttl: Duration) -> Vec<PendingInboundClip> {
@@ -929,7 +946,10 @@ mod tests {
 
     #[test]
     fn staging_limit_decides_staging_vs_downloads_fallback() {
-        assert_eq!(choose_transfer_destination(0, 2048), TransferDestination::Staging);
+        assert_eq!(
+            choose_transfer_destination(0, 2048),
+            TransferDestination::Staging
+        );
         assert_eq!(
             choose_transfer_destination(2048 * 1024 * 1024, 2048),
             TransferDestination::Staging
@@ -985,11 +1005,31 @@ mod tests {
     fn top_level_staged_paths_deduplicates_nested_folder_entries() {
         let base = Path::new("staging/d1");
         let files = vec![
-            FileMeta { rel_path: "MyDir".into(), size: 0, is_dir: true },
-            FileMeta { rel_path: "MyDir/a.txt".into(), size: 10, is_dir: false },
-            FileMeta { rel_path: "MyDir/sub/b.txt".into(), size: 20, is_dir: false },
-            FileMeta { rel_path: "single.pdf".into(), size: 30, is_dir: false },
-            FileMeta { rel_path: "../bad.exe".into(), size: 40, is_dir: false },
+            FileMeta {
+                rel_path: "MyDir".into(),
+                size: 0,
+                is_dir: true,
+            },
+            FileMeta {
+                rel_path: "MyDir/a.txt".into(),
+                size: 10,
+                is_dir: false,
+            },
+            FileMeta {
+                rel_path: "MyDir/sub/b.txt".into(),
+                size: 20,
+                is_dir: false,
+            },
+            FileMeta {
+                rel_path: "single.pdf".into(),
+                size: 30,
+                is_dir: false,
+            },
+            FileMeta {
+                rel_path: "../bad.exe".into(),
+                size: 40,
+                is_dir: false,
+            },
         ];
         assert_eq!(
             top_level_staged_paths(base, &files),
@@ -1016,16 +1056,25 @@ mod tests {
 
         // Expiry decision & real cleanup with synthetic `now`
         let now = SystemTime::now();
-        assert!(!is_expired(now - Duration::from_secs(23 * 3600), now, STAGING_MAX_AGE));
-        assert!(!is_expired(now - Duration::from_secs(24 * 3600), now, STAGING_MAX_AGE));
-        assert!(is_expired(now - Duration::from_secs(24 * 3600 + 1), now, STAGING_MAX_AGE));
+        assert!(!is_expired(
+            now - Duration::from_secs(23 * 3600),
+            now,
+            STAGING_MAX_AGE
+        ));
+        assert!(!is_expired(
+            now - Duration::from_secs(24 * 3600),
+            now,
+            STAGING_MAX_AGE
+        ));
+        assert!(is_expired(
+            now - Duration::from_secs(24 * 3600 + 1),
+            now,
+            STAGING_MAX_AGE
+        ));
 
         std::fs::create_dir_all(root.join("drag-old")).unwrap();
-        let removed = cleanup_expired_staging(
-            &root,
-            STAGING_MAX_AGE,
-            now + Duration::from_secs(25 * 3600),
-        );
+        let removed =
+            cleanup_expired_staging(&root, STAGING_MAX_AGE, now + Duration::from_secs(25 * 3600));
         assert_eq!(removed, 1);
         assert!(!root.join("drag-old").exists());
         assert!(root.join("_cursors").exists());
@@ -1049,11 +1098,8 @@ mod tests {
         assert!(root.join("_cursors").exists());
 
         let now = SystemTime::now();
-        let removed = cleanup_expired_staging(
-            &root,
-            STAGING_MAX_AGE,
-            now + Duration::from_secs(25 * 3600),
-        );
+        let removed =
+            cleanup_expired_staging(&root, STAGING_MAX_AGE, now + Duration::from_secs(25 * 3600));
         assert_eq!(removed, 1);
         assert!(!root.join("open-y").exists());
         assert!(root.join("_cursors").exists());
@@ -1065,7 +1111,10 @@ mod tests {
     fn clip_replace_previous_decision() {
         assert_eq!(decide_replace_previous_clip(None, "offer-1"), None);
         assert_eq!(decide_replace_previous_clip(Some(""), "offer-1"), None);
-        assert_eq!(decide_replace_previous_clip(Some("offer-1"), "offer-1"), None);
+        assert_eq!(
+            decide_replace_previous_clip(Some("offer-1"), "offer-1"),
+            None
+        );
         assert_eq!(
             decide_replace_previous_clip(Some("offer-1"), "offer-2"),
             Some("offer-1".to_string())

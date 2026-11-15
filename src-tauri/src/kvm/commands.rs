@@ -111,12 +111,19 @@ fn release_receiver_inputs(rx_state: &Arc<Mutex<ReceiverSessionState>>, reason: 
 
 fn get_download_dir() -> std::path::PathBuf {
     std::env::var("USERPROFILE")
-        .map(|p| std::path::PathBuf::from(p).join("Downloads").join("AnyLeap_Transfers"))
+        .map(|p| {
+            std::path::PathBuf::from(p)
+                .join("Downloads")
+                .join("AnyLeap_Transfers")
+        })
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
 /// Identity + trust store, created on first use under the app data dir.
-fn get_security(app: &AppHandle, state: &AppState) -> Result<(Arc<Identity>, Arc<TrustStore>), String> {
+fn get_security(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<(Arc<Identity>, Arc<TrustStore>), String> {
     let mut kvm = state.kvm.lock().unwrap();
     if kvm.security.is_none() {
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -182,7 +189,15 @@ pub(crate) fn emit_transfer_progress(
 }
 
 fn emit_drag_progress_payload(app: &AppHandle, ev: &super::dragdrop::DragProgressPayload) {
-    emit_transfer_progress(app, &ev.id, "drag", &ev.name, ev.pct, ev.state, ev.size_bytes);
+    emit_transfer_progress(
+        app,
+        &ev.id,
+        "drag",
+        &ev.name,
+        ev.pct,
+        ev.state,
+        ev.size_bytes,
+    );
 }
 
 fn finish_target_drag_and_notify(
@@ -190,7 +205,9 @@ fn finish_target_drag_and_notify(
     drag_id: &str,
     res: super::dragdrop::TargetDragResult,
 ) {
-    if let Some(ev) = super::dragdrop::global_drag_registry().complete_terminal(drag_id, res.outcome) {
+    if let Some(ev) =
+        super::dragdrop::global_drag_registry().complete_terminal(drag_id, res.outcome)
+    {
         emit_drag_progress_payload(app, &ev);
     }
     if let Some(ref msg) = res.notice {
@@ -287,7 +304,12 @@ fn emit_transfer(app: &AppHandle, ev: TransferEvent) {
             emit_transfer_progress(app, &id, &kind, &name, 0, "cancelled", size_bytes);
             return;
         }
-        TransferEvent::Failed { id, kind, name, reason } => {
+        TransferEvent::Failed {
+            id,
+            kind,
+            name,
+            reason,
+        } => {
             if kind == "drag" {
                 return;
             }
@@ -344,10 +366,7 @@ fn pending_outbound_drag() -> &'static Mutex<Option<PendingOutboundDrag>> {
 }
 
 pub(crate) fn emit_continuity_notice(app: &AppHandle, text: &str) {
-    let _ = app.emit(
-        "kvm-continuity-notice",
-        serde_json::json!({ "text": text }),
-    );
+    let _ = app.emit("kvm-continuity-notice", serde_json::json!({ "text": text }));
 }
 
 fn summarize_offer_name(files: &[super::protocol::FileMeta]) -> String {
@@ -448,7 +467,9 @@ fn handle_incoming_drag_offer(
                 if let Ok(mut g) = pending_target_drag().lock() {
                     *g = None;
                 }
-                if let Some(ev) = super::dragdrop::global_drag_registry().mark_waiting_for_drop(&drag_id) {
+                if let Some(ev) =
+                    super::dragdrop::global_drag_registry().mark_waiting_for_drop(&drag_id)
+                {
                     emit_drag_progress_payload(app, &ev);
                 }
                 send_pkt_from_app(
@@ -495,7 +516,10 @@ fn send_pkt_from_app(app: &AppHandle, pkt: KvmPacket) {
         return;
     };
     if let Some(ref client) = kvm.client {
-        if client.is_connected.load(std::sync::atomic::Ordering::Relaxed) {
+        if client
+            .is_connected
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let _ = client.send_packet_tx.try_send(pkt);
             return;
         }
@@ -542,7 +566,12 @@ fn replace_previous_clip_offer(app: &AppHandle, new_offer_id: &str) {
                 emitted_cancel = true;
             }
         }
-        send_pkt_from_app(app, KvmPacket::TransferCancel { id: prev_id.clone() });
+        send_pkt_from_app(
+            app,
+            KvmPacket::TransferCancel {
+                id: prev_id.clone(),
+            },
+        );
     }
     if let Some((kind, total_bytes)) = super::staging::cancel_transfer_with_info(&prev_id) {
         if !emitted_cancel {
@@ -566,12 +595,14 @@ fn replace_previous_clip_offer(app: &AppHandle, new_offer_id: &str) {
 
 fn spawn_outbound_pending_clip(app: &AppHandle, pending: super::staging::PendingOutboundClip) {
     super::files::register_outbound_total(&pending.offer_id, pending.total_bytes);
-    super::debug_log::note(|| format!(
-        "CLIP_FETCH_REQ side=sender id={} files={} bytes={}",
-        pending.offer_id,
-        pending.files.len(),
-        pending.total_bytes
-    ));
+    super::debug_log::note(|| {
+        format!(
+            "CLIP_FETCH_REQ side=sender id={} files={} bytes={}",
+            pending.offer_id,
+            pending.files.len(),
+            pending.total_bytes
+        )
+    });
     emit_transfer_progress(
         app,
         &pending.offer_id,
@@ -588,7 +619,10 @@ fn spawn_outbound_pending_clip(app: &AppHandle, pending: super::staging::Pending
         return;
     };
     if let Some(ref client) = kvm.client {
-        if client.is_connected.load(std::sync::atomic::Ordering::Relaxed) {
+        if client
+            .is_connected
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let conn = client.conn.clone();
             for (rel_path, disk_path) in pending.sources {
                 let size = std::fs::metadata(&disk_path).map(|m| m.len()).unwrap_or(0);
@@ -703,10 +737,8 @@ fn handle_incoming_file_clip_offer(
         .fold(0u64, |acc, f| acc.saturating_add(f.size));
     let summary = summarize_offer_name(&files);
 
-    if super::staging::decide_clip_offer_mode(
-        total_bytes,
-        super::staging::clip_prefetch_limit_mb(),
-    ) == super::staging::ClipOfferMode::AwaitFetch
+    if super::staging::decide_clip_offer_mode(total_bytes, super::staging::clip_prefetch_limit_mb())
+        == super::staging::ClipOfferMode::AwaitFetch
     {
         super::debug_log::note(|| {
             format!(
@@ -732,7 +764,8 @@ fn handle_incoming_file_clip_offer(
         );
         let app_exp = app.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(super::staging::AWAITING_FETCH_TTL + Duration::from_millis(50)).await;
+            tokio::time::sleep(super::staging::AWAITING_FETCH_TTL + Duration::from_millis(50))
+                .await;
             let expired = super::staging::sweep_expired_pending_inbound_clips(
                 super::staging::AWAITING_FETCH_TTL,
             );
@@ -780,7 +813,15 @@ fn handle_incoming_file_clip_offer(
                     ),
                 );
             } else {
-                emit_transfer_progress(app, &offer_id, "clip", &summary, 0, "active", plan.total_bytes);
+                emit_transfer_progress(
+                    app,
+                    &offer_id,
+                    "clip",
+                    &summary,
+                    0,
+                    "active",
+                    plan.total_bytes,
+                );
             }
             // If sender held `ClipFile` because its own prefetch threshold was lower, request it now.
             send_pkt_from_app(
@@ -836,9 +877,9 @@ where
             size,
             ..
         } => {
-            super::debug_log::note(|| format!(
-                "DRAG_STAGING_FILE_DONE id={drag_id} rel={rel_path} size={size}"
-            ));
+            super::debug_log::note(|| {
+                format!("DRAG_STAGING_FILE_DONE id={drag_id} rel={rel_path} size={size}")
+            });
             let (done_opt, progress) = super::staging::record_file_received(&drag_id, size);
             if done_opt.is_none() {
                 if let Some((rec, total)) = progress {
@@ -847,10 +888,7 @@ where
                 }
             }
             if let Some(done) = done_opt {
-                let pending = pending_target_drag()
-                    .lock()
-                    .ok()
-                    .and_then(|mut g| g.take());
+                let pending = pending_target_drag().lock().ok().and_then(|mut g| g.take());
                 let early_hook_release = super::dragdrop::take_pending_target_drag_early_release();
                 if done.destination == super::staging::TransferDestination::DownloadsFallback {
                     if let Some(ev) = super::dragdrop::global_drag_registry()
@@ -866,12 +904,15 @@ where
                 } else if done.destination == super::staging::TransferDestination::Staging {
                     if let Some(p) = pending {
                         if p.released_early || early_hook_release {
-                            super::debug_log::note(|| format!(
-                                "DRAG_CANCEL_SEND id={drag_id} reason=released_early"
-                            ));
+                            super::debug_log::note(|| {
+                                format!("DRAG_CANCEL_SEND id={drag_id} reason=released_early")
+                            });
                             super::staging::cleanup_staging_entry(&staging_root, &drag_id);
                             if let Some(ev) = super::dragdrop::global_drag_registry()
-                                .complete_terminal(&drag_id, super::protocol::DragOutcome::Cancelled)
+                                .complete_terminal(
+                                    &drag_id,
+                                    super::protocol::DragOutcome::Cancelled,
+                                )
                             {
                                 emit_drag_progress_payload(app, &ev);
                             }
@@ -883,12 +924,14 @@ where
                                 notice: Some(msg),
                             });
                         } else {
-                            super::debug_log::note(|| format!(
-                                "DRAG_READY_SEND id={drag_id} paths={} button={} fwd_inject={}",
-                                done.top_level_paths.len(),
-                                p.button,
-                                p.forwarded_button_inject,
-                            ));
+                            super::debug_log::note(|| {
+                                format!(
+                                    "DRAG_READY_SEND id={drag_id} paths={} button={} fwd_inject={}",
+                                    done.top_level_paths.len(),
+                                    p.button,
+                                    p.forwarded_button_inject,
+                                )
+                            });
                             if let Some(ev) = super::dragdrop::global_drag_registry()
                                 .mark_waiting_for_drop(&drag_id)
                             {
@@ -911,9 +954,9 @@ where
                             );
                         }
                     } else {
-                        super::debug_log::note(|| format!(
-                            "DRAG_STAGING_ORPHAN_CLEANUP id={drag_id}"
-                        ));
+                        super::debug_log::note(|| {
+                            format!("DRAG_STAGING_ORPHAN_CLEANUP id={drag_id}")
+                        });
                         super::staging::cleanup_staging_entry(&staging_root, &drag_id);
                         if let Some(ev) = super::dragdrop::global_drag_registry()
                             .complete_terminal(&drag_id, super::protocol::DragOutcome::Cancelled)
@@ -935,9 +978,9 @@ where
             size,
             ..
         } => {
-            super::debug_log::note(|| format!(
-                "CLIP_STAGING_FILE_DONE id={offer_id} rel={rel_path} size={size}"
-            ));
+            super::debug_log::note(|| {
+                format!("CLIP_STAGING_FILE_DONE id={offer_id} rel={rel_path} size={size}")
+            });
             let (done_opt, progress) = super::staging::record_file_received(&offer_id, size);
             if done_opt.is_none() {
                 if let Some((rec, total)) = progress {
@@ -946,20 +989,32 @@ where
                 }
             }
             if let Some(done) = done_opt {
-                emit_transfer_progress(app, &offer_id, "clip", &rel_path, 100, "done", done.total_bytes);
+                emit_transfer_progress(
+                    app,
+                    &offer_id,
+                    "clip",
+                    &rel_path,
+                    100,
+                    "done",
+                    done.total_bytes,
+                );
                 if done.destination == super::staging::TransferDestination::Staging {
                     match super::clipboard::set_clipboard_files(&done.top_level_paths) {
                         Ok(()) => {
-                            super::debug_log::note(|| format!(
-                                "CLIP_SET_FILES id={offer_id} count={} ok=true",
-                                done.top_level_paths.len()
-                            ));
+                            super::debug_log::note(|| {
+                                format!(
+                                    "CLIP_SET_FILES id={offer_id} count={} ok=true",
+                                    done.top_level_paths.len()
+                                )
+                            });
                         }
                         Err(e) => {
-                            super::debug_log::note(|| format!(
-                                "CLIP_SET_FILES id={offer_id} count={} ok=false err={e}",
-                                done.top_level_paths.len()
-                            ));
+                            super::debug_log::note(|| {
+                                format!(
+                                    "CLIP_SET_FILES id={offer_id} count={} ok=false err={e}",
+                                    done.top_level_paths.len()
+                                )
+                            });
                             emit_continuity_notice(
                                 app,
                                 &format!("Failed to place staged files on clipboard: {e}"),
@@ -1006,11 +1061,16 @@ where
                 }
             }
         }
-        TransferEvent::Failed { id, kind, name, reason } => {
+        TransferEvent::Failed {
+            id,
+            kind,
+            name,
+            reason,
+        } => {
             if kind == "drag" || kind == "clip" {
-                super::debug_log::note(|| format!(
-                    "STAGING_FAIL kind={kind} id={id} name={name} err={reason}"
-                ));
+                super::debug_log::note(|| {
+                    format!("STAGING_FAIL kind={kind} id={id} name={name} err={reason}")
+                });
                 if kind == "drag" {
                     super::dragdrop::cancel_target_drag_for_id(&id, "transfer_failed");
                 }
@@ -1040,12 +1100,8 @@ where
             }
         }
         TransferEvent::CursorFile { role, name, data } => {
-            let _ = super::cursor_scheme::store_remote_cursor_file(
-                &staging_root,
-                &role,
-                &name,
-                &data,
-            );
+            let _ =
+                super::cursor_scheme::store_remote_cursor_file(&staging_root, &role, &name, &data);
         }
         _ => {}
     }
@@ -1060,9 +1116,7 @@ fn spawn_send_cursor_scheme(
             .await
             .unwrap_or_default();
         let roles: Vec<String> = items.iter().map(|i| i.role.clone()).collect();
-        let _ = send_tx
-            .send(KvmPacket::CursorSchemeOffer { roles })
-            .await;
+        let _ = send_tx.send(KvmPacket::CursorSchemeOffer { roles }).await;
         for item in items {
             let _ = super::files::send_cursor_file(&conn, item.role, item.name, &item.data).await;
         }
@@ -1159,15 +1213,17 @@ fn spawn_client_bulk_transfer(
             rel_path.clone(),
             &path,
             size,
-            |pct| emit_transfer_progress(
-                &app_prog,
-                &id_prog,
-                kind_str,
-                &name_prog,
-                pct,
-                if pct >= 100 { "done" } else { "active" },
-                size,
-            ),
+            |pct| {
+                emit_transfer_progress(
+                    &app_prog,
+                    &id_prog,
+                    kind_str,
+                    &name_prog,
+                    pct,
+                    if pct >= 100 { "done" } else { "active" },
+                    size,
+                )
+            },
         )
         .await;
         if let Err(e) = res {
@@ -1274,11 +1330,13 @@ fn handle_drag_result(
     outcome: super::protocol::DragOutcome,
     notice: Option<String>,
 ) {
-    super::debug_log::note(|| format!(
-        "DRAG_RESULT_RECV id={drag_id} outcome={} notice={}",
-        outcome.as_str(),
-        notice.as_deref().unwrap_or("")
-    ));
+    super::debug_log::note(|| {
+        format!(
+            "DRAG_RESULT_RECV id={drag_id} outcome={} notice={}",
+            outcome.as_str(),
+            notice.as_deref().unwrap_or("")
+        )
+    });
     if let Ok(mut g) = pending_outbound_drag().lock() {
         if g.as_ref().is_some_and(|p| p.drag_id == drag_id) {
             *g = None;
@@ -1314,9 +1372,9 @@ fn spawn_outbound_drag_files_client(
 ) {
     tauri::async_runtime::spawn(async move {
         let count = sources.len();
-        super::debug_log::note(|| format!(
-            "DRAG_STAGING_START side=client id={drag_id} files={count} total_bytes={total}"
-        ));
+        super::debug_log::note(|| {
+            format!("DRAG_STAGING_START side=client id={drag_id} files={count} total_bytes={total}")
+        });
         let mut sent_bytes: u64 = 0;
         let mut throttle = super::files::ProgressThrottle::new();
         for (rel_path, src_path) in sources {
@@ -1331,16 +1389,20 @@ fn spawn_outbound_drag_files_client(
                     sent_bytes = sent_bytes.saturating_add(delta);
                     let pct = super::files::pct_for_bytes(sent_bytes, total).min(99);
                     if let Some(p) = throttle.should_emit(pct, false) {
-                        emit_transfer_progress(&app, &drag_id, "drag", &rel_path, p, "active", total);
+                        emit_transfer_progress(
+                            &app, &drag_id, "drag", &rel_path, p, "active", total,
+                        );
                     }
                 },
             )
             .await;
             match res {
                 Ok(()) => {
-                    super::debug_log::note(|| format!(
+                    super::debug_log::note(|| {
+                        format!(
                         "DRAG_FILE_SEND_DONE side=client id={drag_id} rel={rel_path} size={size}"
-                    ));
+                    )
+                    });
                 }
                 Err(e) if e == super::files::TRANSFER_CANCELLED_ERR => {
                     let meta = super::files::TransferCancelMeta {
@@ -1358,12 +1420,14 @@ fn spawn_outbound_drag_files_client(
                     return;
                 }
                 Err(e) => {
-                    super::debug_log::note(|| format!(
-                        "DRAG_FILE_SEND_ERR side=client id={drag_id} rel={rel_path} err={e}"
-                    ));
-                    super::debug_log::note(|| format!(
-                        "DRAG_CANCEL_SEND side=client id={drag_id} reason={e}"
-                    ));
+                    super::debug_log::note(|| {
+                        format!(
+                            "DRAG_FILE_SEND_ERR side=client id={drag_id} rel={rel_path} err={e}"
+                        )
+                    });
+                    super::debug_log::note(|| {
+                        format!("DRAG_CANCEL_SEND side=client id={drag_id} reason={e}")
+                    });
                     if let Some(ev) = super::dragdrop::global_drag_registry()
                         .complete_terminal(&drag_id, super::protocol::DragOutcome::Failed)
                     {
@@ -1451,7 +1515,10 @@ fn get_local_machine_info(
         .unwrap_or_else(|_| "AnyLeap-PC".to_string());
     let monitors = get_local_monitors();
     let union = union_rect(&monitors);
-    let primary = monitors.iter().find(|m| m.is_primary).or_else(|| monitors.first());
+    let primary = monitors
+        .iter()
+        .find(|m| m.is_primary)
+        .or_else(|| monitors.first());
     let sw = if union.width > 0 {
         union.width
     } else {
@@ -1767,7 +1834,11 @@ async fn start_server_inner(
     let srv_clip_app = app_handle.clone();
     tokio::spawn(async move {
         while let Some(pkt) = clip_rx.recv().await {
-            if let Outbound::Packet(KvmPacket::FileClipOffer { ref offer_id, ref files }) = pkt {
+            if let Outbound::Packet(KvmPacket::FileClipOffer {
+                ref offer_id,
+                ref files,
+            }) = pkt
+            {
                 replace_previous_clip_offer(&srv_clip_app, offer_id);
                 let _ = super::staging::sweep_expired_pending_outbound_clips(
                     super::staging::AWAITING_FETCH_TTL,
@@ -1780,16 +1851,28 @@ async fn start_server_inner(
                 ) == super::staging::ClipOfferMode::Prefetch
                 {
                     super::files::register_outbound_total(offer_id, total_bytes);
-                    super::debug_log::note(|| format!(
+                    super::debug_log::note(|| {
+                        format!(
                         "CLIP_OFFER_SEND side=server id={offer_id} files={} total_bytes={total_bytes}",
                         files.len()
-                    ));
-                    emit_transfer_progress(&srv_clip_app, offer_id, "clip", &summary, 0, "active", total_bytes);
+                    )
+                    });
+                    emit_transfer_progress(
+                        &srv_clip_app,
+                        offer_id,
+                        "clip",
+                        &summary,
+                        0,
+                        "active",
+                        total_bytes,
+                    );
                 } else {
-                    super::debug_log::note(|| format!(
+                    super::debug_log::note(|| {
+                        format!(
                         "CLIP_OFFER_SEND side=server id={offer_id} files={} total_bytes={total_bytes} mode=awaiting_fetch",
                         files.len()
-                    ));
+                    )
+                    });
                 }
             }
             let _ = out_tx.send(pkt);
@@ -1866,8 +1949,8 @@ async fn start_server_inner(
                     let rx_state_drag = Arc::clone(&rx_state_pkt);
                     let drag_out_tx = pkt_out_tx.clone();
                     let app_drag = app_h.clone();
-                    let on_linked_drag_caught: super::dragdrop::DragCaughtCallback =
-                        Arc::new(move |paths, button, drop_pt| {
+                    let on_linked_drag_caught: super::dragdrop::DragCaughtCallback = Arc::new(
+                        move |paths, button, drop_pt| {
                             super::dragdrop::set_drag_leap_in_progress(false);
                             if !super::dragdrop::drag_drop_enabled() {
                                 super::debug_log::note(|| {
@@ -1879,9 +1962,11 @@ async fn start_server_inner(
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    super::debug_log::note(|| format!(
-                                        "DRAG_CANCEL_SEND side=linked reason=collect_err:{e}"
-                                    ));
+                                    super::debug_log::note(|| {
+                                        format!(
+                                            "DRAG_CANCEL_SEND side=linked reason=collect_err:{e}"
+                                        )
+                                    });
                                     emit_continuity_notice(
                                         &app_drag,
                                         &format!("Drag rejected: {e}"),
@@ -1900,51 +1985,58 @@ async fn start_server_inner(
                             let total_bytes: u64 =
                                 files.iter().filter(|f| !f.is_dir).map(|f| f.size).sum();
                             super::files::register_outbound_total(&drag_id, total_bytes);
-                            let ret_info = if let Ok(mut st) = rx_state_drag.lock() {
-                                if st.is_entered {
-                                    st.is_entered = false;
-                                    RECEIVER_ENTERED
-                                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                                    st.buttons_mask = 0;
-                                    st.drag_edge_hold_until = None;
-                                    st.dwell_seam = None;
-                                    st.dwell_start_ms = None;
-                                    let (keys, buttons) = st.tracker.release_all();
-                                    let ret = compute_linked_drag_return(
-                                        drop_pt,
-                                        &st.monitors,
-                                        &st.union,
-                                        &st.seams,
-                                    )
-                                    .unwrap_or((st.entry_edge, 0.5, None, None));
-                                    Some((ret, keys, buttons))
+                            let ret_info =
+                                if let Ok(mut st) = rx_state_drag.lock() {
+                                    if st.is_entered {
+                                        st.is_entered = false;
+                                        RECEIVER_ENTERED
+                                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                                        st.buttons_mask = 0;
+                                        st.drag_edge_hold_until = None;
+                                        st.dwell_seam = None;
+                                        st.dwell_start_ms = None;
+                                        let (keys, buttons) = st.tracker.release_all();
+                                        let ret = compute_linked_drag_return(
+                                            drop_pt,
+                                            &st.monitors,
+                                            &st.union,
+                                            &st.seams,
+                                        )
+                                        .unwrap_or((st.entry_edge, 0.5, None, None));
+                                        Some((ret, keys, buttons))
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
-                                }
-                            } else {
-                                None
-                            };
+                                };
 
-                            if let Some(((edge, relative_y, target_monitor, along_px), keys, buttons)) =
-                                ret_info
+                            if let Some((
+                                (edge, relative_y, target_monitor, along_px),
+                                keys,
+                                buttons,
+                            )) = ret_info
                             {
                                 release_tracked_inputs(keys, buttons);
                                 super::cursor_scheme::restore_system_cursors(
                                     &super::staging::default_staging_root(),
                                 );
                                 super::dragdrop::set_edge_catcher_poll_state(true, false);
-                                let _ = drag_out_tx.send(Outbound::Packet(KvmPacket::CursorReturn {
-                                    edge: edge.as_str().to_string(),
-                                    relative_y,
-                                    target_monitor,
-                                    along_px,
-                                }));
+                                let _ =
+                                    drag_out_tx.send(Outbound::Packet(KvmPacket::CursorReturn {
+                                        edge: edge.as_str().to_string(),
+                                        relative_y,
+                                        target_monitor,
+                                        along_px,
+                                    }));
                             }
 
-                            super::debug_log::note(|| format!(
+                            super::debug_log::note(|| {
+                                format!(
                                 "DRAG_OFFER_SEND side=linked id={drag_id} files={} total_bytes={total_bytes} button={button}",
                                 files.len()
-                            ));
+                            )
+                            });
                             let _ = drag_out_tx.send(Outbound::Packet(KvmPacket::DragOffer {
                                 drag_id: drag_id.clone(),
                                 files: files.clone(),
@@ -1967,7 +2059,8 @@ async fn start_server_inner(
                                     size,
                                 });
                             }
-                        });
+                        },
+                    );
                     super::dragdrop::configure_edge_catcher(strips, Some(on_linked_drag_caught));
                     super::dragdrop::set_edge_catcher_poll_state(
                         true,
@@ -2263,7 +2356,11 @@ async fn start_server_inner(
                 }
                 // --- /SPEC-25b ---
                 // --- SPEC-25a ---
-                KvmPacket::DragOffer { drag_id, files, button } => {
+                KvmPacket::DragOffer {
+                    drag_id,
+                    files,
+                    button,
+                } => {
                     handle_incoming_drag_offer(
                         &app_h,
                         drag_id,
@@ -2331,121 +2428,170 @@ async fn start_server_inner(
     // so bulk file transfers or Tokio runtime tasks never starve cursor injection on Linked PC.
     let delta_out_tx = outgoing_tx.clone();
     let app_d = app_handle.clone();
-    let _ = std::thread::Builder::new()
-        .name("kvm-delta-inject".into())
-        .spawn(move || {
-            #[cfg(windows)]
-            unsafe {
-                use windows::Win32::System::Threading::{
-                    GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
-                };
-                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-            }
-            loop {
-                let first_delta = match delta_rx.blocking_recv() {
-                    Ok(d) => d,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                let (mut agg_dx, mut agg_dy) = (first_delta.dx, first_delta.dy);
-                loop {
-                    match delta_rx.try_recv() {
-                        Ok(more) => {
-                            agg_dx = agg_dx.saturating_add(more.dx);
-                            agg_dy = agg_dy.saturating_add(more.dy);
-                        }
-                        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
-                        Err(_) => break,
-                    }
-                }
-                enum DeltaAction {
-                    Ignore,
-                    Move {
-                        pos: (i32, i32),
-                        emit_pos: Option<(f32, f32)>,
-                        // --- SPEC-25a ---
-                        buttons_mask: u8,
-                        // --- end SPEC-25a ---
-                    },
-                    Return {
-                        edge: Edge,
-                        relative_y: f32,
-                        target_monitor: Option<String>,
-                        along_px: Option<i32>,
-                        keys: Vec<super::input_logic::TrackedKey>,
-                        buttons: Vec<u8>,
-                    },
-                }
-
-                let action = {
-                    let Ok(mut st) = rx_state.lock() else {
-                        continue;
+    let _ =
+        std::thread::Builder::new()
+            .name("kvm-delta-inject".into())
+            .spawn(move || {
+                #[cfg(windows)]
+                unsafe {
+                    use windows::Win32::System::Threading::{
+                        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
                     };
-                    if !st.is_entered {
-                        DeltaAction::Ignore
-                    } else if let Some(cur) = injector::get_cursor_pos() {
-                        let now_ms = st.session_epoch.elapsed().as_millis() as u64;
-                        let ReceiverSessionState {
-                            entry_edge,
-                            dwell_ms,
-                            deadzone_px,
-                            ref mut dwell_start_ms,
-                            ref mut dwell_seam,
-                            ref seams,
-                            has_seams,
-                            ref monitors,
-                            buttons_mask,
-                            ref mut drag_edge_hold_until,
-                            ..
-                        } = *st;
-                        if has_seams {
-                            match receiver_step_with_seams(
-                                cur,
-                                (agg_dx, agg_dy),
-                                monitors,
-                                seams,
+                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+                }
+                loop {
+                    let first_delta = match delta_rx.blocking_recv() {
+                        Ok(d) => d,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
+                    let (mut agg_dx, mut agg_dy) = (first_delta.dx, first_delta.dy);
+                    loop {
+                        match delta_rx.try_recv() {
+                            Ok(more) => {
+                                agg_dx = agg_dx.saturating_add(more.dx);
+                                agg_dy = agg_dy.saturating_add(more.dy);
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    enum DeltaAction {
+                        Ignore,
+                        Move {
+                            pos: (i32, i32),
+                            emit_pos: Option<(f32, f32)>,
+                            // --- SPEC-25a ---
+                            buttons_mask: u8,
+                            // --- end SPEC-25a ---
+                        },
+                        Return {
+                            edge: Edge,
+                            relative_y: f32,
+                            target_monitor: Option<String>,
+                            along_px: Option<i32>,
+                            keys: Vec<super::input_logic::TrackedKey>,
+                            buttons: Vec<u8>,
+                        },
+                    }
+
+                    let action = {
+                        let Ok(mut st) = rx_state.lock() else {
+                            continue;
+                        };
+                        if !st.is_entered {
+                            DeltaAction::Ignore
+                        } else if let Some(cur) = injector::get_cursor_pos() {
+                            let now_ms = st.session_epoch.elapsed().as_millis() as u64;
+                            let ReceiverSessionState {
+                                entry_edge,
                                 dwell_ms,
                                 deadzone_px,
-                                dwell_seam,
-                                dwell_start_ms,
-                                now_ms,
-                            ) {
-                                ReceiverSeamStep::Move(pos) => {
-                                    *drag_edge_hold_until = None;
-                                    let emit_pos = if st
-                                        .last_pos_emit
-                                        .is_none_or(|t| t.elapsed() >= Duration::from_millis(50))
-                                    {
-                                        st.last_pos_emit = Some(Instant::now());
-                                        Some(normalize_in_union(pos, &st.union))
-                                    } else {
-                                        None
-                                    };
-                                    DeltaAction::Move {
-                                        pos,
-                                        emit_pos,
-                                        buttons_mask,
-                                    }
-                                }
-                                ReceiverSeamStep::Return {
-                                    edge,
-                                    relative_y,
-                                    target_monitor,
-                                    along_px,
-                                } => {
-                                    // --- SPEC-25a ---
-                                    if should_hold_drag_return(
-                                        drag_edge_hold_until,
-                                        buttons_mask,
-                                        super::dragdrop::drag_drop_enabled(),
-                                        Instant::now(),
-                                    ) {
+                                ref mut dwell_start_ms,
+                                ref mut dwell_seam,
+                                ref seams,
+                                has_seams,
+                                ref monitors,
+                                buttons_mask,
+                                ref mut drag_edge_hold_until,
+                                ..
+                            } = *st;
+                            if has_seams {
+                                match receiver_step_with_seams(
+                                    cur,
+                                    (agg_dx, agg_dy),
+                                    monitors,
+                                    seams,
+                                    dwell_ms,
+                                    deadzone_px,
+                                    dwell_seam,
+                                    dwell_start_ms,
+                                    now_ms,
+                                ) {
+                                    ReceiverSeamStep::Move(pos) => {
+                                        *drag_edge_hold_until = None;
+                                        let emit_pos = if st.last_pos_emit.is_none_or(|t| {
+                                            t.elapsed() >= Duration::from_millis(50)
+                                        }) {
+                                            st.last_pos_emit = Some(Instant::now());
+                                            Some(normalize_in_union(pos, &st.union))
+                                        } else {
+                                            None
+                                        };
                                         DeltaAction::Move {
-                                            pos: cur,
-                                            emit_pos: None,
+                                            pos,
+                                            emit_pos,
                                             buttons_mask,
                                         }
-                                    } else {
+                                    }
+                                    ReceiverSeamStep::Return {
+                                        edge,
+                                        relative_y,
+                                        target_monitor,
+                                        along_px,
+                                    } => {
+                                        // --- SPEC-25a ---
+                                        if should_hold_drag_return(
+                                            drag_edge_hold_until,
+                                            buttons_mask,
+                                            super::dragdrop::drag_drop_enabled(),
+                                            Instant::now(),
+                                        ) {
+                                            DeltaAction::Move {
+                                                pos: cur,
+                                                emit_pos: None,
+                                                buttons_mask,
+                                            }
+                                        } else {
+                                            *drag_edge_hold_until = None;
+                                            st.buttons_mask = 0;
+                                            st.is_entered = false;
+                                            RECEIVER_ENTERED
+                                                .store(false, std::sync::atomic::Ordering::Relaxed);
+                                            st.dwell_seam = None;
+                                            st.dwell_start_ms = None;
+                                            st.last_pos_emit = None;
+                                            let (keys, buttons) = st.tracker.release_all();
+                                            DeltaAction::Return {
+                                                edge,
+                                                relative_y,
+                                                target_monitor,
+                                                along_px,
+                                                keys,
+                                                buttons,
+                                            }
+                                        }
+                                        // --- end SPEC-25a ---
+                                    }
+                                }
+                            } else {
+                                match receiver_step_with_dwell(
+                                    cur,
+                                    (agg_dx, agg_dy),
+                                    monitors,
+                                    entry_edge,
+                                    dwell_ms,
+                                    deadzone_px,
+                                    dwell_start_ms,
+                                    now_ms,
+                                ) {
+                                    ReceiverStep::Move(pos) => {
+                                        *drag_edge_hold_until = None;
+                                        let emit_pos = if st.last_pos_emit.is_none_or(|t| {
+                                            t.elapsed() >= Duration::from_millis(50)
+                                        }) {
+                                            st.last_pos_emit = Some(Instant::now());
+                                            Some(normalize_in_union(pos, &st.union))
+                                        } else {
+                                            None
+                                        };
+                                        DeltaAction::Move {
+                                            pos,
+                                            emit_pos,
+                                            buttons_mask,
+                                        }
+                                    }
+                                    ReceiverStep::Return { edge, relative_y } => {
                                         *drag_edge_hold_until = None;
                                         st.buttons_mask = 0;
                                         st.is_entered = false;
@@ -2458,138 +2604,86 @@ async fn start_server_inner(
                                         DeltaAction::Return {
                                             edge,
                                             relative_y,
-                                            target_monitor,
-                                            along_px,
+                                            target_monitor: None,
+                                            along_px: None,
                                             keys,
                                             buttons,
                                         }
                                     }
-                                    // --- end SPEC-25a ---
                                 }
                             }
                         } else {
-                            match receiver_step_with_dwell(
-                                cur,
-                                (agg_dx, agg_dy),
-                                monitors,
-                                entry_edge,
-                                dwell_ms,
-                                deadzone_px,
-                                dwell_start_ms,
-                                now_ms,
-                            ) {
-                                ReceiverStep::Move(pos) => {
-                                    *drag_edge_hold_until = None;
-                                    let emit_pos = if st
-                                        .last_pos_emit
-                                        .is_none_or(|t| t.elapsed() >= Duration::from_millis(50))
-                                    {
-                                        st.last_pos_emit = Some(Instant::now());
-                                        Some(normalize_in_union(pos, &st.union))
-                                    } else {
-                                        None
-                                    };
-                                    DeltaAction::Move {
-                                        pos,
-                                        emit_pos,
-                                        buttons_mask,
-                                    }
-                                }
-                                ReceiverStep::Return { edge, relative_y } => {
-                                    *drag_edge_hold_until = None;
-                                    st.buttons_mask = 0;
-                                    st.is_entered = false;
-                                    RECEIVER_ENTERED
-                                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                                    st.dwell_seam = None;
-                                    st.dwell_start_ms = None;
-                                    st.last_pos_emit = None;
-                                    let (keys, buttons) = st.tracker.release_all();
-                                    DeltaAction::Return {
-                                        edge,
-                                        relative_y,
-                                        target_monitor: None,
-                                        along_px: None,
-                                        keys,
-                                        buttons,
-                                    }
-                                }
+                            DeltaAction::Ignore
+                        }
+                    };
+
+                    match action {
+                        DeltaAction::Ignore => {}
+                        DeltaAction::Move {
+                            pos,
+                            emit_pos,
+                            buttons_mask,
+                        } => {
+                            injector::set_cursor_position(pos.0, pos.1);
+                            injector::maybe_nudge_first_delta_after_unlock();
+                            // --- SPEC-25a ---
+                            if buttons_mask != 0 {
+                                super::dragdrop::on_mouse_drag_probe(pos, buttons_mask, false);
+                            } else if super::dragdrop::is_edge_catcher_visible() {
+                                super::dragdrop::hide_edge_catcher();
+                            }
+                            // --- end SPEC-25a ---
+                            if let Some((norm_x, norm_y)) = emit_pos {
+                                let _ = delta_out_tx.send(Outbound::Packet(
+                                    KvmPacket::CursorPosition { norm_x, norm_y },
+                                ));
                             }
                         }
-                    } else {
-                        DeltaAction::Ignore
-                    }
-                };
-
-                match action {
-                    DeltaAction::Ignore => {}
-                    DeltaAction::Move {
-                        pos,
-                        emit_pos,
-                        buttons_mask,
-                    } => {
-                        injector::set_cursor_position(pos.0, pos.1);
-                        injector::maybe_nudge_first_delta_after_unlock();
-                        // --- SPEC-25a ---
-                        if buttons_mask != 0 {
-                            super::dragdrop::on_mouse_drag_probe(pos, buttons_mask, false);
-                        } else if super::dragdrop::is_edge_catcher_visible() {
-                            super::dragdrop::hide_edge_catcher();
-                        }
-                        // --- end SPEC-25a ---
-                        if let Some((norm_x, norm_y)) = emit_pos {
-                            let _ = delta_out_tx.send(Outbound::Packet(KvmPacket::CursorPosition {
-                                norm_x,
-                                norm_y,
-                            }));
-                        }
-                    }
-                    DeltaAction::Return {
-                        edge,
-                        relative_y,
-                        target_monitor,
-                        along_px,
-                        keys,
-                        buttons,
-                    } => {
-                        let released_keys = keys.len();
-                        let released_buttons = buttons.len();
-                        release_tracked_inputs(keys, buttons);
-                        // --- SPEC-25a ---
-                        super::dragdrop::hide_edge_catcher();
-                        super::dragdrop::set_edge_catcher_poll_state(true, false);
-                        super::cursor_scheme::restore_system_cursors(
-                            &super::staging::default_staging_root(),
-                        );
-                        // --- end SPEC-25a ---
-                        let edge_str = edge.as_str().to_string();
-                        let _ = delta_out_tx.send(Outbound::Packet(KvmPacket::CursorReturn {
-                            edge: edge_str.clone(),
+                        DeltaAction::Return {
+                            edge,
                             relative_y,
                             target_monitor,
                             along_px,
-                        }));
-                        if debug_log::is_enabled() {
-                            debug_log::record_event(debug_log::DebugEvent::ReturnSent {
-                                ts_us: debug_log::now_us(),
-                                edge,
+                            keys,
+                            buttons,
+                        } => {
+                            let released_keys = keys.len();
+                            let released_buttons = buttons.len();
+                            release_tracked_inputs(keys, buttons);
+                            // --- SPEC-25a ---
+                            super::dragdrop::hide_edge_catcher();
+                            super::dragdrop::set_edge_catcher_poll_state(true, false);
+                            super::cursor_scheme::restore_system_cursors(
+                                &super::staging::default_staging_root(),
+                            );
+                            // --- end SPEC-25a ---
+                            let edge_str = edge.as_str().to_string();
+                            let _ = delta_out_tx.send(Outbound::Packet(KvmPacket::CursorReturn {
+                                edge: edge_str.clone(),
                                 relative_y,
-                                released_keys,
-                                released_buttons,
-                            });
+                                target_monitor,
+                                along_px,
+                            }));
+                            if debug_log::is_enabled() {
+                                debug_log::record_event(debug_log::DebugEvent::ReturnSent {
+                                    ts_us: debug_log::now_us(),
+                                    edge,
+                                    relative_y,
+                                    released_keys,
+                                    released_buttons,
+                                });
+                            }
+                            let _ = app_d.emit("kvm-cursor-return", &edge_str);
                         }
-                        let _ = app_d.emit("kvm-cursor-return", &edge_str);
                     }
                 }
-            }
-        });
+            });
 
     let mut kvm = state.kvm.lock().unwrap();
     kvm.server = Some(server_handle);
 
     // Ensure discovery is broadcasting
-    kvm.discovery
-        .start(id.clone(), name.clone(), port, sw, sh);
+    kvm.discovery.start(id.clone(), name.clone(), port, sw, sh);
 
     Ok(build_status(id, name, sw, sh, monitors, &kvm))
 }
@@ -2647,8 +2741,17 @@ pub async fn kvm_pair_peer(
 ) -> Result<(), String> {
     let (id, name, _sw, _sh, monitors) = get_local_machine_info(&app_handle, &state)?;
     let (identity, trust) = get_security(&app_handle, &state)?;
-    let (_ep, conn, _send, _recv, _peer_info) =
-        handshake(&ip, port.unwrap_or(KVM_PORT), id, name, monitors, Some(pin), &identity, &trust).await?;
+    let (_ep, conn, _send, _recv, _peer_info) = handshake(
+        &ip,
+        port.unwrap_or(KVM_PORT),
+        id,
+        name,
+        monitors,
+        Some(pin),
+        &identity,
+        &trust,
+    )
+    .await?;
     conn.close(0u32.into(), b"paired");
     Ok(())
 }
@@ -2734,12 +2837,17 @@ pub async fn kvm_connect_peer(
         while let Some(item) = clip_rx.recv().await {
             match item {
                 Outbound::Packet(pkt) => {
-                    if let KvmPacket::FileClipOffer { ref offer_id, ref files } = pkt {
+                    if let KvmPacket::FileClipOffer {
+                        ref offer_id,
+                        ref files,
+                    } = pkt
+                    {
                         replace_previous_clip_offer(&clip_app, offer_id);
                         let _ = super::staging::sweep_expired_pending_outbound_clips(
                             super::staging::AWAITING_FETCH_TTL,
                         );
-                        let total_bytes: u64 = files.iter().filter(|f| !f.is_dir).map(|f| f.size).sum();
+                        let total_bytes: u64 =
+                            files.iter().filter(|f| !f.is_dir).map(|f| f.size).sum();
                         let summary = summarize_offer_name(files);
                         if super::staging::decide_clip_offer_mode(
                             total_bytes,
@@ -2747,16 +2855,28 @@ pub async fn kvm_connect_peer(
                         ) == super::staging::ClipOfferMode::Prefetch
                         {
                             super::files::register_outbound_total(offer_id, total_bytes);
-                            super::debug_log::note(|| format!(
+                            super::debug_log::note(|| {
+                                format!(
                                 "CLIP_OFFER_SEND side=client id={offer_id} files={} total_bytes={total_bytes}",
                                 files.len()
-                            ));
-                            emit_transfer_progress(&clip_app, offer_id, "clip", &summary, 0, "active", total_bytes);
+                            )
+                            });
+                            emit_transfer_progress(
+                                &clip_app,
+                                offer_id,
+                                "clip",
+                                &summary,
+                                0,
+                                "active",
+                                total_bytes,
+                            );
                         } else {
-                            super::debug_log::note(|| format!(
+                            super::debug_log::note(|| {
+                                format!(
                                 "CLIP_OFFER_SEND side=client id={offer_id} files={} total_bytes={total_bytes} mode=awaiting_fetch",
                                 files.len()
-                            ));
+                            )
+                            });
                         }
                     }
                     let _ = client_send.send(pkt).await;
@@ -2808,8 +2928,7 @@ pub async fn kvm_connect_peer(
                     tokio::spawn(async move {
                         let _ = super::files::send_cursor_file(&conn, role, name, &data).await;
                     });
-                }
-                // --- end SPEC-25a ---
+                } // --- end SPEC-25a ---
             }
         }
     });
@@ -2866,7 +2985,11 @@ pub async fn kvm_connect_peer(
                     // --- end SPEC-25a ---
                 }
                 // --- SPEC-25a ---
-                KvmPacket::DragOffer { drag_id, files, button } => {
+                KvmPacket::DragOffer {
+                    drag_id,
+                    files,
+                    button,
+                } => {
                     handle_incoming_drag_offer(
                         &app_h,
                         drag_id,
@@ -2912,19 +3035,17 @@ pub async fn kvm_connect_peer(
                 KvmPacket::SessionDisconnect => {
                     if let Some(app_state) = app_h.try_state::<AppState>() {
                         if let Ok(mut kvm) = app_state.kvm.lock() {
-                            if kvm
-                                .client
-                                .as_ref()
-                                .is_some_and(|c| Arc::ptr_eq(&c.is_connected, &client_connected_flag))
-                            {
+                            if kvm.client.as_ref().is_some_and(|c| {
+                                Arc::ptr_eq(&c.is_connected, &client_connected_flag)
+                            }) {
                                 kvm.client = None;
                                 kvm.hooks.stop_hooks();
                                 kvm.topology
                                     .computers
                                     .retain(|c| c.is_local || c.id != peer_id_for_rx);
-                                kvm.topology
-                                    .links
-                                    .retain(|l| l.from_id != peer_id_for_rx && l.to_id != peer_id_for_rx);
+                                kvm.topology.links.retain(|l| {
+                                    l.from_id != peer_id_for_rx && l.to_id != peer_id_for_rx
+                                });
                                 super::hooks::restore_cursor_visibility();
                                 // --- SPEC-25b ---
                                 super::audio::on_main_disconnected();
@@ -3084,10 +3205,7 @@ pub async fn kvm_disconnect_peer(state: State<'_, AppState>) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub async fn kvm_send_file(
-    file_path: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn kvm_send_file(file_path: String, state: State<'_, AppState>) -> Result<(), String> {
     let path_buf = std::path::PathBuf::from(file_path);
     if !path_buf.is_file() {
         return Err("File does not exist".to_string());
@@ -3206,8 +3324,12 @@ pub(crate) fn prepare_topology_update(
     }
 
     if next_topology.remote_origin.is_none() {
-        next_topology.remote_origin =
-            resolve_remote_origin(&next_topology, &next_main, &next_linked, local_id.as_deref());
+        next_topology.remote_origin = resolve_remote_origin(
+            &next_topology,
+            &next_main,
+            &next_linked,
+            local_id.as_deref(),
+        );
     }
 
     if !next_main.is_empty() {
@@ -3246,8 +3368,7 @@ fn apply_controller_topology(kvm: &mut KvmState, topology: TopologyConfig, app_h
             .iter()
             .find(|c| c.is_local)
             .map(|c| c.id.as_str());
-        let origin =
-            resolve_remote_origin(&topology, &main_monitors, &linked_monitors, local_id);
+        let origin = resolve_remote_origin(&topology, &main_monitors, &linked_monitors, local_id);
         let seams = origin
             .map(|o| compute_linked_seams(&main_monitors, &linked_monitors, o))
             .unwrap_or_default();
@@ -3271,7 +3392,10 @@ fn apply_controller_topology(kvm: &mut KvmState, topology: TopologyConfig, app_h
                 };
                 if let (Some(side), Some(mon)) = (
                     Edge::from_str(edge_str),
-                    main_monitors.iter().find(|m| m.is_primary).or(main_monitors.first()),
+                    main_monitors
+                        .iter()
+                        .find(|m| m.is_primary)
+                        .or(main_monitors.first()),
                 ) {
                     let (start, end) = match side {
                         Edge::Left | Edge::Right => (mon.y, mon.y + mon.height),
@@ -3321,15 +3445,16 @@ fn apply_controller_topology(kvm: &mut KvmState, topology: TopologyConfig, app_h
         });
 
         let app_for_blocked = app_handle.clone();
-        let on_leap_blocked: super::hooks::LeapBlockedCallback = Arc::new(move |proc_name: &str| {
-            let _ = app_for_blocked.emit(
-                "kvm-leap-blocked",
-                serde_json::json!({
-                    "reason": "elevated_foreground",
-                    "proc": proc_name,
-                }),
-            );
-        });
+        let on_leap_blocked: super::hooks::LeapBlockedCallback =
+            Arc::new(move |proc_name: &str| {
+                let _ = app_for_blocked.emit(
+                    "kvm-leap-blocked",
+                    serde_json::json!({
+                        "reason": "elevated_foreground",
+                        "proc": proc_name,
+                    }),
+                );
+            });
         // --- SPEC-25a ---
         let on_drag_engaged: super::hooks::DragModeEngagedCallback = Arc::new(move |button| {
             let pending = pending_outbound_drag()
@@ -3337,24 +3462,21 @@ fn apply_controller_topology(kvm: &mut KvmState, topology: TopologyConfig, app_h
                 .ok()
                 .and_then(|mut g| g.take());
             if !super::dragdrop::drag_drop_enabled() {
-                super::debug_log::note(|| format!(
-                    "DRAG_OFFER_SKIPPED side=main reason=disabled button={button}"
-                ));
+                super::debug_log::note(|| {
+                    format!("DRAG_OFFER_SKIPPED side=main reason=disabled button={button}")
+                });
                 return;
             }
             if let Some(p) = pending {
-                let total_bytes: u64 = p
-                    .files
-                    .iter()
-                    .filter(|f| !f.is_dir)
-                    .map(|f| f.size)
-                    .sum();
+                let total_bytes: u64 = p.files.iter().filter(|f| !f.is_dir).map(|f| f.size).sum();
                 let summary = summarize_offer_name(&p.files);
-                super::debug_log::note(|| format!(
+                super::debug_log::note(|| {
+                    format!(
                     "DRAG_OFFER_SEND side=main id={} files={} total_bytes={total_bytes} button={button}",
                     p.drag_id,
                     p.files.len(),
-                ));
+                )
+                });
                 let reg_ev = super::dragdrop::global_drag_registry().register_staging(
                     &p.drag_id,
                     &summary,
@@ -3375,9 +3497,11 @@ fn apply_controller_topology(kvm: &mut KvmState, topology: TopologyConfig, app_h
                     p.app,
                 );
             } else {
-                super::debug_log::note(|| format!(
-                    "DRAG_OFFER_SKIPPED side=main reason=no_pending_outbound button={button}"
-                ));
+                super::debug_log::note(|| {
+                    format!(
+                        "DRAG_OFFER_SKIPPED side=main reason=no_pending_outbound button={button}"
+                    )
+                });
             }
         });
         kvm.hooks
@@ -3453,12 +3577,8 @@ pub async fn kvm_update_topology(
         .as_ref()
         .map(|(id, mons)| (id.as_str(), mons.as_slice()));
 
-    let (prepared, notice) = prepare_topology_update(
-        &kvm.topology,
-        topology,
-        &live_local_monitors,
-        live_peer_ref,
-    )?;
+    let (prepared, notice) =
+        prepare_topology_update(&kvm.topology, topology, &live_local_monitors, live_peer_ref)?;
 
     if let Some(payload) = notice {
         let _ = app_handle.emit("kvm-layout-notice", payload);
@@ -3529,18 +3649,12 @@ pub fn kvm_set_session_settings(
 }
 
 #[tauri::command]
-pub async fn kvm_open_url_on_linked(
-    url: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn kvm_open_url_on_linked(url: String, state: State<'_, AppState>) -> Result<(), String> {
     super::open_on_linked::send_open_url_from_state(&state, &url)
 }
 
 #[tauri::command]
-pub async fn kvm_open_file_on_linked(
-    path: String,
-    app_handle: AppHandle,
-) -> Result<(), String> {
+pub async fn kvm_open_file_on_linked(path: String, app_handle: AppHandle) -> Result<(), String> {
     super::open_on_linked::send_and_open_file_from_app(&app_handle, std::path::PathBuf::from(path))
         .await
 }
@@ -3623,9 +3737,15 @@ pub async fn kvm_cancel_transfer(
         }
     }
     super::open_on_linked::cancel_pending_open(&id);
-    let kvm = state.kvm.lock().map_err(|e| format!("Mutex lock poisoned: {e}"))?;
+    let kvm = state
+        .kvm
+        .lock()
+        .map_err(|e| format!("Mutex lock poisoned: {e}"))?;
     if let Some(ref client) = kvm.client {
-        if client.is_connected.load(std::sync::atomic::Ordering::Relaxed) {
+        if client
+            .is_connected
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let _ = client
                 .send_packet_tx
                 .try_send(KvmPacket::TransferCancel { id });
@@ -3662,10 +3782,12 @@ pub async fn kvm_fetch_clip(
             limit_mb,
         ) {
             Ok(plan) => {
-                super::debug_log::note(|| format!(
-                    "CLIP_FETCH_REQ side=receiver id={offer_id} bytes={}",
-                    pending.total_bytes
-                ));
+                super::debug_log::note(|| {
+                    format!(
+                        "CLIP_FETCH_REQ side=receiver id={offer_id} bytes={}",
+                        pending.total_bytes
+                    )
+                });
                 if plan.destination == super::staging::TransferDestination::DownloadsFallback {
                     emit_continuity_notice(
                         &app_handle,
@@ -3686,9 +3808,15 @@ pub async fn kvm_fetch_clip(
                     );
                 }
                 let pkt = KvmPacket::ClipFetchRequest { offer_id };
-                let kvm = state.kvm.lock().map_err(|e| format!("Mutex lock poisoned: {e}"))?;
+                let kvm = state
+                    .kvm
+                    .lock()
+                    .map_err(|e| format!("Mutex lock poisoned: {e}"))?;
                 if let Some(ref client) = kvm.client {
-                    if client.is_connected.load(std::sync::atomic::Ordering::Relaxed) {
+                    if client
+                        .is_connected
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         let _ = client.send_packet_tx.try_send(pkt);
                         return Ok(());
                     }
@@ -3835,7 +3963,14 @@ mod tests {
         assert!(kvm.hooks.is_active());
         assert_eq!(kvm.hooks.active_link_edge(), Some("right"));
 
-        let st = build_status("local".into(), "Local".into(), 1920, 1080, test_mons(), &kvm);
+        let st = build_status(
+            "local".into(),
+            "Local".into(),
+            1920,
+            1080,
+            test_mons(),
+            &kvm,
+        );
         assert!(!st.allow_control);
         assert!(!st.is_host_running);
         assert_eq!(st.controller_edge.as_deref(), Some("right"));
@@ -3852,7 +3987,14 @@ mod tests {
         disconnect_peer_in_state(&mut kvm);
         assert!(kvm.client.is_none());
         assert!(!kvm.hooks.is_active());
-        let st_after = build_status("local".into(), "Local".into(), 1920, 1080, test_mons(), &kvm);
+        let st_after = build_status(
+            "local".into(),
+            "Local".into(),
+            1920,
+            1080,
+            test_mons(),
+            &kvm,
+        );
         assert!(st_after.linked_peer.is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3961,7 +4103,8 @@ mod tests {
                 .is_ok(),
             "role-aware unlink on Linked PC must close incoming session"
         );
-        let st_unlinked = build_status("srv".into(), "Server".into(), 1920, 1080, test_mons(), &kvm);
+        let st_unlinked =
+            build_status("srv".into(), "Server".into(), 1920, 1080, test_mons(), &kvm);
         assert!(st_unlinked.allow_control);
         assert!(st_unlinked.linked_peer.is_none());
 
@@ -4004,7 +4147,10 @@ mod tests {
                 _ => break false,
             }
         };
-        assert!(saw_disc, "server must observe disconnect when Main PC forgets peer");
+        assert!(
+            saw_disc,
+            "server must observe disconnect when Main PC forgets peer"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

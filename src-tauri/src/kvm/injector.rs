@@ -167,7 +167,8 @@ pub fn ensure_cursor_visible_with_nudge(context: &str) {
         .unwrap_or(false);
     if changed {
         let desktop = current_input_desktop_name();
-        super::debug_log::note(|| match before {
+        super::debug_log::note(|| {
+            match before {
             Some(i) => format!(
                 "CURSOR_INFO ctx={context} flags=0x{:X} showing={} suppressed={} hCursor=0x{:X} hcursor_null={} desktop=\"{desktop}\"",
                 i.flags,
@@ -177,6 +178,7 @@ pub fn ensure_cursor_visible_with_nudge(context: &str) {
                 i.hcursor_null(),
             ),
             None => format!("CURSOR_INFO ctx={context} query_err=1 desktop=\"{desktop}\""),
+        }
         });
     }
     super::hooks::restore_cursor_visibility();
@@ -338,7 +340,8 @@ mod tests {
         assert!(!hidden.showing);
         assert!(cursor_visibility_needs_nudge(Some(hidden)));
 
-        let visible_null_hcursor = CursorVisibilityInfo::from_flags_and_handle(CURSOR_FLAG_SHOWING, 0);
+        let visible_null_hcursor =
+            CursorVisibilityInfo::from_flags_and_handle(CURSOR_FLAG_SHOWING, 0);
         assert!(visible_null_hcursor.hcursor_null());
         assert!(cursor_visibility_needs_nudge(Some(visible_null_hcursor)));
 
@@ -358,8 +361,14 @@ mod tests {
     #[test]
     fn cursor_info_log_deduplicates_identical_flags_and_hcursor() {
         let mut last = None;
-        let a = Some(CursorVisibilityInfo::from_flags_and_handle(CURSOR_FLAG_SHOWING, 0x1001));
-        let b = Some(CursorVisibilityInfo::from_flags_and_handle(CURSOR_FLAG_SHOWING, 0x2002));
+        let a = Some(CursorVisibilityInfo::from_flags_and_handle(
+            CURSOR_FLAG_SHOWING,
+            0x1001,
+        ));
+        let b = Some(CursorVisibilityInfo::from_flags_and_handle(
+            CURSOR_FLAG_SHOWING,
+            0x2002,
+        ));
         let c = Some(CursorVisibilityInfo::from_flags_and_handle(0, 0x2002));
 
         assert!(should_log_cursor_info(&mut last, a));

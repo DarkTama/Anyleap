@@ -1,7 +1,10 @@
 use super::files::send_image;
 use super::identity::{ct_eq, peer_fingerprint, server_config, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
-use super::protocol::{decode_delta, read_frame, read_frame_capped, write_frame, KvmPacket, Outbound, TransferEvent, UdpMouseDelta};
+use super::protocol::{
+    decode_delta, read_frame, read_frame_capped, write_frame, KvmPacket, Outbound, TransferEvent,
+    UdpMouseDelta,
+};
 use rand::{rngs::OsRng, Rng};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -179,13 +182,19 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
     let trusted_entry = ctx.trust.by_fingerprint(&fp);
     let trusted = trusted_entry.is_some();
 
-    let Ok(Ok((mut send, mut recv))) = timeout(Duration::from_secs(10), conn.accept_bi()).await else {
+    let Ok(Ok((mut send, mut recv))) = timeout(Duration::from_secs(10), conn.accept_bi()).await
+    else {
         conn.close(1u32.into(), b"no control stream");
         return;
     };
 
     // Authorisation: unknown peers may only send `Pair`; anything else closes the connection.
-    let first = match timeout(Duration::from_secs(10), read_frame_capped::<_, KvmPacket>(&mut recv, MAX_HELLO)).await {
+    let first = match timeout(
+        Duration::from_secs(10),
+        read_frame_capped::<_, KvmPacket>(&mut recv, MAX_HELLO),
+    )
+    .await
+    {
         Ok(Ok(Some(p))) => p,
         _ => {
             conn.close(1u32.into(), b"no hello");
@@ -249,7 +258,10 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
             }
             if matches!(other, KvmPacket::SessionDisconnect) {
                 disconnected_early = true;
-            } else if !matches!(other, KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }) {
+            } else if !matches!(
+                other,
+                KvmPacket::PairAck { .. } | KvmPacket::PeerDisconnected { .. }
+            ) {
                 let _ = ctx.incoming_tx.send(other);
             }
         }
@@ -259,68 +271,68 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
         }
     }
 
-fn spawn_server_bulk_transfer(
-    conn: &quinn::Connection,
-    xfer_tx: &broadcast::Sender<TransferEvent>,
-    kind: super::files::BulkTransferKind,
-    id: String,
-    rel_path: String,
-    path: std::path::PathBuf,
-    size: u64,
-) {
-    let c = conn.clone();
-    let tx = xfer_tx.clone();
-    tokio::spawn(async move {
-        let id_prog = id.clone();
-        let name_prog = rel_path.clone();
-        let tx_prog = tx.clone();
-        let kind_str = kind.as_str();
-        let res = super::files::send_tracked_bulk_file(
-            &c,
-            kind,
-            "server",
-            id.clone(),
-            rel_path.clone(),
-            &path,
-            size,
-            |pct| {
-                let (emit_pct, emit_state) = match kind {
-                    super::files::BulkTransferKind::Drag => (pct.min(99), "active"),
-                    super::files::BulkTransferKind::Clip => {
-                        (pct, if pct >= 100 { "done" } else { "active" })
-                    }
-                };
-                let _ = tx_prog.send(TransferEvent::Progress {
-                    id: id_prog.clone(),
-                    kind: kind_str.to_string(),
-                    name: name_prog.clone(),
-                    pct: emit_pct,
-                    state: emit_state.to_string(),
-                    size_bytes: size,
-                });
-            },
-        )
-        .await;
-        if let Err(reason) = res {
-            if reason == super::files::TRANSFER_CANCELLED_ERR {
-                let meta = super::files::TransferCancelMeta {
-                    id,
-                    kind: kind_str.to_string(),
-                    name: rel_path,
-                    size_bytes: size,
-                };
-                super::files::emit_cancelled_once(c.stable_id(), &meta, Some(&tx));
-            } else {
-                let _ = tx.send(TransferEvent::Failed {
-                    id,
-                    kind: kind_str.to_string(),
-                    name: rel_path,
-                    reason,
-                });
+    fn spawn_server_bulk_transfer(
+        conn: &quinn::Connection,
+        xfer_tx: &broadcast::Sender<TransferEvent>,
+        kind: super::files::BulkTransferKind,
+        id: String,
+        rel_path: String,
+        path: std::path::PathBuf,
+        size: u64,
+    ) {
+        let c = conn.clone();
+        let tx = xfer_tx.clone();
+        tokio::spawn(async move {
+            let id_prog = id.clone();
+            let name_prog = rel_path.clone();
+            let tx_prog = tx.clone();
+            let kind_str = kind.as_str();
+            let res = super::files::send_tracked_bulk_file(
+                &c,
+                kind,
+                "server",
+                id.clone(),
+                rel_path.clone(),
+                &path,
+                size,
+                |pct| {
+                    let (emit_pct, emit_state) = match kind {
+                        super::files::BulkTransferKind::Drag => (pct.min(99), "active"),
+                        super::files::BulkTransferKind::Clip => {
+                            (pct, if pct >= 100 { "done" } else { "active" })
+                        }
+                    };
+                    let _ = tx_prog.send(TransferEvent::Progress {
+                        id: id_prog.clone(),
+                        kind: kind_str.to_string(),
+                        name: name_prog.clone(),
+                        pct: emit_pct,
+                        state: emit_state.to_string(),
+                        size_bytes: size,
+                    });
+                },
+            )
+            .await;
+            if let Err(reason) = res {
+                if reason == super::files::TRANSFER_CANCELLED_ERR {
+                    let meta = super::files::TransferCancelMeta {
+                        id,
+                        kind: kind_str.to_string(),
+                        name: rel_path,
+                        size_bytes: size,
+                    };
+                    super::files::emit_cancelled_once(c.stable_id(), &meta, Some(&tx));
+                } else {
+                    let _ = tx.send(TransferEvent::Failed {
+                        id,
+                        kind: kind_str.to_string(),
+                        name: rel_path,
+                        reason,
+                    });
+                }
             }
-        }
-    });
-}
+        });
+    }
 
     if !disconnected_early {
         // Authorised session from here on.
@@ -451,7 +463,11 @@ fn spawn_server_bulk_transfer(
         }));
         // --- /SPEC-25b ---
 
-        let (uni_conn, transfer_tx, dir) = (conn.clone(), ctx.transfer_tx.clone(), ctx.download_dir.clone());
+        let (uni_conn, transfer_tx, dir) = (
+            conn.clone(),
+            ctx.transfer_tx.clone(),
+            ctx.download_dir.clone(),
+        );
         tasks.push(tokio::spawn(async move {
             let conn_id = uni_conn.stable_id();
             while let Ok(mut s) = uni_conn.accept_uni().await {
@@ -540,7 +556,9 @@ fn spawn_server_bulk_transfer(
 
     conn.close(0u32.into(), b"bye");
     if let Some(computer_id) = peer_computer_id {
-        let _ = ctx.incoming_tx.send(KvmPacket::PeerDisconnected { computer_id });
+        let _ = ctx
+            .incoming_tx
+            .send(KvmPacket::PeerDisconnected { computer_id });
     } else {
         let _ = ctx.incoming_tx.send(KvmPacket::SessionDisconnect);
     }
@@ -642,7 +660,10 @@ mod tests {
         assert_eq!(c.peer_monitors, default_mons());
         c.send_packet(key(65)).await.unwrap();
         assert_eq!(next_key(&mut rx).await, Some(65));
-        assert_eq!(r.srv_trust.by_address("127.0.0.1").unwrap().computer_id, "cli");
+        assert_eq!(
+            r.srv_trust.by_address("127.0.0.1").unwrap().computer_id,
+            "cli"
+        );
         drop(c);
 
         let c2 = connect(&r, None).await.expect("reconnect without PIN");
@@ -657,7 +678,11 @@ mod tests {
         let mut rx = r.srv.incoming_tx.subscribe();
         let first = r.srv.pin();
         for _ in 0..5 {
-            let wrong = if first == "100000" { "100001" } else { "100000" };
+            let wrong = if first == "100000" {
+                "100001"
+            } else {
+                "100000"
+            };
             let err = connect(&r, Some(wrong.into())).await.err().unwrap();
             assert!(err.contains("Incorrect PIN"), "{err}");
         }
@@ -671,14 +696,20 @@ mod tests {
     async fn lockout_rejects_even_correct_pin_then_expires() {
         let r = rig("lockout").await;
         let first = r.srv.pin();
-        let wrong = if first == "100000" { "100001" } else { "100000" };
+        let wrong = if first == "100000" {
+            "100001"
+        } else {
+            "100000"
+        };
         for _ in 0..5 {
             assert!(connect(&r, Some(wrong.into())).await.is_err());
         }
         let err = connect(&r, Some(r.srv.pin())).await.err().unwrap();
         assert!(err.contains("Incorrect PIN"), "locked: {err}");
         tokio::time::sleep(PAIR_LOCKOUT + Duration::from_millis(200)).await;
-        connect(&r, Some(r.srv.pin())).await.expect("paired after lockout");
+        connect(&r, Some(r.srv.pin()))
+            .await
+            .expect("paired after lockout");
         let _ = std::fs::remove_dir_all(&r.dir);
     }
 
@@ -687,10 +718,19 @@ mod tests {
         let r = rig("bighello").await;
         let mut ep = quinn::Endpoint::client(([0, 0, 0, 0], 0).into()).unwrap();
         ep.set_default_client_config(client_config(&r.cli_id).unwrap());
-        let conn = ep.connect(([127, 0, 0, 1], r.srv.port).into(), "anyleap-kvm").unwrap().await.unwrap();
+        let conn = ep
+            .connect(([127, 0, 0, 1], r.srv.port).into(), "anyleap-kvm")
+            .unwrap()
+            .await
+            .unwrap();
         let (mut send, _recv) = conn.open_bi().await.unwrap();
-        tokio::io::AsyncWriteExt::write_all(&mut send, &(1_000_000u32).to_be_bytes()).await.unwrap();
-        assert!(timeout(Duration::from_secs(3), conn.closed()).await.is_ok(), "server must close");
+        tokio::io::AsyncWriteExt::write_all(&mut send, &(1_000_000u32).to_be_bytes())
+            .await
+            .unwrap();
+        assert!(
+            timeout(Duration::from_secs(3), conn.closed()).await.is_ok(),
+            "server must close"
+        );
         let _ = std::fs::remove_dir_all(&r.dir);
     }
 
@@ -700,10 +740,17 @@ mod tests {
         let mut rx = r.srv.incoming_tx.subscribe();
         let mut ep = quinn::Endpoint::client(([0, 0, 0, 0], 0).into()).unwrap();
         ep.set_default_client_config(client_config(&r.cli_id).unwrap());
-        let conn = ep.connect(([127, 0, 0, 1], r.srv.port).into(), "anyleap-kvm").unwrap().await.unwrap();
+        let conn = ep
+            .connect(([127, 0, 0, 1], r.srv.port).into(), "anyleap-kvm")
+            .unwrap()
+            .await
+            .unwrap();
         let (mut send, _recv) = conn.open_bi().await.unwrap();
         write_frame(&mut send, &key(65)).await.unwrap();
-        assert!(timeout(Duration::from_secs(3), conn.closed()).await.is_ok(), "server must close");
+        assert!(
+            timeout(Duration::from_secs(3), conn.closed()).await.is_ok(),
+            "server must close"
+        );
         assert_eq!(next_key(&mut rx).await, None);
         let _ = std::fs::remove_dir_all(&r.dir);
     }
@@ -742,11 +789,16 @@ mod tests {
     #[tokio::test]
     async fn five_mb_file_arrives_identical_while_control_flows() {
         let r = rig("file").await;
-        let (mut rx, mut trx, mut drx) =
-            (r.srv.incoming_tx.subscribe(), r.srv.transfer_tx.subscribe(), r.srv.mouse_delta_tx.subscribe());
+        let (mut rx, mut trx, mut drx) = (
+            r.srv.incoming_tx.subscribe(),
+            r.srv.transfer_tx.subscribe(),
+            r.srv.mouse_delta_tx.subscribe(),
+        );
         let c = connect(&r, Some(r.srv.pin())).await.unwrap();
 
-        let data: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let data: Vec<u8> = (0..5 * 1024 * 1024u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
         let src = r.dir.join("big.bin");
         std::fs::write(&src, &data).unwrap();
         let conn = c.conn.clone();
@@ -754,21 +806,38 @@ mod tests {
 
         for code in 0..20u16 {
             c.send_packet(key(code)).await.unwrap();
-            send_delta(&c.conn, &UdpMouseDelta { dx: 1, dy: 2, seq: code as u32 });
+            send_delta(
+                &c.conn,
+                &UdpMouseDelta {
+                    dx: 1,
+                    dy: 2,
+                    seq: code as u32,
+                },
+            );
         }
         for code in 0..20u16 {
             assert_eq!(next_key(&mut rx).await, Some(code));
         }
-        assert!(timeout(Duration::from_secs(3), drx.recv()).await.is_ok(), "datagram delivered");
+        assert!(
+            timeout(Duration::from_secs(3), drx.recv()).await.is_ok(),
+            "datagram delivered"
+        );
 
         sender.await.unwrap().unwrap();
-        match timeout(Duration::from_secs(10), trx.recv()).await.unwrap().unwrap() {
+        match timeout(Duration::from_secs(10), trx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
             TransferEvent::File { name, size } => {
                 assert_eq!((name.as_str(), size), ("big.bin", data.len() as u64));
             }
             other => panic!("unexpected {other:?}"),
         }
-        assert_eq!(std::fs::read(r.dir.join("dl").join("big.bin")).unwrap(), data);
+        assert_eq!(
+            std::fs::read(r.dir.join("dl").join("big.bin")).unwrap(),
+            data
+        );
         let _ = std::fs::remove_dir_all(&r.dir);
     }
 
@@ -815,7 +884,11 @@ mod tests {
         // Drain the two Pair notifications
         let mut paired_ids = Vec::new();
         for _ in 0..2 {
-            if let Ok(KvmPacket::Pair { computer_id, .. }) = timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap() {
+            if let Ok(KvmPacket::Pair { computer_id, .. }) =
+                timeout(Duration::from_secs(3), srv_in_rx.recv())
+                    .await
+                    .unwrap()
+            {
                 paired_ids.push(computer_id);
             }
         }
@@ -834,8 +907,14 @@ mod tests {
         .await
         .unwrap();
 
-        let (entry_edge, mut cursor_pos) = match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
-            KvmPacket::CursorEnter { edge, relative_y, .. } => {
+        let (entry_edge, mut cursor_pos) = match timeout(Duration::from_secs(3), srv_in_rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            KvmPacket::CursorEnter {
+                edge, relative_y, ..
+            } => {
                 let e = Edge::from_str(&edge).unwrap();
                 let pos = map_cursor_enter(&srv_mons, e, relative_y);
                 (e, pos)
@@ -846,7 +925,10 @@ mod tests {
 
         // Controller sends move right, then move left past the entry edge
         c1.send_mouse_delta(10, 0);
-        let d1 = timeout(Duration::from_secs(3), srv_delta_rx.recv()).await.unwrap().unwrap();
+        let d1 = timeout(Duration::from_secs(3), srv_delta_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         match receiver_step(cursor_pos, (d1.dx, d1.dy), &srv_mons, entry_edge) {
             ReceiverStep::Move(p) => cursor_pos = p,
             other => panic!("expected Move, got {other:?}"),
@@ -854,7 +936,10 @@ mod tests {
         assert_eq!(cursor_pos, (12, 540));
 
         c1.send_mouse_delta(-20, 0);
-        let d2 = timeout(Duration::from_secs(3), srv_delta_rx.recv()).await.unwrap().unwrap();
+        let d2 = timeout(Duration::from_secs(3), srv_delta_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         match receiver_step(cursor_pos, (d2.dx, d2.dy), &srv_mons, entry_edge) {
             ReceiverStep::Return { edge, relative_y } => {
                 srv_out_tx
@@ -869,8 +954,14 @@ mod tests {
             other => panic!("expected Return, got {other:?}"),
         }
 
-        match timeout(Duration::from_secs(3), c1_in_rx.recv()).await.unwrap().unwrap() {
-            KvmPacket::CursorReturn { edge, relative_y, .. } => {
+        match timeout(Duration::from_secs(3), c1_in_rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            KvmPacket::CursorReturn {
+                edge, relative_y, ..
+            } => {
                 assert_eq!(edge, "left");
                 assert!((relative_y - 0.5).abs() < 1e-4);
             }
@@ -880,7 +971,10 @@ mod tests {
         // ReleaseAll delivered
         c1.send_packet(KvmPacket::ReleaseAll).await.unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::ReleaseAll
         );
 
@@ -922,7 +1016,9 @@ mod tests {
         r.srv_trust.add(srv_entry);
 
         // Reconnect without PIN at the new address (127.0.0.1); fingerprint match must succeed and update address.
-        let c2 = connect(&r, None).await.expect("reconnect by fingerprint after IP change");
+        let c2 = connect(&r, None)
+            .await
+            .expect("reconnect by fingerprint after IP change");
         c2.send_packet(key(66)).await.unwrap();
         assert_eq!(next_key(&mut rx).await, Some(66));
 
@@ -981,7 +1077,8 @@ mod tests {
         ];
         let origin = Point { x: 0, y: 1080 };
 
-        let dir = std::env::temp_dir().join(format!("anyleap-quic-spec24_seams-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("anyleap-quic-spec24_seams-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let srv_id = Identity::load_or_create(&dir.join("srv")).unwrap();
         let cli_id = Identity::load_or_create(&dir.join("cli")).unwrap();
@@ -1192,27 +1289,41 @@ mod tests {
         let mut cli_in_rx = c.incoming_tx.subscribe();
 
         // Drain initial Pair packet
-        let _ = timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap();
+        let _ = timeout(Duration::from_secs(3), srv_in_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         // 1. SessionLock (client -> server)
         c.send_packet(KvmPacket::SessionLock).await.unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::SessionLock
         );
 
         // 2. OpenUrl (client -> server, and server -> client)
         let url = "https://example.com/anyleap".to_string();
-        c.send_packet(KvmPacket::OpenUrl { url: url.clone() }).await.unwrap();
+        c.send_packet(KvmPacket::OpenUrl { url: url.clone() })
+            .await
+            .unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::OpenUrl { url: url.clone() }
         );
         srv_out_tx
             .send(Outbound::Packet(KvmPacket::OpenUrl { url: url.clone() }))
             .unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), cli_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), cli_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::OpenUrl { url }
         );
 
@@ -1237,7 +1348,11 @@ mod tests {
 
         let mut saw_100 = false;
         loop {
-            match timeout(Duration::from_secs(3), srv_trx.recv()).await.unwrap().unwrap() {
+            match timeout(Duration::from_secs(3), srv_trx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
                 TransferEvent::Progress {
                     id,
                     kind,
@@ -1275,7 +1390,10 @@ mod tests {
         }
         assert!(saw_100);
         assert_eq!(
-            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::OpenFile {
                 transfer_id: "tid-1".into(),
             }
@@ -1324,7 +1442,11 @@ mod tests {
 
         // Wait until receiver starts receiving progress.
         loop {
-            match timeout(Duration::from_secs(5), srv_trx.recv()).await.unwrap().unwrap() {
+            match timeout(Duration::from_secs(5), srv_trx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
                 TransferEvent::Progress { id, .. } if id == id_rx => break,
                 _ => {}
             }
@@ -1340,13 +1462,21 @@ mod tests {
                 size_bytes: meta.size_bytes,
             });
         }
-        assert!(!srv_conns.is_empty(), "server must have active receiver registration");
+        assert!(
+            !srv_conns.is_empty(),
+            "server must have active receiver registration"
+        );
         r.srv
             .outgoing_tx
-            .send(Outbound::Packet(KvmPacket::TransferCancel { id: id_rx.clone() }))
+            .send(Outbound::Packet(KvmPacket::TransferCancel {
+                id: id_rx.clone(),
+            }))
             .unwrap();
 
-        let send_res = timeout(Duration::from_secs(5), send_task).await.unwrap().unwrap();
+        let send_res = timeout(Duration::from_secs(5), send_task)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(send_res.is_err(), "sender must abort on cancel");
 
         // Both sides must observe TransferEvent::Cancelled, and no partial files remain.
@@ -1359,7 +1489,10 @@ mod tests {
         }
         assert!(saw_cli_cancel, "sender (client) must observe Cancelled");
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!open_dir_rx.exists(), "partial open staging dir must be removed");
+        assert!(
+            !open_dir_rx.exists(),
+            "partial open staging dir must be removed"
+        );
 
         // Case 2: Sender initiates cancel mid-transfer.
         let id_tx = format!("tid-tx-cancel-{}", std::process::id());
@@ -1386,13 +1519,17 @@ mod tests {
         });
 
         loop {
-            match timeout(Duration::from_secs(5), srv_trx.recv()).await.unwrap().unwrap() {
+            match timeout(Duration::from_secs(5), srv_trx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
                 TransferEvent::Progress { id, .. } if id == id_tx => break,
                 _ => {}
             }
         }
-        if let Some(meta) = crate::kvm::files::global_cancel_registry()
-            .cancel_for_conn(c.conn.stable_id(), &id_tx)
+        if let Some(meta) =
+            crate::kvm::files::global_cancel_registry().cancel_for_conn(c.conn.stable_id(), &id_tx)
         {
             let _ = c.transfer_tx.send(TransferEvent::Cancelled {
                 id: meta.id,
@@ -1405,7 +1542,10 @@ mod tests {
             .await
             .unwrap();
 
-        let send_res2 = timeout(Duration::from_secs(5), send_task2).await.unwrap().unwrap();
+        let send_res2 = timeout(Duration::from_secs(5), send_task2)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(send_res2.is_err());
 
         let mut saw_srv_cancel = false;
@@ -1417,7 +1557,10 @@ mod tests {
         }
         assert!(saw_srv_cancel, "receiver (server) must observe Cancelled");
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!open_dir_tx.exists(), "partial open staging dir must be removed on sender cancel");
+        assert!(
+            !open_dir_tx.exists(),
+            "partial open staging dir must be removed on sender cancel"
+        );
 
         let _ = std::fs::remove_dir_all(&open_dir_rx);
         let _ = std::fs::remove_dir_all(&open_dir_tx);
@@ -1428,7 +1571,9 @@ mod tests {
     // --- SPEC-25b ---
     #[tokio::test]
     async fn loopback_audio_start_and_audio_datagrams() {
-        use crate::kvm::audio::{JitterBuffer, AUDIO_PACKET_BYTES, JITTER_MAX_FRAMES, JITTER_TARGET_FRAMES};
+        use crate::kvm::audio::{
+            JitterBuffer, AUDIO_PACKET_BYTES, JITTER_MAX_FRAMES, JITTER_TARGET_FRAMES,
+        };
         use crate::kvm::protocol::encode_audio_datagram;
 
         let r = rig("audio-25b").await;
@@ -1439,7 +1584,11 @@ mod tests {
 
         // Drain Pair
         loop {
-            match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
+            match timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
                 KvmPacket::Pair { .. } => break,
                 _ => continue,
             }
@@ -1455,14 +1604,21 @@ mod tests {
         .await
         .unwrap();
 
-        match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
+        match timeout(Duration::from_secs(3), srv_in_rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
             KvmPacket::AudioStart {
                 sample_rate,
                 channels,
                 frame_ms,
                 mute_local,
             } => {
-                assert_eq!((sample_rate, channels, frame_ms, mute_local), (48_000, 2, 5, true));
+                assert_eq!(
+                    (sample_rate, channels, frame_ms, mute_local),
+                    (48_000, 2, 5, true)
+                );
             }
             other => panic!("expected AudioStart, got {other:?}"),
         }
@@ -1475,7 +1631,10 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), cli_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), cli_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::AudioMuteState {
                 state: "muted".to_string(),
             }
@@ -1509,7 +1668,10 @@ mod tests {
             .send(Outbound::Packet(KvmPacket::AudioActivity { active: true }))
             .unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), cli_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), cli_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::AudioActivity { active: true }
         );
 
@@ -1520,7 +1682,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::MediaKey {
                 vk: 0xB3,
                 is_down: true
@@ -1529,7 +1694,10 @@ mod tests {
 
         cli.send_packet(KvmPacket::AudioStop).await.unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            timeout(Duration::from_secs(3), srv_in_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
             KvmPacket::AudioStop
         );
 
@@ -1736,7 +1904,9 @@ mod tests {
         });
 
         // Control stream must stay responsive while a 400 MB ClipFile is streaming.
-        c.send_packet(KvmPacket::MouseWheel { delta: 42 }).await.unwrap();
+        c.send_packet(KvmPacket::MouseWheel { delta: 42 })
+            .await
+            .unwrap();
         loop {
             match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
                 Ok(Ok(KvmPacket::MouseWheel { delta: 42 })) => break,
@@ -1769,7 +1939,10 @@ mod tests {
                     break path;
                 }
                 Ok(Ok(_)) => continue,
-                other => panic!("expected TransferEvent::ClipFile after {:?}, got {other:?}", t0.elapsed()),
+                other => panic!(
+                    "expected TransferEvent::ClipFile after {:?}, got {other:?}",
+                    t0.elapsed()
+                ),
             }
         };
         send_task.await.unwrap().unwrap();
@@ -1842,13 +2015,20 @@ mod tests {
 
         loop {
             match timeout(Duration::from_secs(5), srv_xfer_rx.recv()).await {
-                Ok(Ok(TransferEvent::Failed { id, kind, name, reason })) if id == offer_id => {
+                Ok(Ok(TransferEvent::Failed {
+                    id,
+                    kind,
+                    name,
+                    reason,
+                })) if id == offer_id => {
                     assert_eq!(kind, "clip");
                     assert_eq!(name, "broken.bin");
                     assert!(!reason.is_empty());
                     break;
                 }
-                Ok(Ok(TransferEvent::ClipFile { offer_id: ev_id, .. })) if ev_id == offer_id => {
+                Ok(Ok(TransferEvent::ClipFile {
+                    offer_id: ev_id, ..
+                })) if ev_id == offer_id => {
                     panic!("truncated ClipFile must never complete");
                 }
                 Ok(Ok(_)) => continue,
@@ -1857,7 +2037,10 @@ mod tests {
         }
 
         let part_path = plan.base_dir.join("broken.bin.part");
-        assert!(!part_path.exists(), "failed transfer must remove .part file");
+        assert!(
+            !part_path.exists(),
+            "failed transfer must remove .part file"
+        );
         cleanup_staging_entry(&staging_root, &offer_id);
         let _ = std::fs::remove_dir_all(&r.dir);
     }
@@ -2001,7 +2184,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         let _ = rx_stop_tx.send(());
         let mut latencies = recv_task.await.unwrap();
-        assert!(!latencies.is_empty(), "must receive mouse datagrams during transfer");
+        assert!(
+            !latencies.is_empty(),
+            "must receive mouse datagrams during transfer"
+        );
         latencies.sort_unstable();
         let n = latencies.len();
         let p50 = latencies[n / 2];
@@ -2012,7 +2198,10 @@ mod tests {
             "[r2-bench] 300MB elapsed={elapsed:?} throughput={mb_per_sec:.1} MB/s datagrams_sent={sent_count} recv={n} p50={p50}us p95={p95}us max={max}us"
         );
         // Loose CI safety sanity bound only (non-flaky on busy loopback runners).
-        assert!(max < 10_000_000, "unexpected >10s datagram stall: max={max}us");
+        assert!(
+            max < 10_000_000,
+            "unexpected >10s datagram stall: max={max}us"
+        );
 
         cleanup_staging_entry(&staging_root, &offer_id);
 
@@ -2139,9 +2328,7 @@ mod tests {
 
     #[tokio::test]
     async fn loopback_clip_file_cancels_cleanly_from_both_sides() {
-        use crate::kvm::files::{
-            global_cancel_registry, send_clip_file, TRANSFER_CANCELLED_ERR,
-        };
+        use crate::kvm::files::{global_cancel_registry, send_clip_file, TRANSFER_CANCELLED_ERR};
         use crate::kvm::protocol::{FileMeta, TransferEvent};
         use crate::kvm::staging::{
             cleanup_staging_entry, default_staging_root, register_transfer_offer, TransferKind,
@@ -2225,7 +2412,10 @@ mod tests {
 
         // Receiver cancels locally + sends TransferCancel to sender.
         let srv_cancelled = global_cancel_registry().cancel_except_conn(c.conn.stable_id(), &id_rx);
-        assert!(!srv_cancelled.is_empty(), "receiver must have registered active transfer");
+        assert!(
+            !srv_cancelled.is_empty(),
+            "receiver must have registered active transfer"
+        );
         for (_, meta) in &srv_cancelled {
             let _ = r.srv.transfer_tx.send(TransferEvent::Cancelled {
                 id: meta.id.clone(),
@@ -2236,11 +2426,19 @@ mod tests {
         }
         r.srv
             .outgoing_tx
-            .send(Outbound::Packet(KvmPacket::TransferCancel { id: id_rx.clone() }))
+            .send(Outbound::Packet(KvmPacket::TransferCancel {
+                id: id_rx.clone(),
+            }))
             .unwrap();
 
-        let send_res1 = timeout(Duration::from_secs(5), send_task1).await.unwrap().unwrap();
-        assert_eq!(send_res1.as_ref().map_err(String::as_str), Err(TRANSFER_CANCELLED_ERR));
+        let send_res1 = timeout(Duration::from_secs(5), send_task1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            send_res1.as_ref().map_err(String::as_str),
+            Err(TRANSFER_CANCELLED_ERR)
+        );
 
         let mut srv_saw_cancel = false;
         let mut cli_saw_cancel = false;
@@ -2263,9 +2461,15 @@ mod tests {
                 break;
             }
         }
-        assert!(srv_saw_cancel && cli_saw_cancel, "both sides must see cancelled (srv={srv_saw_cancel}, cli={cli_saw_cancel})");
+        assert!(
+            srv_saw_cancel && cli_saw_cancel,
+            "both sides must see cancelled (srv={srv_saw_cancel}, cli={cli_saw_cancel})"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!plan_rx.base_dir.exists(), "cancelled clip staging dir + .part must be removed");
+        assert!(
+            !plan_rx.base_dir.exists(),
+            "cancelled clip staging dir + .part must be removed"
+        );
 
         // Phase 2: Sender-initiated cancel mid-way.
         let id_tx = format!("clip-tx-cancel-{}", std::process::id());
@@ -2332,8 +2536,14 @@ mod tests {
             .await
             .unwrap();
 
-        let send_res2 = timeout(Duration::from_secs(5), send_task2).await.unwrap().unwrap();
-        assert_eq!(send_res2.as_ref().map_err(String::as_str), Err(TRANSFER_CANCELLED_ERR));
+        let send_res2 = timeout(Duration::from_secs(5), send_task2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            send_res2.as_ref().map_err(String::as_str),
+            Err(TRANSFER_CANCELLED_ERR)
+        );
 
         let mut srv_saw_cancel2 = false;
         let mut cli_saw_cancel2 = false;
@@ -2358,7 +2568,10 @@ mod tests {
         }
         assert!(srv_saw_cancel2 && cli_saw_cancel2, "both sides must see cancelled in phase 2 (srv={srv_saw_cancel2}, cli={cli_saw_cancel2})");
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!plan_tx.base_dir.exists(), "cancelled phase 2 staging dir + .part must be removed");
+        assert!(
+            !plan_tx.base_dir.exists(),
+            "cancelled phase 2 staging dir + .part must be removed"
+        );
 
         cleanup_staging_entry(&staging_root, &id_rx);
         cleanup_staging_entry(&staging_root, &id_tx);

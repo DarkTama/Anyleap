@@ -87,14 +87,26 @@ pub fn normalize_in_union(pos: (i32, i32), union: &ScreenRect) -> (f32, f32) {
     )
 }
 
-pub fn monitor_at_point(monitors: &[MonitorDisplay], x: i32, y: i32) -> Option<(usize, &MonitorDisplay)> {
-    monitors
-        .iter()
-        .enumerate()
-        .find(|(_, m)| m.width > 0 && m.height > 0 && x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height)
+pub fn monitor_at_point(
+    monitors: &[MonitorDisplay],
+    x: i32,
+    y: i32,
+) -> Option<(usize, &MonitorDisplay)> {
+    monitors.iter().enumerate().find(|(_, m)| {
+        m.width > 0
+            && m.height > 0
+            && x >= m.x
+            && x < m.x + m.width
+            && y >= m.y
+            && y < m.y + m.height
+    })
 }
 
-pub fn nearest_monitor(monitors: &[MonitorDisplay], x: i32, y: i32) -> Option<(usize, &MonitorDisplay)> {
+pub fn nearest_monitor(
+    monitors: &[MonitorDisplay],
+    x: i32,
+    y: i32,
+) -> Option<(usize, &MonitorDisplay)> {
     let mut best: Option<(i64, usize, &MonitorDisplay)> = None;
     for (idx, m) in monitors.iter().enumerate() {
         if m.width <= 0 || m.height <= 0 {
@@ -124,7 +136,12 @@ pub fn is_edge_monitor(mon: &MonitorDisplay, union: &ScreenRect, edge: Edge) -> 
     }
 }
 
-fn is_in_edge_deadzone(mon: &MonitorDisplay, edge: Edge, perp_coord: i32, deadzone_px: i32) -> bool {
+fn is_in_edge_deadzone(
+    mon: &MonitorDisplay,
+    edge: Edge,
+    perp_coord: i32,
+    deadzone_px: i32,
+) -> bool {
     match edge {
         Edge::Left | Edge::Right => {
             let dz = deadzone_px.max(0).min((mon.height - 1).max(0) / 2);
@@ -151,8 +168,8 @@ pub fn detect_controller_edge(
     // A low-level hook reports the *proposed* position, which lies past the
     // screen edge when the user pushes against it. Resolve it to the nearest
     // monitor and clamp, otherwise pushes past the edge are never detected.
-    let (idx, mon) = monitor_at_point(monitors, pt.0, pt.1)
-        .or_else(|| nearest_monitor(monitors, pt.0, pt.1))?;
+    let (idx, mon) =
+        monitor_at_point(monitors, pt.0, pt.1).or_else(|| nearest_monitor(monitors, pt.0, pt.1))?;
     let union = union_rect(monitors);
     if !is_edge_monitor(mon, &union, link_edge) {
         return None;
@@ -264,7 +281,11 @@ pub fn map_leap_relative_y(
 
 /// Maps `CursorEnter { entry_edge, relative_y }` (normalised over the receiver
 /// union) onto a receiver coordinate 2 px inside the chosen monitor's `entry_edge`.
-pub fn map_cursor_enter(monitors: &[MonitorDisplay], entry_edge: Edge, relative_y: f32) -> (i32, i32) {
+pub fn map_cursor_enter(
+    monitors: &[MonitorDisplay],
+    entry_edge: Edge,
+    relative_y: f32,
+) -> (i32, i32) {
     let rel = relative_y.clamp(0.0, 1.0);
     let union = union_rect(monitors);
     if union.width <= 0 || union.height <= 0 {
@@ -328,7 +349,10 @@ pub fn receiver_step_with_dwell(
     dwell_start_ms: &mut Option<u64>,
     now_ms: u64,
 ) -> ReceiverStep {
-    let next = (cursor.0.saturating_add(delta.0), cursor.1.saturating_add(delta.1));
+    let next = (
+        cursor.0.saturating_add(delta.0),
+        cursor.1.saturating_add(delta.1),
+    );
     let Some((_, cur_mon)) = monitor_at_point(monitors, cursor.0, cursor.1)
         .or_else(|| nearest_monitor(monitors, cursor.0, cursor.1))
     else {
@@ -352,7 +376,8 @@ pub fn receiver_step_with_dwell(
                         && check_y < m.y + m.height
                 });
                 (!has_beyond).then(|| {
-                    let rel = ((check_y - union.y) as f32 / union.height.max(1) as f32).clamp(0.0, 1.0);
+                    let rel =
+                        ((check_y - union.y) as f32 / union.height.max(1) as f32).clamp(0.0, 1.0);
                     (check_y, rel)
                 })
             }
@@ -367,7 +392,8 @@ pub fn receiver_step_with_dwell(
                         && check_y < m.y + m.height
                 });
                 (!has_beyond).then(|| {
-                    let rel = ((check_y - union.y) as f32 / union.height.max(1) as f32).clamp(0.0, 1.0);
+                    let rel =
+                        ((check_y - union.y) as f32 / union.height.max(1) as f32).clamp(0.0, 1.0);
                     (check_y, rel)
                 })
             }
@@ -381,7 +407,8 @@ pub fn receiver_step_with_dwell(
                         && check_x < m.x + m.width
                 });
                 (!has_beyond).then(|| {
-                    let rel = ((check_x - union.x) as f32 / union.width.max(1) as f32).clamp(0.0, 1.0);
+                    let rel =
+                        ((check_x - union.x) as f32 / union.width.max(1) as f32).clamp(0.0, 1.0);
                     (check_x, rel)
                 })
             }
@@ -396,7 +423,8 @@ pub fn receiver_step_with_dwell(
                         && check_x < m.x + m.width
                 });
                 (!has_beyond).then(|| {
-                    let rel = ((check_x - union.x) as f32 / union.width.max(1) as f32).clamp(0.0, 1.0);
+                    let rel =
+                        ((check_x - union.x) as f32 / union.width.max(1) as f32).clamp(0.0, 1.0);
                     (check_x, rel)
                 })
             }
@@ -433,8 +461,12 @@ pub fn receiver_step_with_dwell(
     let Some((_, target_mon)) = nearest_monitor(monitors, next.0, next.1) else {
         return ReceiverStep::Move(next);
     };
-    let clamped_x = next.0.clamp(target_mon.x, target_mon.x + target_mon.width - 1);
-    let clamped_y = next.1.clamp(target_mon.y, target_mon.y + target_mon.height - 1);
+    let clamped_x = next
+        .0
+        .clamp(target_mon.x, target_mon.x + target_mon.width - 1);
+    let clamped_y = next
+        .1
+        .clamp(target_mon.y, target_mon.y + target_mon.height - 1);
     ReceiverStep::Move((clamped_x, clamped_y))
 }
 
@@ -508,7 +540,8 @@ pub fn map_return_position(
                 local_union.height.max(1)
             };
             let target_y = local_union.y + offset_y + (rel * peer_h as f32).round() as i32;
-            let mon = pick_edge_monitor(local_monitors, link_edge, target_y).unwrap_or(fallback_mon);
+            let mon =
+                pick_edge_monitor(local_monitors, link_edge, target_y).unwrap_or(fallback_mon);
             let w = mon.width.max(1);
             let h = mon.height.max(1);
             let x = if link_edge == Edge::Right {
@@ -526,7 +559,8 @@ pub fn map_return_position(
                 local_union.width.max(1)
             };
             let target_x = local_union.x + offset_x + (rel * peer_w as f32).round() as i32;
-            let mon = pick_edge_monitor(local_monitors, link_edge, target_x).unwrap_or(fallback_mon);
+            let mon =
+                pick_edge_monitor(local_monitors, link_edge, target_x).unwrap_or(fallback_mon);
             let w = mon.width.max(1);
             let h = mon.height.max(1);
             let x = target_x.clamp(mon.x, mon.x + w - 1);
@@ -1030,8 +1064,16 @@ pub fn handle_monitor_change_fallback(
         return None;
     }
     let side = prev_side.unwrap_or_else(|| {
-        let ref_main = if prev_main.is_empty() { next_main } else { prev_main };
-        let ref_linked = if prev_linked.is_empty() { next_linked } else { prev_linked };
+        let ref_main = if prev_main.is_empty() {
+            next_main
+        } else {
+            prev_main
+        };
+        let ref_linked = if prev_linked.is_empty() {
+            next_linked
+        } else {
+            prev_linked
+        };
         infer_placement_side(ref_main, ref_linked, prev_origin)
     });
     let new_origin = preset_remote_origin(next_main, next_linked, side);
@@ -1061,7 +1103,10 @@ pub fn detect_controller_edge_seams(
         .or_else(|| nearest_monitor(main_monitors, pt.0, pt.1))?;
     let right = main_mon.x + main_mon.width;
     let bottom = main_mon.y + main_mon.height;
-    let clamped = (pt.0.clamp(main_mon.x, right - 1), pt.1.clamp(main_mon.y, bottom - 1));
+    let clamped = (
+        pt.0.clamp(main_mon.x, right - 1),
+        pt.1.clamp(main_mon.y, bottom - 1),
+    );
     let main_id = main_mon.effective_id();
 
     let linked_union = union_rect(linked_monitors);
@@ -1082,8 +1127,16 @@ pub fn detect_controller_edge_seams(
         }
         let (at_edge, perp, neighbor) = match seam.side {
             Edge::Right => (clamped.0 >= right - 2, clamped.1, (right, clamped.1)),
-            Edge::Left => (clamped.0 < main_mon.x + 2, clamped.1, (main_mon.x - 1, clamped.1)),
-            Edge::Top => (clamped.1 < main_mon.y + 2, clamped.0, (clamped.0, main_mon.y - 1)),
+            Edge::Left => (
+                clamped.0 < main_mon.x + 2,
+                clamped.1,
+                (main_mon.x - 1, clamped.1),
+            ),
+            Edge::Top => (
+                clamped.1 < main_mon.y + 2,
+                clamped.0,
+                (clamped.0, main_mon.y - 1),
+            ),
             Edge::Bottom => (clamped.1 >= bottom - 2, clamped.0, (clamped.0, bottom)),
         };
         if !at_edge {
@@ -1192,7 +1245,10 @@ pub fn receiver_step_with_seams(
     dwell_start_ms: &mut Option<u64>,
     now_ms: u64,
 ) -> ReceiverSeamStep {
-    let next = (cursor.0.saturating_add(delta.0), cursor.1.saturating_add(delta.1));
+    let next = (
+        cursor.0.saturating_add(delta.0),
+        cursor.1.saturating_add(delta.1),
+    );
     let Some((_, cur_mon)) = monitor_at_point(monitors, cursor.0, cursor.1)
         .or_else(|| nearest_monitor(monitors, cursor.0, cursor.1))
     else {
@@ -1241,7 +1297,11 @@ pub fn receiver_step_with_seams(
         }
         let has_beyond = match edge {
             Edge::Left => monitors.iter().any(|m| {
-                m.width > 0 && m.height > 0 && m.x < cur_mon.x && perp >= m.y && perp < m.y + m.height
+                m.width > 0
+                    && m.height > 0
+                    && m.x < cur_mon.x
+                    && perp >= m.y
+                    && perp < m.y + m.height
             }),
             Edge::Right => monitors.iter().any(|m| {
                 m.width > 0
@@ -1252,7 +1312,11 @@ pub fn receiver_step_with_seams(
                     && perp < m.y + m.height
             }),
             Edge::Top => monitors.iter().any(|m| {
-                m.width > 0 && m.height > 0 && m.y < cur_mon.y && perp >= m.x && perp < m.x + m.width
+                m.width > 0
+                    && m.height > 0
+                    && m.y < cur_mon.y
+                    && perp >= m.x
+                    && perp < m.x + m.width
             }),
             Edge::Bottom => monitors.iter().any(|m| {
                 m.width > 0
@@ -1321,8 +1385,12 @@ pub fn receiver_step_with_seams(
     let Some((_, target_mon)) = nearest_monitor(monitors, next.0, next.1) else {
         return ReceiverSeamStep::Move(next);
     };
-    let clamped_x = next.0.clamp(target_mon.x, target_mon.x + target_mon.width - 1);
-    let clamped_y = next.1.clamp(target_mon.y, target_mon.y + target_mon.height - 1);
+    let clamped_x = next
+        .0
+        .clamp(target_mon.x, target_mon.x + target_mon.width - 1);
+    let clamped_y = next
+        .1
+        .clamp(target_mon.y, target_mon.y + target_mon.height - 1);
     ReceiverSeamStep::Move((clamped_x, clamped_y))
 }
 
@@ -1596,10 +1664,16 @@ mod tests {
         ];
 
         // At right edge of Mon1 where Mon2 IS adjacent (y=500): must NOT leap
-        assert_eq!(detect_controller_edge((1919, 500), &mons, Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((1919, 500), &mons, Edge::Right, 48),
+            None
+        );
 
         // At right edge of Mon1 ABOVE Mon2 (y=150): Mon1 is NOT a right-edge monitor (1920 != 3200) -> must NOT leap!
-        assert_eq!(detect_controller_edge((1919, 150), &mons, Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((1919, 150), &mons, Edge::Right, 48),
+            None
+        );
 
         // At right edge of Mon2 (x=3199, y=660): leaps with relative_y of Mon2!
         let hit2 = detect_controller_edge((3199, 660), &mons, Edge::Right, 48).unwrap();
@@ -1607,7 +1681,10 @@ mod tests {
         assert!((hit2.1 - (360.0 / 720.0)).abs() < 1e-4);
 
         // Away from edge (> 2 px inside): no leap
-        assert_eq!(detect_controller_edge((3197, 660), &mons, Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((3197, 660), &mons, Edge::Right, 48),
+            None
+        );
     }
 
     #[test]
@@ -1619,19 +1696,37 @@ mod tests {
         assert!((hit.1 - 0.5).abs() < 1e-3);
         assert!(detect_controller_edge((-12, 540), &mons, Edge::Left, 48).is_some());
         // Past the edge but inside the corner deadzone: still no leap.
-        assert_eq!(detect_controller_edge((1935, 5), &mons, Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((1935, 5), &mons, Edge::Right, 48),
+            None
+        );
         // Past the bottom while linked on the right: not an edge hit.
-        assert_eq!(detect_controller_edge((900, 1100), &mons, Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((900, 1100), &mons, Edge::Right, 48),
+            None
+        );
     }
 
     #[test]
     fn controller_edge_detect_deadzone() {
         let mons = vec![mon("1", 0, 0, 1920, 1080, true)];
         // Top and bottom 48px deadzones block leap
-        assert_eq!(detect_controller_edge((1919, 10), &mons, Edge::Right, 48), None);
-        assert_eq!(detect_controller_edge((1919, 47), &mons, Edge::Right, 48), None);
-        assert_eq!(detect_controller_edge((1919, 1032), &mons, Edge::Right, 48), None);
-        assert_eq!(detect_controller_edge((1919, 1079), &mons, Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((1919, 10), &mons, Edge::Right, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge((1919, 47), &mons, Edge::Right, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge((1919, 1032), &mons, Edge::Right, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge((1919, 1079), &mons, Edge::Right, 48),
+            None
+        );
         // Just inside active region
         assert!(detect_controller_edge((1919, 48), &mons, Edge::Right, 48).is_some());
         assert!(detect_controller_edge((1919, 1031), &mons, Edge::Right, 48).is_some());
@@ -1664,7 +1759,7 @@ mod tests {
         let mut tracker = PressedInputTracker::new();
         tracker.record_key(0xA2, 0x1D, true, false, false); // LCtrl down
         tracker.record_key(0x41, 0x1E, true, false, false); // 'A' down
-        // Injected events must be ignored
+                                                            // Injected events must be ignored
         tracker.record_key(0x42, 0x30, true, false, true);
         tracker.record_key(0x41, 0x1E, false, false, true);
         assert_eq!(tracker.held_keys().len(), 2);
@@ -1697,7 +1792,10 @@ mod tests {
         let m = mon("1", 0, 0, 1920, 1080, true);
         assert_eq!(controller_return_pos(&m, Edge::Right, 0.5), (1917, 540));
         assert_eq!(controller_return_pos(&m, Edge::Left, 0.5), (2, 540));
-        assert_eq!(detect_controller_edge((1917, 540), &[m.clone()], Edge::Right, 48), None);
+        assert_eq!(
+            detect_controller_edge((1917, 540), &[m.clone()], Edge::Right, 48),
+            None
+        );
         assert_eq!(detect_controller_edge((2, 540), &[m], Edge::Left, 48), None);
     }
 
@@ -1712,59 +1810,116 @@ mod tests {
         let rel_r = map_leap_relative_y((1919, 540), &ctrl_union, &peer_union, Edge::Right, 0, 300);
         let enter_r = map_cursor_enter(&peer_mons, Edge::Left, rel_r);
         assert_eq!(enter_r, (2, 240));
-        let ReceiverStep::Return { relative_y: ret_rel_r, .. } =
-            receiver_step((2, 240), (-10, 0), &peer_mons, Edge::Left)
+        let ReceiverStep::Return {
+            relative_y: ret_rel_r,
+            ..
+        } = receiver_step((2, 240), (-10, 0), &peer_mons, Edge::Left)
         else {
             panic!("expected Return");
         };
-        let back_r = map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Right, 0, 300, ret_rel_r);
+        let back_r = map_return_position(
+            &ctrl_mons,
+            &ctrl_mons[0],
+            &peer_union,
+            Edge::Right,
+            0,
+            300,
+            ret_rel_r,
+        );
         assert_eq!(back_r, (1917, 540));
 
         // 2) Left edge with offset_y = -200: controller y=400 aligns with peer y=600.
         let rel_l = map_leap_relative_y((0, 400), &ctrl_union, &peer_union, Edge::Left, 0, -200);
         let enter_l = map_cursor_enter(&peer_mons, Edge::Right, rel_l);
         assert_eq!(enter_l, (1917, 600));
-        let ReceiverStep::Return { relative_y: ret_rel_l, .. } =
-            receiver_step((1917, 600), (10, 0), &peer_mons, Edge::Right)
+        let ReceiverStep::Return {
+            relative_y: ret_rel_l,
+            ..
+        } = receiver_step((1917, 600), (10, 0), &peer_mons, Edge::Right)
         else {
             panic!("expected Return");
         };
-        let back_l = map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Left, 0, -200, ret_rel_l);
+        let back_l = map_return_position(
+            &ctrl_mons,
+            &ctrl_mons[0],
+            &peer_union,
+            Edge::Left,
+            0,
+            -200,
+            ret_rel_l,
+        );
         assert_eq!(back_l, (2, 400));
 
         // 3) Top edge with offset_x = +400: controller x=1000 aligns with peer x=600.
         let rel_t = map_leap_relative_y((1000, 0), &ctrl_union, &peer_union, Edge::Top, 400, 0);
         let enter_t = map_cursor_enter(&peer_mons, Edge::Bottom, rel_t);
         assert_eq!(enter_t, (600, 1077));
-        let ReceiverStep::Return { relative_y: ret_rel_t, .. } =
-            receiver_step((600, 1077), (0, 10), &peer_mons, Edge::Bottom)
+        let ReceiverStep::Return {
+            relative_y: ret_rel_t,
+            ..
+        } = receiver_step((600, 1077), (0, 10), &peer_mons, Edge::Bottom)
         else {
             panic!("expected Return");
         };
-        let back_t = map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Top, 400, 0, ret_rel_t);
+        let back_t = map_return_position(
+            &ctrl_mons,
+            &ctrl_mons[0],
+            &peer_union,
+            Edge::Top,
+            400,
+            0,
+            ret_rel_t,
+        );
         assert_eq!(back_t, (1000, 2));
 
         // 4) Bottom edge with offset_x = -300: controller x=500 aligns with peer x=800.
-        let rel_b = map_leap_relative_y((500, 1079), &ctrl_union, &peer_union, Edge::Bottom, -300, 0);
+        let rel_b =
+            map_leap_relative_y((500, 1079), &ctrl_union, &peer_union, Edge::Bottom, -300, 0);
         let enter_b = map_cursor_enter(&peer_mons, Edge::Top, rel_b);
         assert_eq!(enter_b, (800, 2));
-        let ReceiverStep::Return { relative_y: ret_rel_b, .. } =
-            receiver_step((800, 2), (0, -10), &peer_mons, Edge::Top)
+        let ReceiverStep::Return {
+            relative_y: ret_rel_b,
+            ..
+        } = receiver_step((800, 2), (0, -10), &peer_mons, Edge::Top)
         else {
             panic!("expected Return");
         };
-        let back_b = map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Bottom, -300, 0, ret_rel_b);
+        let back_b = map_return_position(
+            &ctrl_mons,
+            &ctrl_mons[0],
+            &peer_union,
+            Edge::Bottom,
+            -300,
+            0,
+            ret_rel_b,
+        );
         assert_eq!(back_b, (500, 1077));
 
         // 5) Out-of-span return clamps to controller edge monitor.
         // With offset_y = +500, peer bottom (rel=1.0 -> 1580) clamps to 1079 on ctrl_mons[0].
         assert_eq!(
-            map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Right, 0, 500, 1.0),
+            map_return_position(
+                &ctrl_mons,
+                &ctrl_mons[0],
+                &peer_union,
+                Edge::Right,
+                0,
+                500,
+                1.0
+            ),
             (1917, 1079)
         );
         // With offset_x = -500, peer left (rel=0.0 -> -500) clamps to 0 on ctrl_mons[0].
         assert_eq!(
-            map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Bottom, -500, 0, 0.0),
+            map_return_position(
+                &ctrl_mons,
+                &ctrl_mons[0],
+                &peer_union,
+                Edge::Bottom,
+                -500,
+                0,
+                0.0
+            ),
             (0, 1077)
         );
     }
@@ -1776,15 +1931,36 @@ mod tests {
             mon("c1", 0, 0, 1920, 1080, true),
             mon("c2", 1920, 300, 1280, 720, false),
         ];
-        let peer_union = ScreenRect { x: 0, y: 0, width: 1920, height: 1080 };
+        let peer_union = ScreenRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
         // Returning at y=600 (offset_y=0) hits c2 (right-edge monitor) -> x = 3197.
         assert_eq!(
-            map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Right, 0, 0, 600.0 / 1080.0),
+            map_return_position(
+                &ctrl_mons,
+                &ctrl_mons[0],
+                &peer_union,
+                Edge::Right,
+                0,
+                0,
+                600.0 / 1080.0
+            ),
             (3197, 600)
         );
         // Returning at y=150 (above c2) clamps to c2's top (300) and never lands on non-edge c1.
         assert_eq!(
-            map_return_position(&ctrl_mons, &ctrl_mons[0], &peer_union, Edge::Right, 0, 0, 150.0 / 1080.0),
+            map_return_position(
+                &ctrl_mons,
+                &ctrl_mons[0],
+                &peer_union,
+                Edge::Right,
+                0,
+                0,
+                150.0 / 1080.0
+            ),
             (3197, 300)
         );
     }
@@ -1795,7 +1971,16 @@ mod tests {
         let mons = vec![mon("1", 0, 0, 1920, 1080, true)];
         let mut dwell_start = None;
         assert_eq!(
-            receiver_step_with_dwell((5, 540), (-10, 0), &mons, Edge::Left, 0, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (5, 540),
+                (-10, 0),
+                &mons,
+                Edge::Left,
+                0,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Return {
                 edge: Edge::Left,
                 relative_y: 0.5,
@@ -1811,21 +1996,48 @@ mod tests {
 
         // First push against Left edge starts timer and holds cursor at x=0.
         assert_eq!(
-            receiver_step_with_dwell((5, 540), (-10, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (5, 540),
+                (-10, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Move((0, 540))
         );
         assert_eq!(dwell_start, Some(1000));
 
         // Still pushing before 120 ms elapsed: held at edge.
         assert_eq!(
-            receiver_step_with_dwell((0, 540), (-8, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1080),
+            receiver_step_with_dwell(
+                (0, 540),
+                (-8, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1080
+            ),
             ReceiverStep::Move((0, 540))
         );
         assert_eq!(dwell_start, Some(1000));
 
         // At 120 ms elapsed: returns and clears timer.
         assert_eq!(
-            receiver_step_with_dwell((0, 540), (-4, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1120),
+            receiver_step_with_dwell(
+                (0, 540),
+                (-4, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1120
+            ),
             ReceiverStep::Return {
                 edge: Edge::Left,
                 relative_y: 0.5,
@@ -1840,28 +2052,64 @@ mod tests {
         let mut dwell_start = None;
 
         assert_eq!(
-            receiver_step_with_dwell((2, 540), (-10, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (2, 540),
+                (-10, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Move((0, 540))
         );
         assert_eq!(dwell_start, Some(1000));
 
         // Moving away from the edge resets timer.
         assert_eq!(
-            receiver_step_with_dwell((0, 540), (6, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1050),
+            receiver_step_with_dwell(
+                (0, 540),
+                (6, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1050
+            ),
             ReceiverStep::Move((6, 540))
         );
         assert_eq!(dwell_start, None);
 
         // Pushing again at t=1150 starts a fresh timer instead of returning immediately.
         assert_eq!(
-            receiver_step_with_dwell((6, 540), (-12, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1150),
+            receiver_step_with_dwell(
+                (6, 540),
+                (-12, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1150
+            ),
             ReceiverStep::Move((0, 540))
         );
         assert_eq!(dwell_start, Some(1150));
 
         // Returns 120 ms after the new push started (t=1270).
         assert_eq!(
-            receiver_step_with_dwell((0, 540), (-5, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1270),
+            receiver_step_with_dwell(
+                (0, 540),
+                (-5, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1270
+            ),
             ReceiverStep::Return {
                 edge: Edge::Left,
                 relative_y: 0.5,
@@ -1876,36 +2124,93 @@ mod tests {
 
         // Top 48px deadzone on Left edge blocks even with dwell=0 or elapsed dwell.
         assert_eq!(
-            receiver_step_with_dwell((2, 20), (-10, 0), &mons, Edge::Left, 120, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (2, 20),
+                (-10, 0),
+                &mons,
+                Edge::Left,
+                120,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Move((0, 20))
         );
         assert_eq!(dwell_start, None);
 
         // Bottom 48px deadzone on Right edge blocks even with dwell=0.
         assert_eq!(
-            receiver_step_with_dwell((1918, 1050), (10, 0), &mons, Edge::Right, 0, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (1918, 1050),
+                (10, 0),
+                &mons,
+                Edge::Right,
+                0,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Move((1919, 1050))
         );
 
         // Left/Right 48px deadzones on Top and Bottom edges block return.
         assert_eq!(
-            receiver_step_with_dwell((30, 2), (0, -10), &mons, Edge::Top, 0, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (30, 2),
+                (0, -10),
+                &mons,
+                Edge::Top,
+                0,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Move((30, 0))
         );
         assert_eq!(
-            receiver_step_with_dwell((1900, 1078), (0, 10), &mons, Edge::Bottom, 0, 48, &mut dwell_start, 1000),
+            receiver_step_with_dwell(
+                (1900, 1078),
+                (0, 10),
+                &mons,
+                Edge::Bottom,
+                0,
+                48,
+                &mut dwell_start,
+                1000
+            ),
             ReceiverStep::Move((1900, 1079))
         );
 
         // Just outside deadzone on Top edge works after dwell.
         assert_eq!(
-            receiver_step_with_dwell((48, 2), (0, -10), &mons, Edge::Top, 80, 48, &mut dwell_start, 2000),
+            receiver_step_with_dwell(
+                (48, 2),
+                (0, -10),
+                &mons,
+                Edge::Top,
+                80,
+                48,
+                &mut dwell_start,
+                2000
+            ),
             ReceiverStep::Move((48, 0))
         );
         assert_eq!(dwell_start, Some(2000));
         assert!(matches!(
-            receiver_step_with_dwell((48, 0), (0, -5), &mons, Edge::Top, 80, 48, &mut dwell_start, 2080),
-            ReceiverStep::Return { edge: Edge::Top, .. }
+            receiver_step_with_dwell(
+                (48, 0),
+                (0, -5),
+                &mons,
+                Edge::Top,
+                80,
+                48,
+                &mut dwell_start,
+                2080
+            ),
+            ReceiverStep::Return {
+                edge: Edge::Top,
+                ..
+            }
         ));
     }
 
@@ -1918,7 +2223,12 @@ mod tests {
             mon("portrait", 1920, -420, 1080, 1920, false),
         ];
         // Linked PC on the left: single 1920x1920 tall monitor or 1920x1080 at offset_y=0
-        let peer_union = ScreenRect { x: 0, y: 0, width: 1920, height: 1920 };
+        let peer_union = ScreenRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1920,
+        };
 
         // Return to Main PC at heights outside landscape (y = -200 above, y = 1300 below)
         // must clamp to landscape (x = 2), NEVER land on portrait (x = 1922).
@@ -1958,8 +2268,14 @@ mod tests {
         assert_eq!(ret_mid, (2, 540));
 
         // Leap from Main PC: portrait's left edge (x=1920) above/below landscape must NOT leap.
-        assert_eq!(detect_controller_edge((1920, -200), &main_mons, Edge::Left, 48), None);
-        assert_eq!(detect_controller_edge((1920, 1300), &main_mons, Edge::Left, 48), None);
+        assert_eq!(
+            detect_controller_edge((1920, -200), &main_mons, Edge::Left, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge((1920, 1300), &main_mons, Edge::Left, 48),
+            None
+        );
         // Landscape's left edge (x=0) leaps normally.
         assert!(detect_controller_edge((-5, 540), &main_mons, Edge::Left, 48).is_some());
 
@@ -1982,23 +2298,50 @@ mod tests {
             mon("top", 0, 0, 1920, 1080, true),
             mon("bottom", -400, 1080, 2800, 1080, false),
         ];
-        let peer_union = ScreenRect { x: 0, y: 0, width: 2800, height: 1080 };
+        let peer_union = ScreenRect {
+            x: 0,
+            y: 0,
+            width: 2800,
+            height: 1080,
+        };
 
         // Return outside MonA's X span (target_x = -400 + 100 = -300, target_x = 2200) clamps to MonA [0..1919], y=2.
         assert_eq!(
-            map_return_position(&top_mons, &top_mons[0], &peer_union, Edge::Top, 0, 0, 100.0 / 2800.0),
+            map_return_position(
+                &top_mons,
+                &top_mons[0],
+                &peer_union,
+                Edge::Top,
+                0,
+                0,
+                100.0 / 2800.0
+            ),
             (0, 2)
         );
         assert_eq!(
-            map_return_position(&top_mons, &top_mons[0], &peer_union, Edge::Top, 0, 0, 2600.0 / 2800.0),
+            map_return_position(
+                &top_mons,
+                &top_mons[0],
+                &peer_union,
+                Edge::Top,
+                0,
+                0,
+                2600.0 / 2800.0
+            ),
             (1919, 2)
         );
         // Entry on receiver clamps to MonA.
         assert_eq!(map_cursor_enter(&top_mons, Edge::Top, 0.0), (0, 2));
         assert_eq!(map_cursor_enter(&top_mons, Edge::Top, 1.0), (1919, 2));
         // Non-edge MonB top edge at x=-200 or x=2100 must NOT leap on Edge::Top.
-        assert_eq!(detect_controller_edge((-200, 1080), &top_mons, Edge::Top, 48), None);
-        assert_eq!(detect_controller_edge((2100, 1080), &top_mons, Edge::Top, 48), None);
+        assert_eq!(
+            detect_controller_edge((-200, 1080), &top_mons, Edge::Top, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge((2100, 1080), &top_mons, Edge::Top, 48),
+            None
+        );
         // MonA top edge leaps.
         assert!(detect_controller_edge((960, -5), &top_mons, Edge::Top, 48).is_some());
 
@@ -2010,19 +2353,44 @@ mod tests {
         ];
         // Return outside MonC's X span clamps to MonC [0..1919], y=2157.
         assert_eq!(
-            map_return_position(&bottom_mons, &bottom_mons[1], &peer_union, Edge::Bottom, 0, 0, 0.0),
+            map_return_position(
+                &bottom_mons,
+                &bottom_mons[1],
+                &peer_union,
+                Edge::Bottom,
+                0,
+                0,
+                0.0
+            ),
             (0, 2157)
         );
         assert_eq!(
-            map_return_position(&bottom_mons, &bottom_mons[1], &peer_union, Edge::Bottom, 0, 0, 1.0),
+            map_return_position(
+                &bottom_mons,
+                &bottom_mons[1],
+                &peer_union,
+                Edge::Bottom,
+                0,
+                0,
+                1.0
+            ),
             (1919, 2157)
         );
         // Entry on receiver clamps to MonC.
         assert_eq!(map_cursor_enter(&bottom_mons, Edge::Bottom, 0.0), (0, 2157));
-        assert_eq!(map_cursor_enter(&bottom_mons, Edge::Bottom, 1.0), (1919, 2157));
+        assert_eq!(
+            map_cursor_enter(&bottom_mons, Edge::Bottom, 1.0),
+            (1919, 2157)
+        );
         // Non-edge MonD bottom edge at x=-200 or x=2100 must NOT leap on Edge::Bottom.
-        assert_eq!(detect_controller_edge((-200, 1079), &bottom_mons, Edge::Bottom, 48), None);
-        assert_eq!(detect_controller_edge((2100, 1079), &bottom_mons, Edge::Bottom, 48), None);
+        assert_eq!(
+            detect_controller_edge((-200, 1079), &bottom_mons, Edge::Bottom, 48),
+            None
+        );
+        assert_eq!(
+            detect_controller_edge((2100, 1079), &bottom_mons, Edge::Bottom, 48),
+            None
+        );
         // MonC bottom edge leaps.
         assert!(detect_controller_edge((960, 2165), &bottom_mons, Edge::Bottom, 48).is_some());
     }
@@ -2082,7 +2450,8 @@ mod tests {
             mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
             mon(r"\\.\DISPLAY1", 1920, -420, 1920, 1500, false),
         ];
-        let seams_under_both = compute_seams(&main_aligned_bottom, &linked, Point { x: 960, y: 1080 });
+        let seams_under_both =
+            compute_seams(&main_aligned_bottom, &linked, Point { x: 960, y: 1080 });
         assert_eq!(
             seams_under_both,
             vec![
@@ -2109,7 +2478,8 @@ mod tests {
             mon(r"\\.\DISPLAY2", 0, 0, 1920, 1080, true),
             mon(r"\\.\DISPLAY1", 1920, -420, 1920, 1080, false),
         ];
-        let seams_landscape_d1 = compute_seams(&main_landscape_d1, &linked, Point { x: 0, y: 1080 });
+        let seams_landscape_d1 =
+            compute_seams(&main_landscape_d1, &linked, Point { x: 0, y: 1080 });
         assert_eq!(seams_landscape_d1.len(), 1);
         assert_eq!(seams_landscape_d1[0].main_monitor_id, r"\\.\DISPLAY2");
 
@@ -2143,7 +2513,11 @@ mod tests {
         );
 
         // Deep overlap inside Main -> None and has_any_overlap is true.
-        assert!(has_any_overlap(&main_mons, &linked, Point { x: 200, y: 200 }));
+        assert!(has_any_overlap(
+            &main_mons,
+            &linked,
+            Point { x: 200, y: 200 }
+        ));
         assert_eq!(
             snap_remote_origin(&main_mons, &linked, Point { x: 200, y: 200 }, 24),
             None
@@ -2187,17 +2561,38 @@ mod tests {
 
         // 2) Seam 1 deadzone at both ends [1920..1968) and [2872..2920).
         assert_eq!(
-            detect_controller_edge_seams((1950, 1505), &main_mons, &linked_mons, origin, &seams, 48),
+            detect_controller_edge_seams(
+                (1950, 1505),
+                &main_mons,
+                &linked_mons,
+                origin,
+                &seams,
+                48
+            ),
             None
         );
         assert_eq!(
-            detect_controller_edge_seams((2890, 1505), &main_mons, &linked_mons, origin, &seams, 48),
+            detect_controller_edge_seams(
+                (2890, 1505),
+                &main_mons,
+                &linked_mons,
+                origin,
+                &seams,
+                48
+            ),
             None
         );
 
         // 3) Crossing Seam 2 ([2920..3000], length=80 -> dz=39 -> active [2959..2961)) targets L2!
-        let hit = detect_controller_edge_seams((2960, 1505), &main_mons, &linked_mons, origin, &seams, 48)
-            .expect("should hit L2 seam");
+        let hit = detect_controller_edge_seams(
+            (2960, 1505),
+            &main_mons,
+            &linked_mons,
+            origin,
+            &seams,
+            48,
+        )
+        .expect("should hit L2 seam");
         assert_eq!(hit.target_monitor, "L2");
         // In L2 coords (L2 starts at main x = 1000 + 1920 = 2920): along_px = 2960 - 2920 = 40.
         assert_eq!(hit.along_px, 40);
@@ -2345,7 +2740,8 @@ mod tests {
 
         // SPEC-23 Right link with offset_y = 200: linked union starts at x=1920, y=200.
         // Because linked_union.x == -1280, remote_origin.x must be 1920 - (-1280) = 3200.
-        let origin_r = derive_remote_origin_from_link(&main_mons, &linked_mons, Edge::Right, 0, 200);
+        let origin_r =
+            derive_remote_origin_from_link(&main_mons, &linked_mons, Edge::Right, 0, 200);
         assert_eq!(origin_r, Point { x: 3200, y: 200 });
         let seams_r = compute_seams(&main_mons, &linked_mons, origin_r);
         assert_eq!(

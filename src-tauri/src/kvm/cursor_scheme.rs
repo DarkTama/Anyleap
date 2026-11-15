@@ -79,8 +79,8 @@ fn read_local_cursor_scheme_win() -> Vec<CursorRoleFile> {
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
     use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_EXPAND_SZ,
-        REG_SZ, REG_VALUE_TYPE,
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE,
     };
 
     let mut out = Vec::new();
@@ -127,15 +127,17 @@ fn read_local_cursor_scheme_win() -> Vec<CursorRoleFile> {
         }
 
         let mut expanded = vec![0u16; 1024];
-        let exp_len = unsafe {
-            ExpandEnvironmentStringsW(PCWSTR(raw_u16.as_ptr()), Some(&mut expanded))
-        };
+        let exp_len =
+            unsafe { ExpandEnvironmentStringsW(PCWSTR(raw_u16.as_ptr()), Some(&mut expanded)) };
         let path_str = if exp_len > 0 && (exp_len as usize) <= expanded.len() {
             let s = &expanded[..exp_len as usize];
             let nul = s.iter().position(|&c| c == 0).unwrap_or(s.len());
             String::from_utf16_lossy(&s[..nul])
         } else {
-            let nul = raw_u16.iter().position(|&c| c == 0).unwrap_or(raw_u16.len());
+            let nul = raw_u16
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(raw_u16.len());
             String::from_utf16_lossy(&raw_u16[..nul])
         };
         let trimmed = path_str.trim();
@@ -209,8 +211,8 @@ pub fn store_remote_cursor_file(
     name: &str,
     data: &[u8],
 ) -> Result<(), String> {
-    let canonical = canonical_cursor_role(role)
-        .ok_or_else(|| format!("unsupported cursor role {role:?}"))?;
+    let canonical =
+        canonical_cursor_role(role).ok_or_else(|| format!("unsupported cursor role {role:?}"))?;
     let safe_name = sanitize_name(name).ok_or_else(|| format!("unsafe cursor name {name:?}"))?;
     let path_check = Path::new(&safe_name);
     if !is_supported_cursor_file(path_check) {
@@ -247,9 +249,7 @@ pub fn apply_remote_cursors(staging_root: &Path) {
         }
         g.files
             .iter()
-            .filter_map(|(role, path)| {
-                cursor_role_to_ocr_id(role).map(|id| (id, path.clone()))
-            })
+            .filter_map(|(role, path)| cursor_role_to_ocr_id(role).map(|id| (id, path.clone())))
             .collect()
     };
     if entries.is_empty() {
@@ -355,7 +355,9 @@ mod tests {
 
     #[test]
     fn cursor_file_extension_filter_accepts_cur_and_ani_only() {
-        assert!(is_supported_cursor_file(Path::new("C:\\Windows\\Cursors\\arrow.cur")));
+        assert!(is_supported_cursor_file(Path::new(
+            "C:\\Windows\\Cursors\\arrow.cur"
+        )));
         assert!(is_supported_cursor_file(Path::new("busy.ANI")));
         assert!(!is_supported_cursor_file(Path::new("evil.exe")));
         assert!(!is_supported_cursor_file(Path::new("noext")));

@@ -39,14 +39,14 @@ mod win {
         GetFocus, MapVirtualKeyW, SetFocus, MAPVK_VK_TO_VSC, VK_A, VK_B, VK_C,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW,
-        DestroyWindow, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowRect,
-        GetWindowTextW, GetWindowThreadProcessId, IsIconic, PeekMessageW, PostMessageW,
-        PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowTextW,
-        ShowWindow, TranslateMessage, ASFW_ANY, CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ES_LEFT,
-        HMENU, MSG, PM_REMOVE, SW_RESTORE, SW_SHOW, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
-        WM_GETTEXT, WM_GETTEXTLENGTH, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow,
+        DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowRect, GetWindowTextW,
+        GetWindowThreadProcessId, IsIconic, PeekMessageW, PostMessageW, PostQuitMessage,
+        RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow,
+        TranslateMessage, ASFW_ANY, CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, ES_LEFT, HMENU, MSG,
+        PM_REMOVE, SW_RESTORE, SW_SHOW, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_GETTEXT,
+        WM_GETTEXTLENGTH, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     const WM_HARNESS_PREPARE: u32 = WM_APP + 1;
@@ -354,7 +354,12 @@ Options:
                     Default::default(),
                     w!("EDIT"),
                     w!(""),
-                    WS_CHILD | WS_VISIBLE | WS_BORDER | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(ES_LEFT as u32 | ES_AUTOHSCROLL as u32),
+                    WS_CHILD
+                        | WS_VISIBLE
+                        | WS_BORDER
+                        | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                            ES_LEFT as u32 | ES_AUTOHSCROLL as u32,
+                        ),
                     16,
                     24,
                     430,
@@ -542,7 +547,8 @@ Options:
         }
 
         fn edit_center(&self) -> Option<(i32, i32)> {
-            let ok = unsafe { SendMessageW(self.hwnd(), WM_HARNESS_EDIT_CENTER, None, None).0 != 0 };
+            let ok =
+                unsafe { SendMessageW(self.hwnd(), WM_HARNESS_EDIT_CENTER, None, None).0 != 0 };
             ok.then(|| SHARED_POINT.lock().map(|g| *g).unwrap_or((0, 0)))
         }
 
@@ -869,7 +875,8 @@ Options:
         let got = win.read_edit_text();
         let snap_type = win.snapshot();
         let passed = got == EXPECTED_TEXT
-            && (!matches!(scenario, Scenario::Reenter) || !notes.iter().any(|n| n == "missing CursorReturn"));
+            && (!matches!(scenario, Scenario::Reenter)
+                || !notes.iter().any(|n| n == "missing CursorReturn"));
         println!(
             "[{}:#{}] step=after_type result={} got={:?} {}",
             scenario.name(),
@@ -996,11 +1003,7 @@ Options:
         }
 
         let passed_count = results.iter().filter(|r| r.passed).count();
-        println!(
-            "\nTotal: {}/{} passed.",
-            passed_count,
-            results.len()
-        );
+        println!("\nTotal: {}/{} passed.", passed_count, results.len());
 
         if any_fail {
             1

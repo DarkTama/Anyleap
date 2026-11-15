@@ -1,6 +1,8 @@
 use super::identity::{client_config, peer_fingerprint, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
-use super::protocol::{encode_delta, read_frame, write_frame, KvmPacket, TransferEvent, UdpMouseDelta};
+use super::protocol::{
+    encode_delta, read_frame, write_frame, KvmPacket, TransferEvent, UdpMouseDelta,
+};
 // --- SPEC-25b ---
 use super::protocol::{decode_audio_datagram, AudioDatagram};
 // --- /SPEC-25b ---
@@ -52,14 +54,26 @@ pub async fn handshake(
     pin: Option<String>,
     identity: &Identity,
     trust: &TrustStore,
-) -> Result<(quinn::Endpoint, quinn::Connection, quinn::SendStream, quinn::RecvStream, PeerInfo), String> {
+) -> Result<
+    (
+        quinn::Endpoint,
+        quinn::Connection,
+        quinn::SendStream,
+        quinn::RecvStream,
+        PeerInfo,
+    ),
+    String,
+> {
     let addr: SocketAddr = format!("{ip}:{port}")
         .parse()
         .map_err(|e| format!("Invalid peer address: {e}"))?;
-    let mut endpoint = quinn::Endpoint::client(([0, 0, 0, 0], 0).into()).map_err(|e| e.to_string())?;
+    let mut endpoint =
+        quinn::Endpoint::client(([0, 0, 0, 0], 0).into()).map_err(|e| e.to_string())?;
     endpoint.set_default_client_config(client_config(identity)?);
 
-    let connecting = endpoint.connect(addr, "anyleap-kvm").map_err(|e| e.to_string())?;
+    let connecting = endpoint
+        .connect(addr, "anyleap-kvm")
+        .map_err(|e| e.to_string())?;
     let conn = timeout(Duration::from_secs(5), connecting)
         .await
         .map_err(|_| format!("Connection to {addr} timed out"))?
@@ -83,8 +97,14 @@ pub async fn handshake(
         pin: pin.clone().unwrap_or_default(),
         monitors: local_monitors,
     };
-    write_frame(&mut send, &hello).await.map_err(|e| e.to_string())?;
-    let ack = timeout(Duration::from_secs(10), read_frame::<_, KvmPacket>(&mut recv)).await;
+    write_frame(&mut send, &hello)
+        .await
+        .map_err(|e| e.to_string())?;
+    let ack = timeout(
+        Duration::from_secs(10),
+        read_frame::<_, KvmPacket>(&mut recv),
+    )
+    .await;
     match ack {
         Ok(Ok(Some(KvmPacket::PairAck {
             accepted: true,
@@ -135,8 +155,17 @@ impl KvmClientHandle {
         trust: &TrustStore,
         download_dir: PathBuf,
     ) -> Result<Self, String> {
-        let (endpoint, conn, mut send, mut recv, peer_info) =
-            handshake(ip, port, local_id, local_name, local_monitors, pin, identity, trust).await?;
+        let (endpoint, conn, mut send, mut recv, peer_info) = handshake(
+            ip,
+            port,
+            local_id,
+            local_name,
+            local_monitors,
+            pin,
+            identity,
+            trust,
+        )
+        .await?;
 
         let (send_packet_tx, mut send_packet_rx) = mpsc::channel::<KvmPacket>(512);
         let (incoming_tx, _) = broadcast::channel::<KvmPacket>(512);
@@ -243,7 +272,10 @@ impl KvmClientHandle {
     }
 
     pub async fn send_packet(&self, packet: KvmPacket) -> Result<(), String> {
-        self.send_packet_tx.send(packet).await.map_err(|e| format!("Send failed: {e}"))
+        self.send_packet_tx
+            .send(packet)
+            .await
+            .map_err(|e| format!("Send failed: {e}"))
     }
 
     pub fn send_mouse_delta(&self, dx: i32, dy: i32) {

@@ -37,9 +37,7 @@ pub(crate) fn sh_quote(s: &str) -> String {
 
 fn validate_serial(serial: &str) -> Result<(), String> {
     let trimmed = serial.trim();
-    if trimmed.is_empty()
-        || trimmed.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("Invalid device serial".to_string());
     }
     Ok(())
@@ -48,7 +46,11 @@ fn validate_serial(serial: &str) -> Result<(), String> {
 /// Normalize a device path and ensure it stays under `/storage/emulated/0`.
 pub(crate) fn normalize_device_path(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.contains('\0') || trimmed.contains('\n') || trimmed.contains('\r') {
+    if trimmed.is_empty()
+        || trimmed.contains('\0')
+        || trimmed.contains('\n')
+        || trimmed.contains('\r')
+    {
         return Err("Invalid device path".to_string());
     }
     if !trimmed.starts_with('/') {
@@ -230,7 +232,13 @@ fn fnv1a_hex(input: &str) -> String {
 fn sanitize_serial_dir(serial: &str) -> String {
     serial
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -275,7 +283,8 @@ fn parse_flags_value(s: &str) -> Option<u32> {
         return None;
     }
 
-    let num_candidate = raw.trim_end_matches(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X');
+    let num_candidate =
+        raw.trim_end_matches(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X');
     if !num_candidate.is_empty() && raw.starts_with(|c: char| c.is_ascii_digit()) {
         if let Some(hex) = num_candidate
             .strip_prefix("0x")
@@ -355,7 +364,11 @@ fn unwrap_android_value(raw: &str) -> String {
 fn extract_token_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let idx = line.find(key)?;
     let rest = &line[idx + key.len()..];
-    Some(rest.split(|c: char| c.is_whitespace() || c == ')').next().unwrap_or(""))
+    Some(
+        rest.split(|c: char| c.is_whitespace() || c == ')')
+            .next()
+            .unwrap_or(""),
+    )
 }
 
 fn parse_timestamp_secs(raw: &str) -> Option<i64> {
@@ -425,37 +438,38 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
     let mut seen_keys = HashSet::new();
     let mut current: Option<RecordBuilder> = None;
 
-    let flush = |mut rec: RecordBuilder, out: &mut Vec<PhoneNotification>, seen: &mut HashSet<String>| {
-        if let Some((field, buf)) = rec.multiline.take() {
-            apply_extra(&mut rec, field, &buf);
-        }
-        if (rec.flags & FLAG_ONGOING_EVENT) != 0 || (rec.flags & FLAG_GROUP_SUMMARY) != 0 {
-            return;
-        }
-        if rec.key.is_empty() || rec.package.is_empty() {
-            return;
-        }
-        let body = if !rec.big_text.is_empty() {
-            rec.big_text
-        } else if !rec.text.is_empty() {
-            rec.text
-        } else {
-            rec.sub_text
+    let flush =
+        |mut rec: RecordBuilder, out: &mut Vec<PhoneNotification>, seen: &mut HashSet<String>| {
+            if let Some((field, buf)) = rec.multiline.take() {
+                apply_extra(&mut rec, field, &buf);
+            }
+            if (rec.flags & FLAG_ONGOING_EVENT) != 0 || (rec.flags & FLAG_GROUP_SUMMARY) != 0 {
+                return;
+            }
+            if rec.key.is_empty() || rec.package.is_empty() {
+                return;
+            }
+            let body = if !rec.big_text.is_empty() {
+                rec.big_text
+            } else if !rec.text.is_empty() {
+                rec.text
+            } else {
+                rec.sub_text
+            };
+            if rec.title.is_empty() && body.is_empty() {
+                return;
+            }
+            if seen.insert(rec.key.clone()) {
+                out.push(PhoneNotification {
+                    key: rec.key,
+                    package: rec.package,
+                    app_label: rec.app_label,
+                    title: rec.title,
+                    text: body,
+                    posted_unix: rec.posted_unix,
+                });
+            }
         };
-        if rec.title.is_empty() && body.is_empty() {
-            return;
-        }
-        if seen.insert(rec.key.clone()) {
-            out.push(PhoneNotification {
-                key: rec.key,
-                package: rec.package,
-                app_label: rec.app_label,
-                title: rec.title,
-                text: body,
-                posted_unix: rec.posted_unix,
-            });
-        }
-    };
 
     for raw_line in output.lines() {
         let line = raw_line.trim_end_matches('\r');
@@ -642,7 +656,9 @@ pub async fn pull_device_file(
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stdout = String::from_utf8_lossy(&out.stdout);
-        return Err(format!("adb pull failed: {stderr} {stdout}").trim().to_string());
+        return Err(format!("adb pull failed: {stderr} {stdout}")
+            .trim()
+            .to_string());
     }
     Ok(final_str)
 }
@@ -669,7 +685,9 @@ pub async fn push_to_device(
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             let stdout = String::from_utf8_lossy(&out.stdout);
-            return Err(format!("adb push failed: {stderr} {stdout}").trim().to_string());
+            return Err(format!("adb push failed: {stderr} {stdout}")
+                .trim()
+                .to_string());
         }
     }
     Ok(())
@@ -805,7 +823,14 @@ pub async fn get_device_notifications(
 ) -> Result<Vec<PhoneNotification>, String> {
     validate_serial(&serial)?;
     let out = adb_cmd(&app)?
-        .args(["-s", &serial, "shell", "dumpsys", "notification", "--noredact"])
+        .args([
+            "-s",
+            &serial,
+            "shell",
+            "dumpsys",
+            "notification",
+            "--noredact",
+        ])
         .output()
         .await
         .map_err(|e| format!("Failed to query notifications: {e}"))?;
@@ -825,7 +850,10 @@ mod tests {
 
     #[test]
     fn sh_quote_escapes_single_quotes() {
-        assert_eq!(sh_quote("/storage/emulated/0/a b"), "'/storage/emulated/0/a b'");
+        assert_eq!(
+            sh_quote("/storage/emulated/0/a b"),
+            "'/storage/emulated/0/a b'"
+        );
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
     }
 
@@ -927,7 +955,11 @@ regular empty file|0|1700000000|/storage/emulated/0/Download/*\n\
                     n.text
                 );
             }
-            assert!(n.posted_unix > 0, "expected non-zero timestamp for {}", n.key);
+            assert!(
+                n.posted_unix > 0,
+                "expected non-zero timestamp for {}",
+                n.key
+            );
         }
 
         // Ongoing and group-summary records must be filtered out
@@ -941,15 +973,21 @@ regular empty file|0|1700000000|/storage/emulated/0/Download/*\n\
             .iter()
             .find(|n| n.title == "SecurityBot")
             .expect("SecurityBot notification");
-        assert!(security.text.starts_with("🚨 SECURITY ALERT: Admin Login Detected"));
-        assert!(security.text.contains("User: UserOne (Administrator / Full Access)"));
+        assert!(security
+            .text
+            .starts_with("🚨 SECURITY ALERT: Admin Login Detected"));
+        assert!(security
+            .text
+            .contains("User: UserOne (Administrator / Full Access)"));
         assert!(security.text.ends_with("secure the workstation."));
 
         let service = parsed
             .iter()
             .find(|n| n.title == "ServiceBot")
             .expect("ServiceBot notification");
-        assert!(service.text.starts_with("⚠️ API Migration Notice to example.invalid"));
+        assert!(service
+            .text
+            .starts_with("⚠️ API Migration Notice to example.invalid"));
         assert!(service.text.ends_with("activate automatically."));
 
         // bigText (SpannableString multiline) wins over text ("Tomorrow")

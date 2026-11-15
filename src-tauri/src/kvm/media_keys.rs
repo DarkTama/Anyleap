@@ -287,18 +287,50 @@ mod tests {
             );
             // When NOT bridging, volume follows normal active-audio / cursor rules
             assert_eq!(
-                decide_media_key_target_for_vk(vk, false, true, false, None, Some(24_000), 25_000, w),
+                decide_media_key_target_for_vk(
+                    vk,
+                    false,
+                    true,
+                    false,
+                    None,
+                    Some(24_000),
+                    25_000,
+                    w
+                ),
                 MediaKeyTarget::Linked
             );
         }
         // Transport keys still follow active audio / cursor while bridging
-        for vk in [VK_MEDIA_PLAY_PAUSE, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP] {
+        for vk in [
+            VK_MEDIA_PLAY_PAUSE,
+            VK_MEDIA_NEXT_TRACK,
+            VK_MEDIA_PREV_TRACK,
+            VK_MEDIA_STOP,
+        ] {
             assert_eq!(
-                decide_media_key_target_for_vk(vk, true, true, false, None, Some(24_000), 25_000, w),
+                decide_media_key_target_for_vk(
+                    vk,
+                    true,
+                    true,
+                    false,
+                    None,
+                    Some(24_000),
+                    25_000,
+                    w
+                ),
                 MediaKeyTarget::Linked
             );
             assert_eq!(
-                decide_media_key_target_for_vk(vk, true, true, false, Some(24_500), Some(20_000), 25_000, w),
+                decide_media_key_target_for_vk(
+                    vk,
+                    true,
+                    true,
+                    false,
+                    Some(24_500),
+                    Some(20_000),
+                    25_000,
+                    w
+                ),
                 MediaKeyTarget::Local
             );
         }

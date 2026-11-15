@@ -969,17 +969,16 @@ pub(crate) fn query_capture_snapshot() -> (isize, u32, String, u32, isize) {
             cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
             ..Default::default()
         };
-        let (cap_hwnd, cap_pid, cap_proc) = if GetGUIThreadInfo(0, &mut fg_info).is_ok()
-            && !fg_info.hwndCapture.0.is_null()
-        {
-            let h = fg_info.hwndCapture;
-            let mut pid = 0u32;
-            let _ = GetWindowThreadProcessId(h, Some(&mut pid));
-            let proc_name = resolve_proc_name_for_pid(pid);
-            (h.0 as isize, pid, proc_name)
-        } else {
-            (0, 0, "none".to_string())
-        };
+        let (cap_hwnd, cap_pid, cap_proc) =
+            if GetGUIThreadInfo(0, &mut fg_info).is_ok() && !fg_info.hwndCapture.0.is_null() {
+                let h = fg_info.hwndCapture;
+                let mut pid = 0u32;
+                let _ = GetWindowThreadProcessId(h, Some(&mut pid));
+                let proc_name = resolve_proc_name_for_pid(pid);
+                (h.0 as isize, pid, proc_name)
+            } else {
+                (0, 0, "none".to_string())
+            };
 
         let our_pid = GetCurrentProcessId();
         let mut own_tid = 0u32;
@@ -1118,10 +1117,7 @@ fn writer_loop(rx: mpsc::Receiver<LogCommand>) {
 
         let dropped = DROPPED_EVENTS.swap(0, Ordering::Relaxed);
         if dropped > 0 {
-            let note = format!(
-                "ts_us={} event=DROPPED count={dropped}\n",
-                now_us()
-            );
+            let note = format!("ts_us={} event=DROPPED count={dropped}\n", now_us());
             let _ = writer.write_line(&note);
             wrote_any = true;
         }
@@ -1268,7 +1264,9 @@ mod tests {
             },
             |_, _| unreachable!(),
         );
-        assert!(return_sent.contains("event=RETURN_SENT edge=left rel_y=0.7500 released_keys=1 released_buttons=0"));
+        assert!(return_sent.contains(
+            "event=RETURN_SENT edge=left rel_y=0.7500 released_keys=1 released_buttons=0"
+        ));
 
         let release_all = format_event_line(
             &DebugEvent::ReleaseAll {
@@ -1279,7 +1277,8 @@ mod tests {
             },
             |_, _| unreachable!(),
         );
-        assert!(release_all.contains("event=RELEASE_ALL reason=release_all released_keys=2 released_buttons=1"));
+        assert!(release_all
+            .contains("event=RELEASE_ALL reason=release_all released_keys=2 released_buttons=1"));
 
         let remote_key = format_event_line(
             &DebugEvent::RemoteKey {
@@ -1350,8 +1349,12 @@ mod tests {
         let log_path = log_path_for_dir(&dir);
 
         let mut writer = RotatingLogWriter::new(log_path.clone(), 64);
-        writer.write_line("line-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").unwrap();
-        writer.write_line("line-2-bbbbbbbbbbbbbbbbbbbbbbbbbbbb\n").unwrap();
+        writer
+            .write_line("line-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+            .unwrap();
+        writer
+            .write_line("line-2-bbbbbbbbbbbbbbbbbbbbbbbbbbbb\n")
+            .unwrap();
         writer.flush();
 
         let backup = log_path.with_extension("log.1");
@@ -1364,7 +1367,9 @@ mod tests {
         assert!(!active_content.contains("line-1"));
 
         // Second rotation must replace the older .log.1 rather than failing or truncating everything.
-        writer.write_line("line-3-cccccccccccccccccccccccccccc\n").unwrap();
+        writer
+            .write_line("line-3-cccccccccccccccccccccccccccc\n")
+            .unwrap();
         writer.flush();
         let active_after = std::fs::read_to_string(&log_path).unwrap();
         let backup_after = std::fs::read_to_string(&backup).unwrap();
@@ -1377,7 +1382,8 @@ mod tests {
 
     #[test]
     fn rotating_log_writer_write_line_flushes_immediately() {
-        let dir = std::env::temp_dir().join(format!("anyleap-debuglog-flush-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("anyleap-debuglog-flush-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let log_path = log_path_for_dir(&dir);
 
@@ -1441,14 +1447,26 @@ mod tests {
             },
         ]);
         assert_eq!(snap.format_vks(), "[letter,0x5B]");
-        assert_eq!(snap.format_detailed(), "[letter(ext=0),0x5B(scan=0x5B,ext=1)]");
+        assert_eq!(
+            snap.format_detailed(),
+            "[letter(ext=0),0x5B(scan=0x5B,ext=1)]"
+        );
     }
 
     #[test]
     fn dnd_state_dedup_logs_only_on_change() {
         let mut last = None;
-        assert!(should_emit_dnd_state_line(&mut last, "DND_STATE target_tid=0"));
-        assert!(!should_emit_dnd_state_line(&mut last, "DND_STATE target_tid=0"));
-        assert!(should_emit_dnd_state_line(&mut last, "DND_STATE target_tid=42"));
+        assert!(should_emit_dnd_state_line(
+            &mut last,
+            "DND_STATE target_tid=0"
+        ));
+        assert!(!should_emit_dnd_state_line(
+            &mut last,
+            "DND_STATE target_tid=0"
+        ));
+        assert!(should_emit_dnd_state_line(
+            &mut last,
+            "DND_STATE target_tid=42"
+        ));
     }
 }

@@ -1,8 +1,7 @@
 use super::debug_log::{self, DebugEvent, HookKind, KeyDecision, KeySnapshot};
 use super::input_logic::{
-    compute_seams, detect_controller_edge, detect_controller_edge_seams,
-    map_controller_return_pos, map_leap_relative_y, resolve_remote_origin, union_rect, Edge,
-    PressedInputTracker, Seam,
+    compute_seams, detect_controller_edge, detect_controller_edge_seams, map_controller_return_pos,
+    map_leap_relative_y, resolve_remote_origin, union_rect, Edge, PressedInputTracker, Seam,
 };
 use super::monitors::{get_local_monitors, MonitorDisplay};
 use super::protocol::{KvmPacket, Point, ScreenRect, TopologyConfig};
@@ -428,7 +427,11 @@ impl HookController {
         has_active_link: bool,
         mouse_buttons_down: u8,
     ) -> bool {
-        drag_drop_enabled && hook_active && !is_trapped && has_active_link && mouse_buttons_down != 0
+        drag_drop_enabled
+            && hook_active
+            && !is_trapped
+            && has_active_link
+            && mouse_buttons_down != 0
     }
 
     /// Engage a "drag mode" leap after the edge-catcher helper thread has
@@ -529,7 +532,16 @@ impl HookController {
 
         DRAG_MODE_BUTTON.store(button, Ordering::Release);
         DRAG_MODE_ENGAGE.store(true, Ordering::Release);
-        request_engage_leap(mx, my, mw, mh, leap_side, entry_edge, relative_y, seam_target);
+        request_engage_leap(
+            mx,
+            my,
+            mw,
+            mh,
+            leap_side,
+            entry_edge,
+            relative_y,
+            seam_target,
+        );
         true
     }
 
@@ -593,12 +605,14 @@ impl HookController {
         let peer_bounds = if !linked_monitors.is_empty() {
             union_rect(&linked_monitors)
         } else {
-            peer_node.map(|c| c.bounds.clone()).unwrap_or_else(|| ScreenRect {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-            })
+            peer_node
+                .map(|c| c.bounds.clone())
+                .unwrap_or_else(|| ScreenRect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                })
         };
 
         let remote_origin = if !linked_monitors.is_empty() {
@@ -630,13 +644,22 @@ impl HookController {
                 .unwrap_or_else(|| from_edge.opposite());
             LINK_FROM_EDGE.store(from_edge as u8, Ordering::Relaxed);
             LINK_TO_EDGE.store(to_edge as u8, Ordering::Relaxed);
-            DEADZONE_PX.store(link.and_then(|l| l.deadzone_px).unwrap_or(48), Ordering::Relaxed);
+            DEADZONE_PX.store(
+                link.and_then(|l| l.deadzone_px).unwrap_or(48),
+                Ordering::Relaxed,
+            );
             RESISTANCE_MS.store(
                 link.and_then(|l| l.resistance_ms).unwrap_or(120) as u64,
                 Ordering::Relaxed,
             );
-            LINK_OFFSET_X.store(link.and_then(|l| l.offset_x).unwrap_or(0), Ordering::Relaxed);
-            LINK_OFFSET_Y.store(link.and_then(|l| l.offset_y).unwrap_or(0), Ordering::Relaxed);
+            LINK_OFFSET_X.store(
+                link.and_then(|l| l.offset_x).unwrap_or(0),
+                Ordering::Relaxed,
+            );
+            LINK_OFFSET_Y.store(
+                link.and_then(|l| l.offset_y).unwrap_or(0),
+                Ordering::Relaxed,
+            );
             PEER_UNION_W.store(peer_bounds.width, Ordering::Relaxed);
             PEER_UNION_H.store(peer_bounds.height, Ordering::Relaxed);
             let active = if remote_origin.is_some() {
@@ -941,9 +964,11 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
                 CLAMP_CENTER_X.load(Ordering::Relaxed),
                 CLAMP_CENTER_Y.load(Ordering::Relaxed),
             );
-            if let Some(delta) =
-                trapped_mouse_delta(CURSOR_CENTERED.load(Ordering::Acquire), (pt.x, pt.y), center)
-            {
+            if let Some(delta) = trapped_mouse_delta(
+                CURSOR_CENTERED.load(Ordering::Acquire),
+                (pt.x, pt.y),
+                center,
+            ) {
                 if let Ok(guard) = mouse_delta_sender().try_lock() {
                     if let Some(ref tx) = *guard {
                         let _ = tx.try_send(delta);
@@ -952,12 +977,30 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
             }
         } else {
             match msg {
-                WM_LBUTTONDOWN => try_send_packet(KvmPacket::MouseButton { button: 1, is_down: true }),
-                WM_LBUTTONUP => try_send_packet(KvmPacket::MouseButton { button: 1, is_down: false }),
-                WM_RBUTTONDOWN => try_send_packet(KvmPacket::MouseButton { button: 2, is_down: true }),
-                WM_RBUTTONUP => try_send_packet(KvmPacket::MouseButton { button: 2, is_down: false }),
-                WM_MBUTTONDOWN => try_send_packet(KvmPacket::MouseButton { button: 3, is_down: true }),
-                WM_MBUTTONUP => try_send_packet(KvmPacket::MouseButton { button: 3, is_down: false }),
+                WM_LBUTTONDOWN => try_send_packet(KvmPacket::MouseButton {
+                    button: 1,
+                    is_down: true,
+                }),
+                WM_LBUTTONUP => try_send_packet(KvmPacket::MouseButton {
+                    button: 1,
+                    is_down: false,
+                }),
+                WM_RBUTTONDOWN => try_send_packet(KvmPacket::MouseButton {
+                    button: 2,
+                    is_down: true,
+                }),
+                WM_RBUTTONUP => try_send_packet(KvmPacket::MouseButton {
+                    button: 2,
+                    is_down: false,
+                }),
+                WM_MBUTTONDOWN => try_send_packet(KvmPacket::MouseButton {
+                    button: 3,
+                    is_down: true,
+                }),
+                WM_MBUTTONUP => try_send_packet(KvmPacket::MouseButton {
+                    button: 3,
+                    is_down: false,
+                }),
                 WM_MOUSEWHEEL => {
                     let delta = (hook_struct.mouseData >> 16) as i16 as i32;
                     try_send_packet(KvmPacket::MouseWheel { delta });
@@ -1128,7 +1171,16 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     }
 
     if check_dwell_resistance(resistance_ms) {
-        request_engage_leap(cand.mx, cand.my, cand.mw, cand.mh, cand.leap_side, cand.entry_edge, cand.relative_y, cand.seam_info.map(|(_, t, a)| (t, a)));
+        request_engage_leap(
+            cand.mx,
+            cand.my,
+            cand.mw,
+            cand.mh,
+            cand.leap_side,
+            cand.entry_edge,
+            cand.relative_y,
+            cand.seam_info.map(|(_, t, a)| (t, a)),
+        );
         return Some(LRESULT(1));
     }
 
@@ -1672,9 +1724,7 @@ unsafe fn check_timer_elevated_leap_block(our_pid: u32) {
         debug_log::record_event(DebugEvent::Note {
             ts_us: debug_log::now_us(),
             hwnd: fg.0 as isize,
-            text: format!(
-                "LEAP_BLOCKED reason=elevated_foreground source=timer proc={proc_name}"
-            ),
+            text: format!("LEAP_BLOCKED reason=elevated_foreground source=timer proc={proc_name}"),
         });
     }
     if let Ok(guard) = leap_blocked_callback_slot().try_lock() {
@@ -1873,11 +1923,7 @@ unsafe fn perform_engage_leap() -> bool {
             let elapsed_us = t0.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
             (before, rel_snap, elapsed_us)
         } else {
-            (
-                KeySnapshot::lock_failed(),
-                KeySnapshot::lock_failed(),
-                0,
-            )
+            (KeySnapshot::lock_failed(), KeySnapshot::lock_failed(), 0)
         };
 
     record_hook_tick();
@@ -1903,7 +1949,9 @@ unsafe fn perform_engage_leap() -> bool {
             .ok()
             .map(|g| g.clone())
             .filter(|s| !s.is_empty());
-        let along = mon.as_ref().map(|_| PENDING_ENGAGE_ALONG_PX.load(Ordering::Relaxed));
+        let along = mon
+            .as_ref()
+            .map(|_| PENDING_ENGAGE_ALONG_PX.load(Ordering::Relaxed));
         (mon, along)
     } else {
         (None, None)
@@ -1978,7 +2026,11 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
     let trapped = IS_TRAPPED.load(Ordering::Acquire);
     let log_enabled = debug_log::is_enabled();
     let ts_us = if log_enabled { debug_log::now_us() } else { 0 };
-    let hwnd = if log_enabled { debug_log::foreground_hwnd_raw() } else { 0 };
+    let hwnd = if log_enabled {
+        debug_log::foreground_hwnd_raw()
+    } else {
+        0
+    };
 
     if !hook_active {
         if log_enabled {
@@ -2293,11 +2345,20 @@ mod tests {
         assert_eq!(evaluate_capture_watchdog(true, None, 5000, th), None);
 
         // Normal idle: GetLastInputInfo().dwTime remains at last hook timestamp.
-        assert_eq!(evaluate_capture_watchdog(true, Some(10_000), 10_000, th), None);
+        assert_eq!(
+            evaluate_capture_watchdog(true, Some(10_000), 10_000, th),
+            None
+        );
         // Hook tick recorded right after GetLastInputInfo() updated.
-        assert_eq!(evaluate_capture_watchdog(true, Some(10_005), 10_000, th), None);
+        assert_eq!(
+            evaluate_capture_watchdog(true, Some(10_005), 10_000, th),
+            None
+        );
         // Boundary: exactly 1000 ms is not > 1000 ms.
-        assert_eq!(evaluate_capture_watchdog(true, Some(10_000), 11_000, th), None);
+        assert_eq!(
+            evaluate_capture_watchdog(true, Some(10_000), 11_000, th),
+            None
+        );
 
         // System saw input > 1000 ms after last hook callback -> trigger release.
         assert_eq!(
@@ -2365,10 +2426,22 @@ mod tests {
         assert_eq!(drag_leap_edge_tolerance(0), 4);
 
         const LLMHF_INJECTED: u32 = 1;
-        assert!(should_ignore_injected_mouse_hook_event(LLMHF_INJECTED, true, false));
+        assert!(should_ignore_injected_mouse_hook_event(
+            LLMHF_INJECTED,
+            true,
+            false
+        ));
         assert!(!should_ignore_injected_mouse_hook_event(0, true, false));
-        assert!(!should_ignore_injected_mouse_hook_event(LLMHF_INJECTED, false, false));
-        assert!(!should_ignore_injected_mouse_hook_event(LLMHF_INJECTED, true, true));
+        assert!(!should_ignore_injected_mouse_hook_event(
+            LLMHF_INJECTED,
+            false,
+            false
+        ));
+        assert!(!should_ignore_injected_mouse_hook_event(
+            LLMHF_INJECTED,
+            true,
+            true
+        ));
 
         assert!(is_physical_mouse_hook_event(0));
         assert!(!is_physical_mouse_hook_event(LLMHF_INJECTED));
@@ -2380,10 +2453,18 @@ mod tests {
         assert_eq!(button_from_mouse_up_msg(0x0208), Some(3)); // WM_MBUTTONUP
         assert_eq!(button_from_mouse_up_msg(0x0200), None);
 
-        assert!(!HookController::can_engage_drag_leap(false, true, false, true, 1));
-        assert!(HookController::can_engage_drag_leap(true, true, false, true, 1));
-        assert!(!HookController::can_engage_drag_leap(true, true, true, true, 1));
-        assert!(!HookController::can_engage_drag_leap(true, true, false, true, 0));
+        assert!(!HookController::can_engage_drag_leap(
+            false, true, false, true, 1
+        ));
+        assert!(HookController::can_engage_drag_leap(
+            true, true, false, true, 1
+        ));
+        assert!(!HookController::can_engage_drag_leap(
+            true, true, true, true, 1
+        ));
+        assert!(!HookController::can_engage_drag_leap(
+            true, true, false, true, 0
+        ));
     }
     // --- end SPEC-25a ---
 }

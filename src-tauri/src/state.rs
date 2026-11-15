@@ -1,9 +1,9 @@
 use crate::kvm::client::KvmClientHandle;
 use crate::kvm::discovery::DiscoveryManager;
 use crate::kvm::hooks::HookController;
+use crate::kvm::identity::{Identity, TrustStore};
 use crate::kvm::protocol::TopologyConfig;
 use crate::kvm::server::KvmServerHandle;
-use crate::kvm::identity::{Identity, TrustStore};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
