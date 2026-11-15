@@ -46,6 +46,9 @@ jobs:
       - name: Ensure bundled binaries present
         run: npm run fetch-binaries
 
+      - name: Check Tauri Rust/NPM version alignment
+        run: npm run check:tauri-versions
+
       - name: Frontend tests
         run: npm test
 
