@@ -143,6 +143,26 @@ pub enum KvmPacket {
         id: String,
     },
     // --- end SPEC-25c ---
+    // --- SPEC-25b ---
+    AudioStart {
+        sample_rate: u32,
+        channels: u16,
+        frame_ms: u16,
+        #[serde(default)]
+        mute_local: bool,
+    },
+    AudioStop,
+    AudioMuteState {
+        state: String,
+    },
+    AudioActivity {
+        active: bool,
+    },
+    MediaKey {
+        vk: u16,
+        is_down: bool,
+    },
+    // --- /SPEC-25b ---
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -326,6 +346,53 @@ pub fn decode_delta(b: &[u8]) -> Option<UdpMouseDelta> {
     })
 }
 
+// --- SPEC-25b ---
+pub const AUDIO_DATAGRAM_TAG: u8 = 0x41;
+pub const AUDIO_DATAGRAM_HEADER_LEN: usize = 7;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDatagram {
+    pub seq: u32,
+    pub pcm: Vec<u8>,
+}
+
+/// Encode a PCM audio frame into a QUIC datagram:
+/// `[0x41 ('A'), seq: u32 LE, frame_len: u16 LE, pcm bytes...]`.
+/// Returns `None` when `pcm` is empty, exceeds `u16::MAX`, or would produce a
+/// 12-byte datagram (reserved exclusively for `UdpMouseDelta`).
+pub fn encode_audio_datagram(seq: u32, pcm: &[u8]) -> Option<Vec<u8>> {
+    if pcm.is_empty() || pcm.len() > u16::MAX as usize {
+        return None;
+    }
+    let total_len = AUDIO_DATAGRAM_HEADER_LEN + pcm.len();
+    if total_len == 12 {
+        return None;
+    }
+    let mut buf = Vec::with_capacity(total_len);
+    buf.push(AUDIO_DATAGRAM_TAG);
+    buf.extend_from_slice(&seq.to_le_bytes());
+    buf.extend_from_slice(&(pcm.len() as u16).to_le_bytes());
+    buf.extend_from_slice(pcm);
+    Some(buf)
+}
+
+/// Decode an audio datagram. Returns `None` for 12-byte mouse deltas or malformed frames.
+pub fn decode_audio_datagram(b: &[u8]) -> Option<AudioDatagram> {
+    if b.len() == 12 || b.len() <= AUDIO_DATAGRAM_HEADER_LEN || b[0] != AUDIO_DATAGRAM_TAG {
+        return None;
+    }
+    let seq = u32::from_le_bytes(b[1..5].try_into().ok()?);
+    let frame_len = u16::from_le_bytes(b[5..7].try_into().ok()?) as usize;
+    if frame_len == 0 || b.len() != AUDIO_DATAGRAM_HEADER_LEN + frame_len {
+        return None;
+    }
+    Some(AudioDatagram {
+        seq,
+        pcm: b[AUDIO_DATAGRAM_HEADER_LEN..].to_vec(),
+    })
+}
+// --- /SPEC-25b ---
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,4 +512,62 @@ mod tests {
         tokio::io::AsyncWriteExt::write_all(&mut a, &u32::MAX.to_be_bytes()).await.unwrap();
         assert!(read_frame::<_, KvmPacket>(&mut b).await.is_err());
     }
+
+    // --- SPEC-25b ---
+    #[test]
+    fn test_audio_and_media_packet_roundtrip() {
+        let packets = vec![
+            KvmPacket::AudioStart {
+                sample_rate: 48_000,
+                channels: 2,
+                frame_ms: 5,
+                mute_local: true,
+            },
+            KvmPacket::AudioStop,
+            KvmPacket::AudioMuteState {
+                state: "muted".to_string(),
+            },
+            KvmPacket::AudioActivity { active: true },
+            KvmPacket::MediaKey {
+                vk: 0xB3,
+                is_down: true,
+            },
+        ];
+        for pkt in packets {
+            let json = serde_json::to_string(&pkt).expect("serialize");
+            let decoded: KvmPacket = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(pkt, decoded);
+        }
+    }
+
+    #[test]
+    fn test_audio_datagram_codec_and_never_12_bytes() {
+        let pcm = vec![0x5Au8; 960];
+        let encoded = encode_audio_datagram(42, &pcm).expect("encode 960 bytes");
+        assert_eq!(encoded.len(), 967);
+        assert_ne!(encoded.len(), 12);
+        assert_eq!(encoded[0], AUDIO_DATAGRAM_TAG);
+        let decoded = decode_audio_datagram(&encoded).expect("decode 960 bytes");
+        assert_eq!(decoded.seq, 42);
+        assert_eq!(decoded.pcm, pcm);
+
+        // 5-byte PCM would produce 7 + 5 = 12 bytes -> must be rejected
+        assert_eq!(encode_audio_datagram(1, &[1, 2, 3, 4, 5]), None);
+        assert_eq!(encode_audio_datagram(1, &[]), None);
+
+        // A 12-byte mouse delta whose first byte happens to be 0x41 and len field == 5
+        // must NEVER decode as an audio datagram.
+        let mut fake_delta = [0u8; 12];
+        fake_delta[0] = AUDIO_DATAGRAM_TAG;
+        fake_delta[5..7].copy_from_slice(&5u16.to_le_bytes());
+        assert_eq!(decode_audio_datagram(&fake_delta), None);
+        assert!(decode_delta(&fake_delta).is_some());
+
+        // Truncated / mismatched length must fail
+        assert_eq!(decode_audio_datagram(&encoded[..encoded.len() - 1]), None);
+        let mut bad_tag = encoded.clone();
+        bad_tag[0] = 0x42;
+        assert_eq!(decode_audio_datagram(&bad_tag), None);
+    }
+    // --- /SPEC-25b ---
 }

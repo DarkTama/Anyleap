@@ -354,6 +354,9 @@ fn stop_server_in_state(kvm: &mut KvmState) {
             .store(false, std::sync::atomic::Ordering::Relaxed);
         let _ = srv.shutdown_tx.send(true);
     }
+    // --- SPEC-25b ---
+    super::audio::on_linked_server_stopped();
+    // --- /SPEC-25b ---
     RECEIVER_ENTERED.store(false, std::sync::atomic::Ordering::Relaxed);
     kvm.connected_peers.clear();
     let client_peer_id = kvm.client.as_ref().map(|c| c.peer_id.clone());
@@ -378,6 +381,9 @@ fn disconnect_client_in_state(kvm: &mut KvmState) {
         client.conn.close(0u32.into(), b"disconnect");
     }
     kvm.hooks.stop_hooks();
+    // --- SPEC-25b ---
+    super::audio::on_main_disconnected();
+    // --- /SPEC-25b ---
     if let Some(id) = removed_id {
         kvm.topology.computers.retain(|c| c.is_local || c.id != id);
         kvm.topology
@@ -394,6 +400,9 @@ fn disconnect_peer_in_state(kvm: &mut KvmState) {
         disconnect_client_in_state(kvm);
     } else if let Some(ref srv) = kvm.server {
         srv.disconnect_sessions(None);
+        // --- SPEC-25b ---
+        super::audio::on_linked_peer_disconnected(0);
+        // --- /SPEC-25b ---
         kvm.connected_peers.clear();
         kvm.topology.computers.retain(|c| c.is_local);
         kvm.topology.links.clear();
@@ -543,6 +552,10 @@ async fn start_server_inner(
     let mut transfer_rx = server_handle.transfer_tx.subscribe();
     let mut delta_rx = server_handle.mouse_delta_tx.subscribe();
     let outgoing_tx = server_handle.outgoing_tx.clone();
+    // --- SPEC-25b ---
+    let audio_out_tx = server_handle.audio_out_tx.clone();
+    super::audio::on_linked_server_started(outgoing_tx.clone(), app_handle);
+    // --- /SPEC-25b ---
 
     // Start server-side clipboard monitor
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::channel::<Outbound>(32);
@@ -596,6 +609,9 @@ async fn start_server_inner(
                         }
                         let _ = app_h.emit("kvm-peer-connected", &peer_name);
                     }
+                    // --- SPEC-25b ---
+                    super::audio::on_linked_peer_connected();
+                    // --- /SPEC-25b ---
                 }
                 KvmPacket::Seams { seams } => {
                     let fresh_monitors = get_local_monitors();
@@ -704,6 +720,9 @@ async fn start_server_inner(
                                     kvm.connected_peers.retain(|p| p != &name);
                                 }
                             }
+                            // --- SPEC-25b ---
+                            super::audio::on_linked_peer_disconnected(kvm.connected_peers.len());
+                            // --- /SPEC-25b ---
                         }
                     }
                     super::hooks::restore_cursor_visibility();
@@ -788,6 +807,30 @@ async fn start_server_inner(
                     super::open_on_linked::handle_open_file_packet(&app_h, &transfer_id);
                 }
                 // --- end SPEC-25c ---
+                // --- SPEC-25b ---
+                KvmPacket::AudioStart {
+                    sample_rate,
+                    channels,
+                    frame_ms,
+                    mute_local,
+                } => {
+                    super::audio::on_linked_audio_start(
+                        sample_rate,
+                        channels,
+                        frame_ms,
+                        mute_local,
+                        audio_out_tx.clone(),
+                        pkt_out_tx.clone(),
+                        &app_h,
+                    );
+                }
+                KvmPacket::AudioStop => {
+                    super::audio::on_linked_audio_stop();
+                }
+                KvmPacket::MediaKey { vk, is_down } => {
+                    super::media_keys::inject_media_key(vk, is_down);
+                }
+                // --- /SPEC-25b ---
                 _ => {}
             }
         }
@@ -1176,6 +1219,9 @@ pub async fn kvm_connect_peer(
                                     .links
                                     .retain(|l| l.from_id != peer_id_for_rx && l.to_id != peer_id_for_rx);
                                 super::hooks::restore_cursor_visibility();
+                                // --- SPEC-25b ---
+                                super::audio::on_main_disconnected();
+                                // --- /SPEC-25b ---
                             }
                         }
                     }
@@ -1195,6 +1241,14 @@ pub async fn kvm_connect_peer(
                     super::open_on_linked::handle_open_file_packet(&app_h, &transfer_id);
                 }
                 // --- end SPEC-25c ---
+                // --- SPEC-25b ---
+                KvmPacket::AudioActivity { active } => {
+                    super::media_keys::record_linked_audio_activity(active);
+                }
+                KvmPacket::AudioMuteState { state } => {
+                    super::audio::on_main_audio_mute_state(&state);
+                }
+                // --- /SPEC-25b ---
                 _ => {}
             }
         }
@@ -1207,6 +1261,16 @@ pub async fn kvm_connect_peer(
             emit_transfer(&app_t, ev);
         }
     });
+
+    // --- SPEC-25b ---
+    let mut audio_rx = client.audio_tx.subscribe();
+    tokio::spawn(async move {
+        while let Ok(dg) = audio_rx.recv().await {
+            super::audio::on_main_audio_datagram(dg);
+        }
+    });
+    let main_audio_pkt_tx = client.send_packet_tx.clone();
+    // --- /SPEC-25b ---
 
     let peer_node = ComputerNode {
         id: client.peer_id.clone(),
@@ -1269,6 +1333,9 @@ pub async fn kvm_connect_peer(
         kvm.topology.computers.push(peer_node);
     }
     kvm.client = Some(client);
+    // --- SPEC-25b ---
+    super::audio::on_main_connected(main_audio_pkt_tx, &app_handle);
+    // --- /SPEC-25b ---
 
     if kvm.topology.remote_origin.is_some() || !kvm.topology.links.is_empty() {
         let mut updated = kvm.topology.clone();
@@ -1652,6 +1719,31 @@ pub async fn kvm_cancel_transfer(
     Ok(())
 }
 // --- end SPEC-25c ---
+
+// --- SPEC-25b ---
+#[tauri::command]
+pub async fn kvm_set_audio_settings(
+    audio_bridge: bool,
+    audio_volume: u8,
+    media_keys_follow_audio: bool,
+    mute_linked_while_bridging: Option<bool>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    super::audio::set_audio_settings(
+        audio_bridge,
+        audio_volume,
+        media_keys_follow_audio,
+        mute_linked_while_bridging.unwrap_or(true),
+        &app_handle,
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn kvm_get_audio_state() -> Result<super::audio::AudioStatePayload, String> {
+    Ok(super::audio::get_audio_state())
+}
+// --- /SPEC-25b ---
 
 #[cfg(test)]
 mod tests {

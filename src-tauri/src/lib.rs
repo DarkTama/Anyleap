@@ -104,6 +104,10 @@ pub fn run() {
             kvm::commands::kvm_open_file_on_linked,
             kvm::commands::kvm_cancel_transfer,
             // --- end SPEC-25c ---
+            // --- SPEC-25b ---
+            kvm::commands::kvm_set_audio_settings,
+            kvm::commands::kvm_get_audio_state,
+            // --- /SPEC-25b ---
             phone_files::list_device_dir,
             phone_files::pull_device_file,
             phone_files::push_to_device,
@@ -115,6 +119,9 @@ pub fn run() {
         .setup(|app| {
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
             wheel_swipe::init(app.handle());
+            // --- SPEC-25b ---
+            kvm::audio::restore_mute_from_crash_marker();
+            // --- /SPEC-25b ---
             // --- SPEC-25c ---
             kvm::session_sync::init(app.handle());
             let _ = kvm::open_on_linked::sync_context_menu(
@@ -201,6 +208,12 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                kvm::audio::on_app_exit();
+                kvm::debug_log::flush();
+            }
+        });
 }

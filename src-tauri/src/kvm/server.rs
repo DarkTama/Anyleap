@@ -37,6 +37,9 @@ struct ServerContext {
     mouse_delta_tx: broadcast::Sender<UdpMouseDelta>,
     transfer_tx: broadcast::Sender<TransferEvent>,
     disconnect_tx: broadcast::Sender<Option<String>>,
+    // --- SPEC-25b ---
+    audio_out_tx: broadcast::Sender<bytes::Bytes>,
+    // --- /SPEC-25b ---
 }
 
 impl ServerContext {
@@ -74,6 +77,9 @@ pub struct KvmServerHandle {
     pub transfer_tx: broadcast::Sender<TransferEvent>,
     pub disconnect_tx: broadcast::Sender<Option<String>>,
     pub shutdown_tx: watch::Sender<bool>,
+    // --- SPEC-25b ---
+    pub audio_out_tx: broadcast::Sender<bytes::Bytes>,
+    // --- /SPEC-25b ---
 }
 
 impl KvmServerHandle {
@@ -102,6 +108,9 @@ pub async fn start_kvm_server(
     let (transfer_tx, _) = broadcast::channel(64);
     let (disconnect_tx, _) = broadcast::channel(32);
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    // --- SPEC-25b ---
+    let (audio_out_tx, _) = broadcast::channel(256);
+    // --- /SPEC-25b ---
     let security_pin = Arc::new(Mutex::new(generate_pin()));
     let is_running = Arc::new(AtomicBool::new(true));
 
@@ -124,6 +133,9 @@ pub async fn start_kvm_server(
         mouse_delta_tx: mouse_delta_tx.clone(),
         transfer_tx: transfer_tx.clone(),
         disconnect_tx: disconnect_tx.clone(),
+        // --- SPEC-25b ---
+        audio_out_tx: audio_out_tx.clone(),
+        // --- /SPEC-25b ---
     };
 
     tokio::spawn(async move {
@@ -151,6 +163,9 @@ pub async fn start_kvm_server(
         transfer_tx,
         disconnect_tx,
         shutdown_tx,
+        // --- SPEC-25b ---
+        audio_out_tx,
+        // --- /SPEC-25b ---
     })
 }
 
@@ -327,6 +342,21 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                 }
             }
         }));
+
+        // --- SPEC-25b ---
+        let (audio_dg_conn, mut audio_out_rx) = (conn.clone(), ctx.audio_out_tx.subscribe());
+        tasks.push(tokio::spawn(async move {
+            loop {
+                match audio_out_rx.recv().await {
+                    Ok(dg) => {
+                        let _ = audio_dg_conn.send_datagram(dg);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+        }));
+        // --- /SPEC-25b ---
 
         let (uni_conn, transfer_tx, dir) = (conn.clone(), ctx.transfer_tx.clone(), ctx.download_dir.clone());
         tasks.push(tokio::spawn(async move {
@@ -1301,4 +1331,116 @@ mod tests {
         let _ = std::fs::remove_dir_all(&r.dir);
     }
     // --- end SPEC-25c ---
+
+    // --- SPEC-25b ---
+    #[tokio::test]
+    async fn loopback_audio_start_and_audio_datagrams() {
+        use crate::kvm::audio::{JitterBuffer, AUDIO_PACKET_BYTES, JITTER_MAX_FRAMES, JITTER_TARGET_FRAMES};
+        use crate::kvm::protocol::encode_audio_datagram;
+
+        let r = rig("audio-25b").await;
+        let mut srv_in_rx = r.srv.incoming_tx.subscribe();
+        let cli = connect(&r, Some(r.srv.pin())).await.unwrap();
+        let mut cli_in_rx = cli.incoming_tx.subscribe();
+        let mut cli_audio_rx = cli.audio_tx.subscribe();
+
+        // Drain Pair
+        loop {
+            match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
+                KvmPacket::Pair { .. } => break,
+                _ => continue,
+            }
+        }
+
+        // Main PC -> Linked PC: AudioStart
+        cli.send_packet(KvmPacket::AudioStart {
+            sample_rate: 48_000,
+            channels: 2,
+            frame_ms: 5,
+            mute_local: true,
+        })
+        .await
+        .unwrap();
+
+        match timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap() {
+            KvmPacket::AudioStart {
+                sample_rate,
+                channels,
+                frame_ms,
+                mute_local,
+            } => {
+                assert_eq!((sample_rate, channels, frame_ms, mute_local), (48_000, 2, 5, true));
+            }
+            other => panic!("expected AudioStart, got {other:?}"),
+        }
+
+        // Linked PC -> Main PC: AudioMuteState reporting
+        r.srv
+            .outgoing_tx
+            .send(Outbound::Packet(KvmPacket::AudioMuteState {
+                state: "muted".to_string(),
+            }))
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), cli_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::AudioMuteState {
+                state: "muted".to_string(),
+            }
+        );
+
+        // Linked PC -> Main PC: 8 x 5 ms (960-byte) audio datagrams
+        for seq in 0u32..8 {
+            let pcm = vec![(seq + 10) as u8; AUDIO_PACKET_BYTES];
+            let dg = encode_audio_datagram(seq, &pcm).unwrap();
+            assert_ne!(dg.len(), 12);
+            r.srv.audio_out_tx.send(bytes::Bytes::from(dg)).unwrap();
+        }
+
+        let mut jb = JitterBuffer::new(JITTER_TARGET_FRAMES, JITTER_MAX_FRAMES);
+        for _ in 0..8 {
+            let dg = timeout(Duration::from_secs(3), cli_audio_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(dg.pcm.len(), AUDIO_PACKET_BYTES);
+            jb.push(dg.seq, dg.pcm);
+        }
+        for seq in 0u8..8 {
+            let out = jb.pop();
+            assert_eq!(out[0], seq + 10);
+        }
+
+        // AudioActivity (Linked -> Main) and MediaKey + AudioStop (Main -> Linked)
+        r.srv
+            .outgoing_tx
+            .send(Outbound::Packet(KvmPacket::AudioActivity { active: true }))
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), cli_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::AudioActivity { active: true }
+        );
+
+        cli.send_packet(KvmPacket::MediaKey {
+            vk: 0xB3,
+            is_down: true,
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::MediaKey {
+                vk: 0xB3,
+                is_down: true
+            }
+        );
+
+        cli.send_packet(KvmPacket::AudioStop).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(3), srv_in_rx.recv()).await.unwrap().unwrap(),
+            KvmPacket::AudioStop
+        );
+
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+    // --- /SPEC-25b ---
 }
