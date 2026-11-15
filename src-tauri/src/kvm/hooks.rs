@@ -98,6 +98,16 @@ static LINK_OFFSET_X: AtomicI32 = AtomicI32::new(0);
 static LINK_OFFSET_Y: AtomicI32 = AtomicI32::new(0);
 
 static MOUSE_BUTTONS_DOWN: AtomicU8 = AtomicU8::new(0);
+// --- SPEC-25a ---
+static DRAG_MODE_ENGAGE: AtomicBool = AtomicBool::new(false);
+static DRAG_MODE_BUTTON: AtomicU8 = AtomicU8::new(1);
+pub type DragModeEngagedCallback = Arc<dyn Fn(u8) + Send + Sync>;
+static DRAG_MODE_ENGAGED_CB: OnceLock<Mutex<Option<DragModeEngagedCallback>>> = OnceLock::new();
+
+fn drag_mode_engaged_slot() -> &'static Mutex<Option<DragModeEngagedCallback>> {
+    DRAG_MODE_ENGAGED_CB.get_or_init(|| Mutex::new(None))
+}
+// --- end SPEC-25a ---
 static KEY_CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static KEY_ALT_DOWN: AtomicBool = AtomicBool::new(false);
 static EDGE_DWELL_START: AtomicU64 = AtomicU64::new(0);
@@ -186,6 +196,50 @@ fn notify_hook_thread_restore() {
     #[cfg(windows)]
     post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
 }
+
+// --- SPEC-25a ---
+fn drag_leap_edge_tolerance(strip_width_px: i32) -> i32 {
+    (strip_width_px + 2).max(4)
+}
+
+fn should_ignore_injected_mouse_hook_event(
+    flags: u32,
+    local_drag_source_active: bool,
+    is_trapped: bool,
+) -> bool {
+    const LLMHF_INJECTED: u32 = 1;
+    (flags & LLMHF_INJECTED) != 0 && local_drag_source_active && !is_trapped
+}
+
+fn is_physical_mouse_hook_event(flags: u32) -> bool {
+    const LLMHF_INJECTED: u32 = 0x0000_0001;
+    const LLMHF_LOWER_IL_INJECTED: u32 = 0x0000_0002;
+    (flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) == 0
+}
+
+pub fn is_hook_active() -> bool {
+    HOOK_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn is_physical_button_down(button: u8) -> bool {
+    let bit = match button {
+        1 => 1u8,
+        2 => 2u8,
+        3 => 4u8,
+        _ => return false,
+    };
+    (MOUSE_BUTTONS_DOWN.load(Ordering::Acquire) & bit) != 0
+}
+
+fn button_from_mouse_up_msg(msg: u32) -> Option<u8> {
+    match msg {
+        0x0202 => Some(1), // WM_LBUTTONUP
+        0x0205 => Some(2), // WM_RBUTTONUP
+        0x0208 => Some(3), // WM_MBUTTONUP
+        _ => None,
+    }
+}
+// --- end SPEC-25a ---
 
 #[cfg(any(windows, test))]
 fn compute_trap_center(mx: i32, my: i32, mw: i32, mh: i32) -> (i32, i32) {
@@ -352,10 +406,138 @@ impl HookController {
             let _ = tracker.release_all();
         }
         notify_hook_thread_restore();
+        super::dragdrop::cancel_active_target_drag_with_reason("emergency_release");
+        super::dragdrop::hide_edge_catcher();
 
         try_send_packet(KvmPacket::EmergencyRelease);
         try_send_packet(KvmPacket::ReleaseAll);
     }
+
+    // --- SPEC-25a ---
+    pub fn set_drag_mode_engaged_callback(&self, cb: Option<DragModeEngagedCallback>) {
+        if let Ok(mut g) = drag_mode_engaged_slot().lock() {
+            *g = cb;
+        }
+    }
+
+    /// Pure guard for whether a drag-mode leap may engage.
+    pub fn can_engage_drag_leap(
+        drag_drop_enabled: bool,
+        hook_active: bool,
+        is_trapped: bool,
+        has_active_link: bool,
+        mouse_buttons_down: u8,
+    ) -> bool {
+        drag_drop_enabled && hook_active && !is_trapped && has_active_link && mouse_buttons_down != 0
+    }
+
+    /// Engage a "drag mode" leap after the edge-catcher helper thread has
+    /// cancelled the local OLE drag with Escape. Never call from a hook callback.
+    #[cfg(windows)]
+    pub fn engage_drag_leap(&self, pt: (i32, i32), button: u8) -> bool {
+        if !Self::can_engage_drag_leap(
+            super::dragdrop::drag_drop_enabled(),
+            HOOK_ACTIVE.load(Ordering::Acquire),
+            IS_TRAPPED.load(Ordering::Acquire),
+            HAS_ACTIVE_LINK.load(Ordering::Acquire),
+            MOUSE_BUTTONS_DOWN.load(Ordering::Acquire),
+        ) {
+            return false;
+        }
+
+        let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
+        let tol = drag_leap_edge_tolerance(2);
+        let hit = {
+            let Ok(layout) = controller_layout().lock() else {
+                return false;
+            };
+            if let Some(origin) = layout.remote_origin {
+                detect_controller_edge_seams(
+                    pt,
+                    &layout.main_monitors,
+                    &layout.linked_monitors,
+                    origin,
+                    &layout.seams,
+                    tol,
+                )
+                .map(|h| {
+                    let m = &layout.main_monitors[h.main_monitor_index];
+                    (
+                        m.x,
+                        m.y,
+                        m.width,
+                        m.height,
+                        h.seam.side,
+                        h.seam.side.opposite(),
+                        h.relative_y,
+                        Some((h.target_monitor, h.along_px)),
+                    )
+                })
+            } else {
+                detect_controller_edge(pt, &layout.main_monitors, link_edge, tol).map(|(idx, _)| {
+                    let m = &layout.main_monitors[idx];
+                    let clamped = (
+                        pt.0.clamp(m.x, m.x + m.width - 1),
+                        pt.1.clamp(m.y, m.y + m.height - 1),
+                    );
+                    let local_union = ScreenRect {
+                        x: LOCAL_UNION_X.load(Ordering::Relaxed),
+                        y: LOCAL_UNION_Y.load(Ordering::Relaxed),
+                        width: LOCAL_UNION_W.load(Ordering::Relaxed),
+                        height: LOCAL_UNION_H.load(Ordering::Relaxed),
+                    };
+                    let peer_union = ScreenRect {
+                        x: 0,
+                        y: 0,
+                        width: PEER_UNION_W.load(Ordering::Relaxed),
+                        height: PEER_UNION_H.load(Ordering::Relaxed),
+                    };
+                    let rel = map_leap_relative_y(
+                        clamped,
+                        &local_union,
+                        &peer_union,
+                        link_edge,
+                        LINK_OFFSET_X.load(Ordering::Relaxed),
+                        LINK_OFFSET_Y.load(Ordering::Relaxed),
+                    );
+                    (
+                        m.x,
+                        m.y,
+                        m.width,
+                        m.height,
+                        link_edge,
+                        Edge::from_u8(LINK_TO_EDGE.load(Ordering::Relaxed)),
+                        rel,
+                        None,
+                    )
+                })
+            }
+        };
+
+        debug_log::note(|| {
+            format!(
+                "DRAG_LEAP_ENGAGE pt=({},{}) button={} hit={}",
+                pt.0,
+                pt.1,
+                button,
+                hit.is_some(),
+            )
+        });
+        let Some((mx, my, mw, mh, leap_side, entry_edge, relative_y, seam_target)) = hit else {
+            return false;
+        };
+
+        DRAG_MODE_BUTTON.store(button, Ordering::Release);
+        DRAG_MODE_ENGAGE.store(true, Ordering::Release);
+        request_engage_leap(mx, my, mw, mh, leap_side, entry_edge, relative_y, seam_target);
+        true
+    }
+
+    #[cfg(not(windows))]
+    pub fn engage_drag_leap(&self, _pt: (i32, i32), _button: u8) -> bool {
+        false
+    }
+    // --- end SPEC-25a ---
 
     pub fn start_hooks(
         &self,
@@ -572,6 +754,14 @@ impl HookController {
         HAS_ACTIVE_LINK.store(false, Ordering::Release);
         EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
+        // --- SPEC-25a ---
+        DRAG_MODE_ENGAGE.store(false, Ordering::Release);
+        super::dragdrop::set_drag_leap_in_progress(false);
+        super::dragdrop::hide_edge_catcher();
+        if let Ok(mut g) = drag_mode_engaged_slot().try_lock() {
+            *g = None;
+        }
+        // --- end SPEC-25a ---
         if let Ok(mut g) = leap_blocked_callback_slot().try_lock() {
             *g = None;
         }
@@ -594,6 +784,11 @@ fn disarm_trapped_in_callback() {
     EDGE_DWELL_START.store(0, Ordering::Relaxed);
     EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
     MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+    // --- SPEC-25a ---
+    DRAG_MODE_ENGAGE.store(false, Ordering::Release);
+    super::dragdrop::set_drag_leap_in_progress(false);
+    super::dragdrop::hide_edge_catcher();
+    // --- end SPEC-25a ---
 }
 
 #[cfg(windows)]
@@ -686,40 +881,61 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     let hook_struct = *(l_param.0 as *const MSLLHOOKSTRUCT);
     let pt = hook_struct.pt;
     let msg = w_param.0 as u32;
+    let is_trapped_now = IS_TRAPPED.load(Ordering::Acquire);
+    let is_physical = is_physical_mouse_hook_event(hook_struct.flags);
+    if should_ignore_injected_mouse_hook_event(
+        hook_struct.flags,
+        super::dragdrop::is_local_drag_source_active(),
+        is_trapped_now,
+    ) || (!is_trapped_now && !is_physical)
+    {
+        return None;
+    }
 
-    match msg {
-        WM_LBUTTONDOWN => {
-            MOUSE_BUTTONS_DOWN.fetch_or(1, Ordering::Relaxed);
+    if is_physical {
+        match msg {
+            WM_LBUTTONDOWN => {
+                MOUSE_BUTTONS_DOWN.fetch_or(1, Ordering::Relaxed);
+            }
+            WM_LBUTTONUP => {
+                MOUSE_BUTTONS_DOWN.fetch_and(!1, Ordering::Relaxed);
+            }
+            WM_RBUTTONDOWN => {
+                MOUSE_BUTTONS_DOWN.fetch_or(2, Ordering::Relaxed);
+            }
+            WM_RBUTTONUP => {
+                MOUSE_BUTTONS_DOWN.fetch_and(!2, Ordering::Relaxed);
+            }
+            WM_MBUTTONDOWN => {
+                MOUSE_BUTTONS_DOWN.fetch_or(4, Ordering::Relaxed);
+            }
+            WM_MBUTTONUP => {
+                MOUSE_BUTTONS_DOWN.fetch_and(!4, Ordering::Relaxed);
+            }
+            WM_XBUTTONDOWN => {
+                let xbtn = ((hook_struct.mouseData >> 16) & 0xFFFF) as u16;
+                let bit = if xbtn == 2 { 16 } else { 8 };
+                MOUSE_BUTTONS_DOWN.fetch_or(bit, Ordering::Relaxed);
+            }
+            WM_XBUTTONUP => {
+                let xbtn = ((hook_struct.mouseData >> 16) & 0xFFFF) as u16;
+                let bit = if xbtn == 2 { 16 } else { 8 };
+                MOUSE_BUTTONS_DOWN.fetch_and(!bit, Ordering::Relaxed);
+            }
+            _ => {}
         }
-        WM_LBUTTONUP => {
-            MOUSE_BUTTONS_DOWN.fetch_and(!1, Ordering::Relaxed);
-        }
-        WM_RBUTTONDOWN => {
-            MOUSE_BUTTONS_DOWN.fetch_or(2, Ordering::Relaxed);
-        }
-        WM_RBUTTONUP => {
-            MOUSE_BUTTONS_DOWN.fetch_and(!2, Ordering::Relaxed);
-        }
-        WM_MBUTTONDOWN => {
-            MOUSE_BUTTONS_DOWN.fetch_or(4, Ordering::Relaxed);
-        }
-        WM_MBUTTONUP => {
-            MOUSE_BUTTONS_DOWN.fetch_and(!4, Ordering::Relaxed);
-        }
-        WM_XBUTTONDOWN => {
-            let xbtn = ((hook_struct.mouseData >> 16) & 0xFFFF) as u16;
-            let bit = if xbtn == 2 { 16 } else { 8 };
-            MOUSE_BUTTONS_DOWN.fetch_or(bit, Ordering::Relaxed);
-        }
-        WM_XBUTTONUP => {
-            let xbtn = ((hook_struct.mouseData >> 16) & 0xFFFF) as u16;
-            let bit = if xbtn == 2 { 16 } else { 8 };
-            MOUSE_BUTTONS_DOWN.fetch_and(!bit, Ordering::Relaxed);
-        }
-        _ => {}
     }
 
     if IS_TRAPPED.load(Ordering::Acquire) {
+        if is_physical
+            && button_from_mouse_up_msg(msg).is_some()
+            && super::dragdrop::is_local_drag_source_active()
+        {
+            if let Some(btn) = button_from_mouse_up_msg(msg) {
+                super::dragdrop::on_target_physical_mouse_up(btn);
+            }
+            return None;
+        }
         if msg == WM_MOUSEMOVE {
             let center = (
                 CLAMP_CENTER_X.load(Ordering::Relaxed),
@@ -753,13 +969,40 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     }
 
     if msg != WM_MOUSEMOVE || !HAS_ACTIVE_LINK.load(Ordering::Acquire) {
+        // --- SPEC-25a ---
+        if is_physical {
+            if let Some(btn) = button_from_mouse_up_msg(msg) {
+                super::dragdrop::on_target_physical_mouse_up(btn);
+            }
+            if MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) == 0
+                && super::dragdrop::is_edge_catcher_visible()
+            {
+                super::dragdrop::on_hook_mouse_up();
+            } else if button_from_mouse_up_msg(msg).is_some()
+                && MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) == 0
+            {
+                super::dragdrop::on_hook_mouse_up();
+            }
+        }
+        // --- end SPEC-25a ---
         return None;
     }
 
-    if MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) != 0 {
+    let btns_down = MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed);
+    if btns_down != 0 {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
         EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
+        // --- SPEC-25a ---
+        if super::dragdrop::drag_drop_enabled() {
+            super::dragdrop::on_mouse_drag_probe((pt.x, pt.y), btns_down, false);
+        } else if super::dragdrop::is_edge_catcher_visible() {
+            super::dragdrop::hide_edge_catcher();
+        }
+        // --- end SPEC-25a ---
         return None;
+    }
+    if super::dragdrop::is_edge_catcher_visible() {
+        super::dragdrop::hide_edge_catcher();
     }
 
     let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
@@ -1461,6 +1704,8 @@ unsafe fn perform_watchdog_release(gap_ms: u32) {
         let _ = tracker.release_all();
     }
     restore_cursor_visibility();
+    super::dragdrop::cancel_active_target_drag_with_reason("emergency_release");
+    super::dragdrop::hide_edge_catcher();
     try_send_packet(KvmPacket::EmergencyRelease);
     try_send_packet(KvmPacket::ReleaseAll);
 }
@@ -1559,6 +1804,10 @@ unsafe fn perform_engage_leap() -> bool {
     let our_pid = GetCurrentProcessId();
 
     if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
+        // --- SPEC-25a ---
+        DRAG_MODE_ENGAGE.store(false, Ordering::Release);
+        super::dragdrop::set_drag_leap_in_progress(false);
+        // --- end SPEC-25a ---
         block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
         return false;
     }
@@ -1567,6 +1816,10 @@ unsafe fn perform_engage_leap() -> bool {
 
     // Guard again in case minimizing our own window promoted an elevated window.
     if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
+        // --- SPEC-25a ---
+        DRAG_MODE_ENGAGE.store(false, Ordering::Release);
+        super::dragdrop::set_drag_leap_in_progress(false);
+        // --- end SPEC-25a ---
         block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
         return false;
     }
@@ -1663,6 +1916,22 @@ unsafe fn perform_engage_leap() -> bool {
         target_monitor,
         along_px,
     });
+    // --- SPEC-25a ---
+    if DRAG_MODE_ENGAGE.swap(false, Ordering::AcqRel) {
+        let btn = DRAG_MODE_BUTTON.load(Ordering::Acquire);
+        super::dragdrop::set_drag_leap_in_progress(false);
+        let mut dispatched = false;
+        if super::dragdrop::drag_drop_enabled() {
+            if let Ok(g) = drag_mode_engaged_slot().try_lock() {
+                if let Some(ref cb) = *g {
+                    dispatched = true;
+                    cb(btn);
+                }
+            }
+        }
+        debug_log::note(|| format!("DRAG_LEAP_DISPATCH_CB button={btn} dispatched={dispatched}"));
+    }
+    // --- end SPEC-25a ---
     true
 }
 
@@ -1782,6 +2051,8 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
             });
         }
         post_hook_thread_message(WM_KVM_RESTORE_CURSOR);
+        super::dragdrop::cancel_active_target_drag_with_reason("emergency_release");
+        super::dragdrop::hide_edge_catcher();
 
         try_send_packet(KvmPacket::EmergencyRelease);
         try_send_packet(KvmPacket::ReleaseAll);
@@ -2086,4 +2357,33 @@ mod tests {
             true, false, true, false, 10_000, 0, cd
         ));
     }
+
+    // --- SPEC-25a ---
+    #[test]
+    fn drag_leap_edge_helpers_and_injected_guard() {
+        assert_eq!(drag_leap_edge_tolerance(2), 4);
+        assert_eq!(drag_leap_edge_tolerance(0), 4);
+
+        const LLMHF_INJECTED: u32 = 1;
+        assert!(should_ignore_injected_mouse_hook_event(LLMHF_INJECTED, true, false));
+        assert!(!should_ignore_injected_mouse_hook_event(0, true, false));
+        assert!(!should_ignore_injected_mouse_hook_event(LLMHF_INJECTED, false, false));
+        assert!(!should_ignore_injected_mouse_hook_event(LLMHF_INJECTED, true, true));
+
+        assert!(is_physical_mouse_hook_event(0));
+        assert!(!is_physical_mouse_hook_event(LLMHF_INJECTED));
+        assert!(!is_physical_mouse_hook_event(0x0000_0002));
+        assert!(!is_physical_mouse_hook_event(0x0000_0003));
+
+        assert_eq!(button_from_mouse_up_msg(0x0202), Some(1)); // WM_LBUTTONUP
+        assert_eq!(button_from_mouse_up_msg(0x0205), Some(2)); // WM_RBUTTONUP
+        assert_eq!(button_from_mouse_up_msg(0x0208), Some(3)); // WM_MBUTTONUP
+        assert_eq!(button_from_mouse_up_msg(0x0200), None);
+
+        assert!(!HookController::can_engage_drag_leap(false, true, false, true, 1));
+        assert!(HookController::can_engage_drag_leap(true, true, false, true, 1));
+        assert!(!HookController::can_engage_drag_leap(true, true, true, true, 1));
+        assert!(!HookController::can_engage_drag_leap(true, true, false, true, 0));
+    }
+    // --- end SPEC-25a ---
 }

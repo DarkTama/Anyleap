@@ -105,7 +105,7 @@ pub async fn start_kvm_server(
     let (incoming_tx, _) = broadcast::channel(512);
     let (outgoing_tx, _) = broadcast::channel(512);
     let (mouse_delta_tx, _) = broadcast::channel(1024);
-    let (transfer_tx, _) = broadcast::channel(64);
+    let (transfer_tx, _) = broadcast::channel(256);
     let (disconnect_tx, _) = broadcast::channel(32);
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     // --- SPEC-25b ---
@@ -259,6 +259,69 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
         }
     }
 
+fn spawn_server_bulk_transfer(
+    conn: &quinn::Connection,
+    xfer_tx: &broadcast::Sender<TransferEvent>,
+    kind: super::files::BulkTransferKind,
+    id: String,
+    rel_path: String,
+    path: std::path::PathBuf,
+    size: u64,
+) {
+    let c = conn.clone();
+    let tx = xfer_tx.clone();
+    tokio::spawn(async move {
+        let id_prog = id.clone();
+        let name_prog = rel_path.clone();
+        let tx_prog = tx.clone();
+        let kind_str = kind.as_str();
+        let res = super::files::send_tracked_bulk_file(
+            &c,
+            kind,
+            "server",
+            id.clone(),
+            rel_path.clone(),
+            &path,
+            size,
+            |pct| {
+                let (emit_pct, emit_state) = match kind {
+                    super::files::BulkTransferKind::Drag => (pct.min(99), "active"),
+                    super::files::BulkTransferKind::Clip => {
+                        (pct, if pct >= 100 { "done" } else { "active" })
+                    }
+                };
+                let _ = tx_prog.send(TransferEvent::Progress {
+                    id: id_prog.clone(),
+                    kind: kind_str.to_string(),
+                    name: name_prog.clone(),
+                    pct: emit_pct,
+                    state: emit_state.to_string(),
+                    size_bytes: size,
+                });
+            },
+        )
+        .await;
+        if let Err(reason) = res {
+            if reason == super::files::TRANSFER_CANCELLED_ERR {
+                let meta = super::files::TransferCancelMeta {
+                    id,
+                    kind: kind_str.to_string(),
+                    name: rel_path,
+                    size_bytes: size,
+                };
+                super::files::emit_cancelled_once(c.stable_id(), &meta, Some(&tx));
+            } else {
+                let _ = tx.send(TransferEvent::Failed {
+                    id,
+                    kind: kind_str.to_string(),
+                    name: rel_path,
+                    reason,
+                });
+            }
+        }
+    });
+}
+
     if !disconnected_early {
         // Authorised session from here on.
         let mut tasks = Vec::new();
@@ -308,6 +371,36 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                             });
                         }
                         // --- end SPEC-25c ---
+                        // --- SPEC-25a ---
+                        Ok(Outbound::DragFile { drag_id, rel_path, path, size }) => {
+                            spawn_server_bulk_transfer(
+                                &out_conn,
+                                &out_xfer_tx,
+                                super::files::BulkTransferKind::Drag,
+                                drag_id,
+                                rel_path,
+                                path,
+                                size,
+                            );
+                        }
+                        Ok(Outbound::ClipFile { offer_id, rel_path, path, size }) => {
+                            spawn_server_bulk_transfer(
+                                &out_conn,
+                                &out_xfer_tx,
+                                super::files::BulkTransferKind::Clip,
+                                offer_id,
+                                rel_path,
+                                path,
+                                size,
+                            );
+                        }
+                        Ok(Outbound::CursorFile { role, name, data }) => {
+                            let c = out_conn.clone();
+                            tokio::spawn(async move {
+                                let _ = super::files::send_cursor_file(&c, role, name, &data).await;
+                            });
+                        }
+                        // --- end SPEC-25a ---
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                         Err(_) => break,
                     },
@@ -1443,4 +1536,833 @@ mod tests {
         let _ = std::fs::remove_dir_all(&r.dir);
     }
     // --- /SPEC-25b ---
+
+    // --- SPEC-25a ---
+    #[tokio::test]
+    async fn loopback_drag_offer_drag_file_and_drag_ready() {
+        let _settings_lock = crate::kvm::dragdrop::test_files_settings_lock();
+        struct RestoreDragSettings;
+        impl Drop for RestoreDragSettings {
+            fn drop(&mut self) {
+                crate::kvm::dragdrop::set_files_settings(
+                    crate::kvm::dragdrop::DEFAULT_DRAG_DROP_ENABLED,
+                    true,
+                    2048,
+                    false,
+                    100,
+                );
+            }
+        }
+        let _restore_settings = RestoreDragSettings;
+        crate::kvm::dragdrop::set_files_settings(true, true, 2048, false, 100);
+
+        use crate::kvm::files::send_drag_file;
+        use crate::kvm::protocol::{FileMeta, TransferEvent};
+        use crate::kvm::staging::{
+            cleanup_staging_entry, default_staging_root, record_file_received,
+            register_transfer_offer, TransferDestination, TransferKind,
+        };
+
+        let r = rig("drag-offer-file-ready").await;
+        let mut srv_pkt_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_xfer_rx = r.srv.transfer_tx.subscribe();
+        let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+        let mut cli_pkt_rx = c.incoming_tx.subscribe();
+
+        let src_file = r.dir.join("hello.txt");
+        let payload = b"Cross-PC SPEC-25a QUIC loopback drag payload!";
+        std::fs::write(&src_file, payload).unwrap();
+
+        let drag_id = format!("drag-loopback-{}", std::process::id());
+        let offer_files = vec![FileMeta {
+            rel_path: "hello.txt".into(),
+            size: payload.len() as u64,
+            is_dir: false,
+        }];
+
+        // Client -> Server: DragOffer control packet
+        c.send_packet(KvmPacket::DragOffer {
+            drag_id: drag_id.clone(),
+            files: offer_files.clone(),
+            button: 1,
+        })
+        .await
+        .unwrap();
+
+        let (rx_drag_id, rx_files) = loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::DragOffer { drag_id, files, .. })) => break (drag_id, files),
+                Ok(Ok(_)) => continue,
+                other => panic!("expected DragOffer on server, got {other:?}"),
+            }
+        };
+        assert_eq!(rx_drag_id, drag_id);
+        assert_eq!(rx_files, offer_files);
+
+        // Register staging offer on server side (with Downloads dir inside test temp)
+        let staging_root = default_staging_root();
+        let plan = register_transfer_offer(
+            &rx_drag_id,
+            TransferKind::Drag,
+            &rx_files,
+            &staging_root,
+            &r.dir.join("downloads"),
+            512,
+        )
+        .unwrap();
+        assert_eq!(plan.destination, TransferDestination::Staging);
+
+        // Client -> Server: StreamHeader::DragFile uni stream
+        send_drag_file(
+            &c.conn,
+            drag_id.clone(),
+            "hello.txt".to_string(),
+            &src_file,
+            payload.len() as u64,
+        )
+        .await
+        .unwrap();
+
+        let staged_path = loop {
+            match timeout(Duration::from_secs(3), srv_xfer_rx.recv()).await {
+                Ok(Ok(TransferEvent::DragFile {
+                    drag_id: ev_id,
+                    rel_path,
+                    path,
+                    size,
+                })) if ev_id == drag_id => {
+                    assert_eq!(rel_path, "hello.txt");
+                    assert_eq!(size, payload.len() as u64);
+                    let (completed, _) = record_file_received(&ev_id, size);
+                    assert!(completed.is_some());
+                    break path;
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected TransferEvent::DragFile, got {other:?}"),
+            }
+        };
+        assert_eq!(std::fs::read(&staged_path).unwrap(), payload);
+
+        // Server -> Client: DragReady control packet
+        r.srv
+            .outgoing_tx
+            .send(Outbound::Packet(KvmPacket::DragReady {
+                drag_id: drag_id.clone(),
+            }))
+            .unwrap();
+        loop {
+            match timeout(Duration::from_secs(3), cli_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::DragReady { drag_id: ready_id })) => {
+                    assert_eq!(ready_id, drag_id);
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected DragReady on client, got {other:?}"),
+            }
+        }
+
+        cleanup_staging_entry(&staging_root, &drag_id);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn loopback_large_clip_file_400mb_succeeds() {
+        use crate::kvm::files::send_clip_file;
+        use crate::kvm::protocol::{FileMeta, TransferEvent};
+        use crate::kvm::staging::{
+            cleanup_staging_entry, default_staging_root, record_file_received,
+            register_transfer_offer, TransferDestination, TransferKind,
+        };
+
+        let r = rig("clip-file-400mb").await;
+        let mut srv_pkt_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_xfer_rx = r.srv.transfer_tx.subscribe();
+        let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+
+        let size: u64 = 400 * 1024 * 1024;
+        let src_file = r.dir.join("large-video.mp4");
+        {
+            let f = std::fs::File::create(&src_file).unwrap();
+            f.set_len(size).unwrap();
+        }
+
+        let offer_id = format!("clip-400mb-{}", std::process::id());
+        let offer_files = vec![FileMeta {
+            rel_path: "large-video.mp4".into(),
+            size,
+            is_dir: false,
+        }];
+
+        c.send_packet(KvmPacket::FileClipOffer {
+            offer_id: offer_id.clone(),
+            files: offer_files.clone(),
+        })
+        .await
+        .unwrap();
+
+        let (rx_offer_id, rx_files) = loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::FileClipOffer { offer_id, files })) => break (offer_id, files),
+                Ok(Ok(_)) => continue,
+                other => panic!("expected FileClipOffer on server, got {other:?}"),
+            }
+        };
+
+        let staging_root = default_staging_root();
+        let plan = register_transfer_offer(
+            &rx_offer_id,
+            TransferKind::Clip,
+            &rx_files,
+            &staging_root,
+            &r.dir.join("downloads"),
+            2048,
+        )
+        .unwrap();
+        assert_eq!(plan.destination, TransferDestination::Staging);
+
+        let t0 = std::time::Instant::now();
+        let conn_clone = c.conn.clone();
+        let id_clone = offer_id.clone();
+        let src_clone = src_file.clone();
+        let send_task = tokio::spawn(async move {
+            send_clip_file(
+                &conn_clone,
+                id_clone,
+                "large-video.mp4".to_string(),
+                &src_clone,
+                size,
+            )
+            .await
+        });
+
+        // Control stream must stay responsive while a 400 MB ClipFile is streaming.
+        c.send_packet(KvmPacket::MouseWheel { delta: 42 }).await.unwrap();
+        loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::MouseWheel { delta: 42 })) => break,
+                Ok(Ok(_)) => continue,
+                other => panic!("control packet stalled during 400 MB clip send: {other:?}"),
+            }
+        }
+
+        let mut progress_pcts = Vec::new();
+        let staged_path = loop {
+            match timeout(Duration::from_secs(25), srv_xfer_rx.recv()).await {
+                Ok(Ok(TransferEvent::Progress { id, kind, pct, .. })) if id == offer_id => {
+                    assert_eq!(kind, "clip");
+                    assert!(pct <= 100);
+                    if let Some(&prev) = progress_pcts.last() {
+                        assert!(pct >= prev);
+                    }
+                    progress_pcts.push(pct);
+                }
+                Ok(Ok(TransferEvent::ClipFile {
+                    offer_id: ev_id,
+                    rel_path,
+                    path,
+                    size: rx_size,
+                })) if ev_id == offer_id => {
+                    assert_eq!(rel_path, "large-video.mp4");
+                    assert_eq!(rx_size, size);
+                    let (completed, _) = record_file_received(&ev_id, rx_size);
+                    assert!(completed.is_some());
+                    break path;
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected TransferEvent::ClipFile after {:?}, got {other:?}", t0.elapsed()),
+            }
+        };
+        send_task.await.unwrap().unwrap();
+        assert_eq!(progress_pcts.last().copied(), Some(100));
+        let elapsed = t0.elapsed();
+        eprintln!("[loopback-400mb] elapsed={elapsed:?}, path={staged_path:?}");
+        assert_eq!(std::fs::metadata(&staged_path).unwrap().len(), size);
+
+        cleanup_staging_entry(&staging_root, &offer_id);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn loopback_clip_file_failure_cleans_part_and_emits_failed() {
+        use crate::kvm::protocol::{write_frame, FileMeta, StreamHeader, TransferEvent};
+        use crate::kvm::staging::{
+            cleanup_staging_entry, default_staging_root, register_transfer_offer, TransferKind,
+        };
+
+        let r = rig("clip-file-fail").await;
+        let mut srv_pkt_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_xfer_rx = r.srv.transfer_tx.subscribe();
+        let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+
+        let offer_id = format!("clip-fail-{}", std::process::id());
+        c.send_packet(KvmPacket::FileClipOffer {
+            offer_id: offer_id.clone(),
+            files: vec![FileMeta {
+                rel_path: "broken.bin".into(),
+                size: 64 * 1024,
+                is_dir: false,
+            }],
+        })
+        .await
+        .unwrap();
+
+        let (rx_id, rx_files) = loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::FileClipOffer { offer_id, files })) => break (offer_id, files),
+                Ok(Ok(_)) => continue,
+                other => panic!("expected FileClipOffer, got {other:?}"),
+            }
+        };
+        let staging_root = default_staging_root();
+        let plan = register_transfer_offer(
+            &rx_id,
+            TransferKind::Clip,
+            &rx_files,
+            &staging_root,
+            &r.dir.join("downloads"),
+            2048,
+        )
+        .unwrap();
+
+        // Stream a valid header + truncated payload and finish early (EOF before declared 64 KiB).
+        let mut s = c.conn.open_uni().await.unwrap();
+        write_frame(
+            &mut s,
+            &StreamHeader::ClipFile {
+                offer_id: offer_id.clone(),
+                rel_path: "broken.bin".into(),
+                size: 64 * 1024,
+            },
+        )
+        .await
+        .unwrap();
+        s.write_all(&vec![0xAB; 512]).await.unwrap();
+        s.finish().unwrap();
+        let _ = s.stopped().await;
+
+        loop {
+            match timeout(Duration::from_secs(5), srv_xfer_rx.recv()).await {
+                Ok(Ok(TransferEvent::Failed { id, kind, name, reason })) if id == offer_id => {
+                    assert_eq!(kind, "clip");
+                    assert_eq!(name, "broken.bin");
+                    assert!(!reason.is_empty());
+                    break;
+                }
+                Ok(Ok(TransferEvent::ClipFile { offer_id: ev_id, .. })) if ev_id == offer_id => {
+                    panic!("truncated ClipFile must never complete");
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected TransferEvent::Failed, got {other:?}"),
+            }
+        }
+
+        let part_path = plan.base_dir.join("broken.bin.part");
+        assert!(!part_path.exists(), "failed transfer must remove .part file");
+        cleanup_staging_entry(&staging_root, &offer_id);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn loopback_mouse_datagram_latency_during_300mb_clip_transfer() {
+        use crate::kvm::files::send_clip_file;
+        use crate::kvm::protocol::{encode_delta, FileMeta, TransferEvent, UdpMouseDelta};
+        use crate::kvm::staging::{
+            cleanup_staging_entry, default_staging_root, record_file_received,
+            register_transfer_offer, TransferKind,
+        };
+        use tokio::sync::oneshot;
+
+        let r = rig("clip-300mb-dg-lat").await;
+        let mut srv_pkt_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_xfer_rx = r.srv.transfer_tx.subscribe();
+        let mut srv_dg_rx = r.srv.mouse_delta_tx.subscribe();
+        let c = connect(&r, Some(r.srv.pin())).await.unwrap();
+
+        let size: u64 = 300 * 1024 * 1024;
+        let src_file = r.dir.join("bulk-300mb.bin");
+        {
+            let f = std::fs::File::create(&src_file).unwrap();
+            f.set_len(size).unwrap();
+        }
+
+        let offer_id = format!("clip-300mb-dg-{}", std::process::id());
+        let offer_files = vec![FileMeta {
+            rel_path: "bulk-300mb.bin".into(),
+            size,
+            is_dir: false,
+        }];
+        c.send_packet(KvmPacket::FileClipOffer {
+            offer_id: offer_id.clone(),
+            files: offer_files,
+        })
+        .await
+        .unwrap();
+
+        let (rx_offer_id, rx_files) = loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::FileClipOffer { offer_id, files })) => break (offer_id, files),
+                Ok(Ok(_)) => continue,
+                other => panic!("expected FileClipOffer, got {other:?}"),
+            }
+        };
+        let staging_root = default_staging_root();
+        let _plan = register_transfer_offer(
+            &rx_offer_id,
+            TransferKind::Clip,
+            &rx_files,
+            &staging_root,
+            &r.dir.join("downloads"),
+            2048,
+        )
+        .unwrap();
+
+        let epoch = std::time::Instant::now();
+        let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
+        let (rx_stop_tx, mut rx_stop_rx) = oneshot::channel::<()>();
+
+        let dg_conn = c.conn.clone();
+        let sender_task = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(4));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut seq = 0u32;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut stop_rx => break seq,
+                    _ = tick.tick() => {
+                        let ts_us = epoch.elapsed().as_micros() as u64;
+                        let delta = UdpMouseDelta {
+                            dx: (ts_us & 0xFFFF_FFFF) as i32,
+                            dy: (ts_us >> 32) as i32,
+                            seq,
+                        };
+                        let _ = dg_conn.send_datagram(bytes::Bytes::copy_from_slice(&encode_delta(&delta)));
+                        seq = seq.wrapping_add(1);
+                    }
+                }
+            }
+        });
+
+        let recv_task = tokio::spawn(async move {
+            let mut latencies_us = Vec::<u64>::new();
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut rx_stop_rx => break latencies_us,
+                    res = srv_dg_rx.recv() => {
+                        match res {
+                            Ok(d) => {
+                                let sent_us = ((d.dy as u32 as u64) << 32) | (d.dx as u32 as u64);
+                                let now_us = epoch.elapsed().as_micros() as u64;
+                                latencies_us.push(now_us.saturating_sub(sent_us));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(_) => break latencies_us,
+                        }
+                    }
+                }
+            }
+        });
+
+        let t0 = std::time::Instant::now();
+        let conn_clone = c.conn.clone();
+        let id_clone = offer_id.clone();
+        let src_clone = src_file.clone();
+        let send_task = tokio::spawn(async move {
+            send_clip_file(
+                &conn_clone,
+                id_clone,
+                "bulk-300mb.bin".to_string(),
+                &src_clone,
+                size,
+            )
+            .await
+        });
+
+        loop {
+            match timeout(Duration::from_secs(60), srv_xfer_rx.recv()).await {
+                Ok(Ok(TransferEvent::ClipFile {
+                    offer_id: ev_id,
+                    size: rx_size,
+                    ..
+                })) if ev_id == offer_id => {
+                    let (completed, _) = record_file_received(&ev_id, rx_size);
+                    assert!(completed.is_some());
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("ClipFile did not complete cleanly: {other:?}"),
+            }
+        }
+        send_task.await.unwrap().unwrap();
+        let elapsed = t0.elapsed();
+        let _ = stop_tx.send(());
+        let sent_count = sender_task.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let _ = rx_stop_tx.send(());
+        let mut latencies = recv_task.await.unwrap();
+        assert!(!latencies.is_empty(), "must receive mouse datagrams during transfer");
+        latencies.sort_unstable();
+        let n = latencies.len();
+        let p50 = latencies[n / 2];
+        let p95 = latencies[((n - 1) * 95) / 100];
+        let max = *latencies.last().unwrap();
+        let mb_per_sec = (size as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64();
+        eprintln!(
+            "[r2-bench] 300MB elapsed={elapsed:?} throughput={mb_per_sec:.1} MB/s datagrams_sent={sent_count} recv={n} p50={p50}us p95={p95}us max={max}us"
+        );
+        // Loose CI safety sanity bound only (non-flaky on busy loopback runners).
+        assert!(max < 10_000_000, "unexpected >10s datagram stall: max={max}us");
+
+        cleanup_staging_entry(&staging_root, &offer_id);
+
+        // Phase 2: Linked -> Main (Server -> Client 300MB transfer while Client -> Server mouse datagrams flow).
+        let offer_id_s2c = format!("clip-300mb-dg-s2c-{}", std::process::id());
+        let offer_files_s2c = vec![FileMeta {
+            rel_path: "bulk-300mb.bin".into(),
+            size,
+            is_dir: false,
+        }];
+        let _plan_s2c = register_transfer_offer(
+            &offer_id_s2c,
+            TransferKind::Clip,
+            &offer_files_s2c,
+            &staging_root,
+            &r.dir.join("downloads-s2c"),
+            2048,
+        )
+        .unwrap();
+
+        let mut cli_xfer_rx = c.transfer_tx.subscribe();
+        let mut srv_dg_rx_s2c = r.srv.mouse_delta_tx.subscribe();
+        let epoch_s2c = std::time::Instant::now();
+        let (stop_tx_s2c, mut stop_rx_s2c) = oneshot::channel::<()>();
+        let (rx_stop_tx_s2c, mut rx_stop_rx_s2c) = oneshot::channel::<()>();
+
+        let dg_conn_s2c = c.conn.clone();
+        let sender_task_s2c = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(4));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut seq = 0u32;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut stop_rx_s2c => break seq,
+                    _ = tick.tick() => {
+                        let ts_us = epoch_s2c.elapsed().as_micros() as u64;
+                        let delta = UdpMouseDelta {
+                            dx: (ts_us & 0xFFFF_FFFF) as i32,
+                            dy: (ts_us >> 32) as i32,
+                            seq,
+                        };
+                        let _ = dg_conn_s2c.send_datagram(bytes::Bytes::copy_from_slice(&encode_delta(&delta)));
+                        seq = seq.wrapping_add(1);
+                    }
+                }
+            }
+        });
+
+        let recv_task_s2c = tokio::spawn(async move {
+            let mut latencies_us = Vec::<u64>::new();
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut rx_stop_rx_s2c => break latencies_us,
+                    res = srv_dg_rx_s2c.recv() => {
+                        match res {
+                            Ok(d) => {
+                                let sent_us = ((d.dy as u32 as u64) << 32) | (d.dx as u32 as u64);
+                                let now_us = epoch_s2c.elapsed().as_micros() as u64;
+                                latencies_us.push(now_us.saturating_sub(sent_us));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(_) => break latencies_us,
+                        }
+                    }
+                }
+            }
+        });
+
+        let t0_s2c = std::time::Instant::now();
+        r.srv
+            .outgoing_tx
+            .send(Outbound::ClipFile {
+                offer_id: offer_id_s2c.clone(),
+                rel_path: "bulk-300mb.bin".to_string(),
+                path: src_file.clone(),
+                size,
+            })
+            .unwrap();
+
+        loop {
+            match timeout(Duration::from_secs(60), cli_xfer_rx.recv()).await {
+                Ok(Ok(TransferEvent::ClipFile {
+                    offer_id: ev_id,
+                    size: rx_size,
+                    ..
+                })) if ev_id == offer_id_s2c => {
+                    let (completed, _) = record_file_received(&ev_id, rx_size);
+                    assert!(completed.is_some());
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("s2c ClipFile did not complete cleanly: {other:?}"),
+            }
+        }
+        let elapsed_s2c = t0_s2c.elapsed();
+        let _ = stop_tx_s2c.send(());
+        let sent_count_s2c = sender_task_s2c.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let _ = rx_stop_tx_s2c.send(());
+        let mut latencies_s2c = recv_task_s2c.await.unwrap();
+        assert!(
+            !latencies_s2c.is_empty(),
+            "must receive mouse datagrams during server->client transfer"
+        );
+        latencies_s2c.sort_unstable();
+        let n_s2c = latencies_s2c.len();
+        let p50_s2c = latencies_s2c[n_s2c / 2];
+        let p95_s2c = latencies_s2c[((n_s2c - 1) * 95) / 100];
+        let max_s2c = *latencies_s2c.last().unwrap();
+        let mb_per_sec_s2c = (size as f64 / (1024.0 * 1024.0)) / elapsed_s2c.as_secs_f64();
+        eprintln!(
+            "[r2-bench] s2c 300MB elapsed={elapsed_s2c:?} throughput={mb_per_sec_s2c:.1} MB/s datagrams_sent={sent_count_s2c} recv={n_s2c} p50={p50_s2c}us p95={p95_s2c}us max={max_s2c}us"
+        );
+        assert!(
+            max_s2c < 10_000_000,
+            "unexpected >10s datagram stall during s2c: max={max_s2c}us"
+        );
+
+        cleanup_staging_entry(&staging_root, &offer_id_s2c);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn loopback_clip_file_cancels_cleanly_from_both_sides() {
+        use crate::kvm::files::{
+            global_cancel_registry, send_clip_file, TRANSFER_CANCELLED_ERR,
+        };
+        use crate::kvm::protocol::{FileMeta, TransferEvent};
+        use crate::kvm::staging::{
+            cleanup_staging_entry, default_staging_root, register_transfer_offer, TransferKind,
+        };
+
+        let r = rig("clip-cancel-both").await;
+        let pin = r.srv.security_pin.lock().unwrap().clone();
+        let c = connect(&r, Some(pin)).await.unwrap();
+        let mut srv_pkt_rx = r.srv.incoming_tx.subscribe();
+        let mut srv_trx = r.srv.transfer_tx.subscribe();
+        let mut cli_trx = c.transfer_tx.subscribe();
+
+        let size: u64 = 128 * 1024 * 1024;
+        let src_file = r.dir.join("clip-big.bin");
+        {
+            let f = std::fs::File::create(&src_file).unwrap();
+            f.set_len(size).unwrap();
+        }
+        let staging_root = default_staging_root();
+
+        // Phase 1: Receiver-initiated cancel mid-way.
+        let id_rx = format!("clip-rx-cancel-{}", std::process::id());
+        let offer_files = vec![FileMeta {
+            rel_path: "clip-big.bin".into(),
+            size,
+            is_dir: false,
+        }];
+        c.send_packet(KvmPacket::FileClipOffer {
+            offer_id: id_rx.clone(),
+            files: offer_files.clone(),
+        })
+        .await
+        .unwrap();
+        let (rx_id, rx_files) = loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::FileClipOffer { offer_id, files })) if offer_id == id_rx => {
+                    break (offer_id, files)
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected FileClipOffer, got {other:?}"),
+            }
+        };
+        let plan_rx = register_transfer_offer(
+            &rx_id,
+            TransferKind::Clip,
+            &rx_files,
+            &staging_root,
+            &r.dir.join("downloads"),
+            2048,
+        )
+        .unwrap();
+
+        let conn_clone = c.conn.clone();
+        let id_send1 = id_rx.clone();
+        let src1 = src_file.clone();
+        let send_task1 = tokio::spawn(async move {
+            send_clip_file(
+                &conn_clone,
+                id_send1,
+                "clip-big.bin".to_string(),
+                &src1,
+                size,
+            )
+            .await
+        });
+
+        // Wait for server receiver progress event.
+        loop {
+            match timeout(Duration::from_secs(5), srv_trx.recv()).await {
+                Ok(Ok(TransferEvent::Progress { id, state, .. })) if id == id_rx => {
+                    assert_eq!(state, "active");
+                    break;
+                }
+                Ok(Ok(TransferEvent::ClipFile { offer_id, .. })) if offer_id == id_rx => {
+                    panic!("transfer finished before receiver cancel triggered");
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected Progress on receiver before cancel, got {other:?}"),
+            }
+        }
+
+        // Receiver cancels locally + sends TransferCancel to sender.
+        let srv_cancelled = global_cancel_registry().cancel_except_conn(c.conn.stable_id(), &id_rx);
+        assert!(!srv_cancelled.is_empty(), "receiver must have registered active transfer");
+        for (_, meta) in &srv_cancelled {
+            let _ = r.srv.transfer_tx.send(TransferEvent::Cancelled {
+                id: meta.id.clone(),
+                kind: meta.kind.clone(),
+                name: meta.name.clone(),
+                size_bytes: meta.size_bytes,
+            });
+        }
+        r.srv
+            .outgoing_tx
+            .send(Outbound::Packet(KvmPacket::TransferCancel { id: id_rx.clone() }))
+            .unwrap();
+
+        let send_res1 = timeout(Duration::from_secs(5), send_task1).await.unwrap().unwrap();
+        assert_eq!(send_res1.as_ref().map_err(String::as_str), Err(TRANSFER_CANCELLED_ERR));
+
+        let mut srv_saw_cancel = false;
+        let mut cli_saw_cancel = false;
+        for _ in 0..30 {
+            if let Ok(Ok(TransferEvent::Cancelled { id, kind, .. })) =
+                timeout(Duration::from_millis(200), srv_trx.recv()).await
+            {
+                if id == id_rx && kind == "clip" {
+                    srv_saw_cancel = true;
+                }
+            }
+            if let Ok(Ok(TransferEvent::Cancelled { id, kind, .. })) =
+                timeout(Duration::from_millis(200), cli_trx.recv()).await
+            {
+                if id == id_rx && kind == "clip" {
+                    cli_saw_cancel = true;
+                }
+            }
+            if srv_saw_cancel && cli_saw_cancel {
+                break;
+            }
+        }
+        assert!(srv_saw_cancel && cli_saw_cancel, "both sides must see cancelled (srv={srv_saw_cancel}, cli={cli_saw_cancel})");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!plan_rx.base_dir.exists(), "cancelled clip staging dir + .part must be removed");
+
+        // Phase 2: Sender-initiated cancel mid-way.
+        let id_tx = format!("clip-tx-cancel-{}", std::process::id());
+        c.send_packet(KvmPacket::FileClipOffer {
+            offer_id: id_tx.clone(),
+            files: offer_files,
+        })
+        .await
+        .unwrap();
+        let (rx_id2, rx_files2) = loop {
+            match timeout(Duration::from_secs(3), srv_pkt_rx.recv()).await {
+                Ok(Ok(KvmPacket::FileClipOffer { offer_id, files })) if offer_id == id_tx => {
+                    break (offer_id, files)
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected second FileClipOffer, got {other:?}"),
+            }
+        };
+        let plan_tx = register_transfer_offer(
+            &rx_id2,
+            TransferKind::Clip,
+            &rx_files2,
+            &staging_root,
+            &r.dir.join("downloads"),
+            2048,
+        )
+        .unwrap();
+
+        let conn_clone2 = c.conn.clone();
+        let id_send2 = id_tx.clone();
+        let src2 = src_file.clone();
+        let send_task2 = tokio::spawn(async move {
+            send_clip_file(
+                &conn_clone2,
+                id_send2,
+                "clip-big.bin".to_string(),
+                &src2,
+                size,
+            )
+            .await
+        });
+
+        loop {
+            match timeout(Duration::from_secs(5), srv_trx.recv()).await {
+                Ok(Ok(TransferEvent::Progress { id, .. })) if id == id_tx => break,
+                Ok(Ok(TransferEvent::ClipFile { offer_id, .. })) if offer_id == id_tx => {
+                    panic!("transfer finished before sender cancel triggered");
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("expected Progress before sender cancel, got {other:?}"),
+            }
+        }
+
+        // Sender cancels locally + sends TransferCancel to receiver.
+        if let Some(meta) = global_cancel_registry().cancel_for_conn(c.conn.stable_id(), &id_tx) {
+            let _ = c.transfer_tx.send(TransferEvent::Cancelled {
+                id: meta.id,
+                kind: meta.kind,
+                name: meta.name,
+                size_bytes: meta.size_bytes,
+            });
+        }
+        c.send_packet(KvmPacket::TransferCancel { id: id_tx.clone() })
+            .await
+            .unwrap();
+
+        let send_res2 = timeout(Duration::from_secs(5), send_task2).await.unwrap().unwrap();
+        assert_eq!(send_res2.as_ref().map_err(String::as_str), Err(TRANSFER_CANCELLED_ERR));
+
+        let mut srv_saw_cancel2 = false;
+        let mut cli_saw_cancel2 = false;
+        for _ in 0..30 {
+            if let Ok(Ok(TransferEvent::Cancelled { id, kind, .. })) =
+                timeout(Duration::from_millis(200), srv_trx.recv()).await
+            {
+                if id == id_tx && kind == "clip" {
+                    srv_saw_cancel2 = true;
+                }
+            }
+            if let Ok(Ok(TransferEvent::Cancelled { id, kind, .. })) =
+                timeout(Duration::from_millis(200), cli_trx.recv()).await
+            {
+                if id == id_tx && kind == "clip" {
+                    cli_saw_cancel2 = true;
+                }
+            }
+            if srv_saw_cancel2 && cli_saw_cancel2 {
+                break;
+            }
+        }
+        assert!(srv_saw_cancel2 && cli_saw_cancel2, "both sides must see cancelled in phase 2 (srv={srv_saw_cancel2}, cli={cli_saw_cancel2})");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!plan_tx.base_dir.exists(), "cancelled phase 2 staging dir + .part must be removed");
+
+        cleanup_staging_entry(&staging_root, &id_rx);
+        cleanup_staging_entry(&staging_root, &id_tx);
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+    // --- end SPEC-25a ---
 }

@@ -780,7 +780,9 @@ pub fn handle_cli_open_on_linked(app: &AppHandle, path: PathBuf) {
     let app_h = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = send_and_open_file_from_app(&app_h, path).await {
-            emit_continuity_notice(&app_h, format!("Open on Linked PC failed: {e}"));
+            if !e.contains("staging limit") {
+                emit_continuity_notice(&app_h, format!("Open on Linked PC failed: {e}"));
+            }
         }
     });
 }
@@ -788,6 +790,16 @@ pub fn handle_cli_open_on_linked(app: &AppHandle, path: PathBuf) {
 pub async fn send_and_open_file_from_app(app: &AppHandle, path: PathBuf) -> Result<(), String> {
     if !path.is_file() {
         return Err("File does not exist".into());
+    }
+    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let limit_mb = super::staging::staging_limit_mb();
+    if file_size > super::staging::staging_limit_bytes(limit_mb) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let msg = format!(
+            "Cannot open \"{name}\" on linked PC: exceeds {limit_mb} MB staging limit"
+        );
+        emit_continuity_notice(app, msg.clone());
+        return Err(msg);
     }
     let transfer_id = uuid::Uuid::new_v4().to_string();
 

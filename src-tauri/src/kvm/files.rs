@@ -371,6 +371,15 @@ enum WritePartError {
     Io(std::io::Error),
 }
 
+impl std::fmt::Display for WritePartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("transfer cancelled"),
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 async fn write_part_with_progress<R: AsyncRead + Unpin, F: FnMut(u64, u64)>(
     r: &mut R,
     part: &Path,
@@ -434,10 +443,12 @@ pub async fn receive_with_events<R: AsyncRead + Unpin>(
     dir: &Path,
     transfer_tx: Option<&broadcast::Sender<TransferEvent>>,
 ) -> Result<TransferEvent, String> {
-    receive_with_policy_and_events_for_conn(
+    receive_with_policies_and_conn(
         r,
         dir,
         super::clipboard::sync_files_enabled(),
+        super::dragdrop::drag_drop_enabled(),
+        super::dragdrop::file_clipboard_enabled(),
         transfer_tx,
         0,
     )
@@ -450,10 +461,12 @@ pub async fn receive_with_events_for_conn<R: AsyncRead + Unpin>(
     transfer_tx: Option<&broadcast::Sender<TransferEvent>>,
     conn_id: usize,
 ) -> Result<TransferEvent, String> {
-    receive_with_policy_and_events_for_conn(
+    receive_with_policies_and_conn(
         r,
         dir,
         super::clipboard::sync_files_enabled(),
+        super::dragdrop::drag_drop_enabled(),
+        super::dragdrop::file_clipboard_enabled(),
         transfer_tx,
         conn_id,
     )
@@ -465,22 +478,15 @@ pub async fn receive_with_policy<R: AsyncRead + Unpin>(
     dir: &Path,
     allow_files: bool,
 ) -> Result<TransferEvent, String> {
-    receive_with_policy_and_events_for_conn(r, dir, allow_files, None, 0).await
+    receive_with_policies_and_conn(r, dir, allow_files, allow_files, allow_files, None, 0).await
 }
 
-pub async fn receive_with_policy_and_events<R: AsyncRead + Unpin>(
+async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
     r: &mut R,
     dir: &Path,
     allow_files: bool,
-    transfer_tx: Option<&broadcast::Sender<TransferEvent>>,
-) -> Result<TransferEvent, String> {
-    receive_with_policy_and_events_for_conn(r, dir, allow_files, transfer_tx, 0).await
-}
-
-async fn receive_with_policy_and_events_for_conn<R: AsyncRead + Unpin>(
-    r: &mut R,
-    dir: &Path,
-    allow_files: bool,
+    allow_drag: bool,
+    allow_clip: bool,
     transfer_tx: Option<&broadcast::Sender<TransferEvent>>,
     conn_id: usize,
 ) -> Result<TransferEvent, String> {
@@ -536,6 +542,21 @@ async fn receive_with_policy_and_events_for_conn<R: AsyncRead + Unpin>(
                 return Err(TRANSFER_CANCELLED_ERR.to_string());
             }
             let (cancel_handle, _guard) = global_cancel_registry().register(conn_id, meta.clone());
+            if let Err(reason) = super::staging::enforce_staging_cap(
+                &super::open_on_linked::open_staging_root(),
+                size,
+                super::staging::total_staging_cap_bytes(),
+            ) {
+                if let Some(tx) = transfer_tx {
+                    let _ = tx.send(TransferEvent::Failed {
+                        id: transfer_id,
+                        kind: "open".to_string(),
+                        name: safe,
+                        reason: reason.clone(),
+                    });
+                }
+                return Err(reason);
+            }
             let open_dir = super::open_on_linked::open_staging_dir_for(
                 &super::open_on_linked::open_staging_root(),
                 &transfer_id,
@@ -658,11 +679,80 @@ async fn receive_with_policy_and_events_for_conn<R: AsyncRead + Unpin>(
             })
         }
         // --- end SPEC-25c ---
+        // --- SPEC-25a ---
+        StreamHeader::DragFile { drag_id, rel_path, size } => {
+            if !allow_drag {
+                let msg = "drag-and-drop file transfer disabled".to_string();
+                emit_bulk_failed(transfer_tx, &drag_id, "drag", &rel_path, &msg);
+                return Err(msg);
+            }
+            let target = receive_staged_bulk_file(
+                r,
+                dir,
+                BulkTransferKind::Drag,
+                &drag_id,
+                &rel_path,
+                size,
+                transfer_tx,
+                conn_id,
+            )
+            .await?;
+            Ok(TransferEvent::DragFile {
+                drag_id,
+                rel_path,
+                path: target,
+                size,
+            })
+        }
+        StreamHeader::ClipFile { offer_id, rel_path, size } => {
+            if !allow_clip {
+                let msg = "file clipboard transfer disabled".to_string();
+                emit_bulk_failed(transfer_tx, &offer_id, "clip", &rel_path, &msg);
+                return Err(msg);
+            }
+            let target = receive_staged_bulk_file(
+                r,
+                dir,
+                BulkTransferKind::Clip,
+                &offer_id,
+                &rel_path,
+                size,
+                transfer_tx,
+                conn_id,
+            )
+            .await?;
+            Ok(TransferEvent::ClipFile {
+                offer_id,
+                rel_path,
+                path: target,
+                size,
+            })
+        }
+        StreamHeader::CursorFile { role, name, size } => {
+            if super::cursor_scheme::canonical_cursor_role(&role).is_none() {
+                return Err(format!("unsupported cursor role {role:?}"));
+            }
+            let max_cursor = super::cursor_scheme::MAX_CURSOR_FILE_BYTES;
+            if size == 0 || size > max_cursor {
+                return Err("cursor file size out of range".into());
+            }
+            let mut data = Vec::with_capacity(size as usize);
+            r.take(max_cursor + 1)
+                .read_to_end(&mut data)
+                .await
+                .map_err(|e| e.to_string())?;
+            if data.len() as u64 != size {
+                return Err("cursor file size mismatch".into());
+            }
+            Ok(TransferEvent::CursorFile { role, name, data })
+        }
+        // --- end SPEC-25a ---
     }
 }
 
 pub async fn send_image(conn: &quinn::Connection, format: String, data: Vec<u8>) -> Result<(), String> {
     let mut s = conn.open_uni().await.map_err(|e| e.to_string())?;
+    let _ = s.set_priority(super::identity::transport_tuning::BULK_STREAM_PRIORITY);
     write_frame(&mut s, &StreamHeader::ClipboardImage { format }).await.map_err(|e| e.to_string())?;
     s.write_all(&data).await.map_err(|e| e.to_string())?;
     s.finish().map_err(|e| e.to_string())?;
@@ -675,12 +765,548 @@ pub async fn send_file(conn: &quinn::Connection, path: &Path) -> Result<(), Stri
     let mut f = tokio::fs::File::open(path).await.map_err(|e| e.to_string())?;
     let size = f.metadata().await.map_err(|e| e.to_string())?.len();
     let mut s = conn.open_uni().await.map_err(|e| e.to_string())?;
+    let _ = s.set_priority(super::identity::transport_tuning::BULK_STREAM_PRIORITY);
     write_frame(&mut s, &StreamHeader::File { name, size }).await.map_err(|e| e.to_string())?;
     tokio::io::copy(&mut f, &mut s).await.map_err(|e| e.to_string())?;
     s.finish().map_err(|e| e.to_string())?;
     let _ = s.stopped().await;
     Ok(())
 }
+
+// --- SPEC-25a ---
+async fn stream_file_chunks<F: FnMut(u64, u64)>(
+    mut rx: tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
+    s: &mut quinn::SendStream,
+    size: u64,
+    cancel: &ActiveTransferHandle,
+    mut on_chunk: F,
+) -> Result<(), String> {
+    let mut remaining = size;
+    let mut sent = 0u64;
+    while remaining > 0 {
+        if cancel.is_cancelled() {
+            let _ = s.reset(quic_cancel_varint());
+            return Err(TRANSFER_CANCELLED_ERR.to_string());
+        }
+        let chunk_opt = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                let _ = s.reset(quic_cancel_varint());
+                return Err(TRANSFER_CANCELLED_ERR.to_string());
+            }
+            res = rx.recv() => res,
+        };
+        let chunk = match chunk_opt {
+            Some(Ok(buf)) => buf,
+            Some(Err(e)) => return Err(e),
+            None => return Err("source file truncated while reading".into()),
+        };
+        if chunk.is_empty() {
+            return Err("source file truncated while reading".into());
+        }
+        let n = (chunk.len() as u64).min(remaining) as usize;
+        let write_res = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                let _ = s.reset(quic_cancel_varint());
+                return Err(TRANSFER_CANCELLED_ERR.to_string());
+            }
+            res = s.write_all(&chunk[..n]) => res,
+        };
+        if let Err(e) = write_res {
+            if is_quic_cancel_write_error(&e) || cancel.is_cancelled() {
+                let _ = s.reset(quic_cancel_varint());
+                return Err(TRANSFER_CANCELLED_ERR.to_string());
+            }
+            return Err(e.to_string());
+        }
+        remaining -= n as u64;
+        sent += n as u64;
+        on_chunk(n as u64, sent);
+        if let Some(delay) = super::identity::transport_tuning::BULK_PACE_INTERVAL {
+            tokio::time::sleep(delay).await;
+        } else {
+            tokio::task::yield_now().await;
+        }
+    }
+    Ok(())
+}
+
+/// Distinguishes the two SPEC-25a staged multi-file bulk transfer flows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BulkTransferKind {
+    Drag,
+    Clip,
+}
+
+impl BulkTransferKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Drag => "drag",
+            Self::Clip => "clip",
+        }
+    }
+
+    fn log_prefix(self) -> &'static str {
+        match self {
+            Self::Drag => "DRAG_FILE_SEND",
+            Self::Clip => "CLIP_FILE_SEND",
+        }
+    }
+
+    fn staging_kind(self) -> super::staging::TransferKind {
+        match self {
+            Self::Drag => super::staging::TransferKind::Drag,
+            Self::Clip => super::staging::TransferKind::Clip,
+        }
+    }
+}
+
+fn emit_bulk_failed(
+    transfer_tx: Option<&tokio::sync::broadcast::Sender<TransferEvent>>,
+    id: &str,
+    kind: &str,
+    name: &str,
+    reason: &str,
+) {
+    if let Some(tx) = transfer_tx {
+        let _ = tx.send(TransferEvent::Failed {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            name: name.to_string(),
+            reason: reason.to_string(),
+        });
+    }
+}
+
+async fn receive_staged_bulk_file<R: AsyncRead + Unpin>(
+    r: &mut R,
+    fallback_dir: &Path,
+    kind: BulkTransferKind,
+    id: &str,
+    rel_path: &str,
+    size: u64,
+    transfer_tx: Option<&tokio::sync::broadcast::Sender<TransferEvent>>,
+    conn_id: usize,
+) -> Result<PathBuf, String> {
+    let kind_str = kind.as_str();
+    let meta = TransferCancelMeta {
+        id: id.to_string(),
+        kind: kind_str.to_string(),
+        name: rel_path.to_string(),
+        size_bytes: size,
+    };
+    if global_cancel_registry().is_recently_cancelled(conn_id, id) {
+        super::staging::cancel_transfer(id);
+        super::staging::cleanup_staging_entry(&super::staging::default_staging_root(), id);
+        emit_cancelled_once(conn_id, &meta, transfer_tx);
+        return Err(TRANSFER_CANCELLED_ERR.to_string());
+    }
+    let (cancel_handle, _guard) = global_cancel_registry().register(conn_id, meta.clone());
+
+    let target = match super::staging::resolve_transfer_target(
+        kind.staging_kind(),
+        id,
+        rel_path,
+        fallback_dir,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            if cancel_handle.is_cancelled()
+                || global_cancel_registry().is_recently_cancelled(conn_id, id)
+            {
+                super::staging::cancel_transfer(id);
+                super::staging::cleanup_staging_entry(&super::staging::default_staging_root(), id);
+                emit_cancelled_once(conn_id, &meta, transfer_tx);
+                return Err(TRANSFER_CANCELLED_ERR.to_string());
+            }
+            emit_bulk_failed(transfer_tx, id, kind_str, rel_path, &e);
+            return Err(e);
+        }
+    };
+    if let Some(parent) = target.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            let msg = e.to_string();
+            emit_bulk_failed(transfer_tx, id, kind_str, rel_path, &msg);
+            return Err(msg);
+        }
+    }
+    let part = PathBuf::from(format!("{}.part", target.display()));
+    let mut throttle = ProgressThrottle::new();
+    let mut last_pct = 0u8;
+    if let Err(e) = write_part_with_progress(r, &part, size, Some(&cancel_handle), |delta, got| {
+        if let Some(tx) = transfer_tx {
+            let (pct, total_for_event) =
+                match super::staging::record_transfer_bytes_progress(id, delta) {
+                    Some((rec, total)) => (pct_for_bytes(rec, total), total),
+                    None => (pct_for_bytes(got, size), size),
+                };
+            last_pct = pct;
+            let active_pct = pct.min(99);
+            if let Some(p) = throttle.should_emit(active_pct, false) {
+                let _ = tx.send(TransferEvent::Progress {
+                    id: id.to_string(),
+                    kind: kind_str.to_string(),
+                    name: rel_path.to_string(),
+                    pct: p,
+                    state: "active".to_string(),
+                    size_bytes: total_for_event,
+                });
+            }
+        }
+    })
+    .await
+    {
+        let _ = tokio::fs::remove_file(&part).await;
+        if matches!(e, WritePartError::Cancelled)
+            || cancel_handle.is_cancelled()
+            || global_cancel_registry().is_recently_cancelled(conn_id, id)
+        {
+            super::staging::cancel_transfer(id);
+            super::staging::cleanup_staging_entry(&super::staging::default_staging_root(), id);
+            emit_cancelled_once(conn_id, &meta, transfer_tx);
+            return Err(TRANSFER_CANCELLED_ERR.to_string());
+        }
+        let msg = e.to_string();
+        emit_bulk_failed(transfer_tx, id, kind_str, rel_path, &msg);
+        return Err(msg);
+    }
+    if cancel_handle.is_cancelled() {
+        let _ = tokio::fs::remove_file(&part).await;
+        super::staging::cancel_transfer(id);
+        super::staging::cleanup_staging_entry(&super::staging::default_staging_root(), id);
+        emit_cancelled_once(conn_id, &meta, transfer_tx);
+        return Err(TRANSFER_CANCELLED_ERR.to_string());
+    }
+    if let Err(e) = tokio::fs::rename(&part, &target).await {
+        let _ = tokio::fs::remove_file(&part).await;
+        let msg = e.to_string();
+        emit_bulk_failed(transfer_tx, id, kind_str, rel_path, &msg);
+        return Err(msg);
+    }
+    if let Some(tx) = transfer_tx {
+        if size == 0 {
+            if let Some((rec, total)) = super::staging::record_transfer_bytes_progress(id, 0) {
+                last_pct = pct_for_bytes(rec, total);
+            } else {
+                last_pct = 100;
+            }
+        }
+        // Only Clip transfers complete when all files finish streaming; Drag transfers remain
+        // active at <=99% until the target PC reports the OLE drop outcome.
+        if kind == BulkTransferKind::Clip && last_pct >= 100 {
+            if let Some(p) = throttle.should_emit(100, true) {
+                let _ = tx.send(TransferEvent::Progress {
+                    id: id.to_string(),
+                    kind: kind_str.to_string(),
+                    name: rel_path.to_string(),
+                    pct: p,
+                    state: "done".to_string(),
+                    size_bytes: size,
+                });
+            }
+        }
+    }
+    Ok(target)
+}
+
+async fn send_bulk_file_stream<F: FnMut(u64, u64)>(
+    conn: &quinn::Connection,
+    kind: BulkTransferKind,
+    id: String,
+    rel_path: String,
+    path: &Path,
+    size: u64,
+    on_chunk: F,
+) -> Result<(), String> {
+    let conn_id = conn.stable_id();
+    let total_for_meta = outbound_total_size(&id).unwrap_or(size);
+    let meta = TransferCancelMeta {
+        id: id.clone(),
+        kind: kind.as_str().to_string(),
+        name: rel_path.clone(),
+        size_bytes: total_for_meta,
+    };
+    if global_cancel_registry().is_recently_cancelled(conn_id, &id) {
+        return Err(TRANSFER_CANCELLED_ERR.to_string());
+    }
+    let (cancel_handle, _guard) = global_cancel_registry().register(conn_id, meta);
+
+    let path_for_meta = path.to_path_buf();
+    let actual_size = tokio::task::spawn_blocking(move || -> Result<u64, String> {
+        let f = std::fs::File::open(&path_for_meta).map_err(|e| e.to_string())?;
+        let len = f.metadata().map_err(|e| e.to_string())?.len();
+        Ok(len.min(size))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, String>>(8);
+    let read_path = path.to_path_buf();
+    let read_cancel = cancel_handle.clone();
+    let reader_task = tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut f = match std::fs::File::open(&read_path) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = chunk_tx.blocking_send(Err(e.to_string()));
+                return;
+            }
+        };
+        let mut remaining = actual_size;
+        let chunk_cap = super::identity::transport_tuning::BULK_STREAM_CHUNK_BYTES;
+        while remaining > 0 {
+            if read_cancel.is_cancelled() {
+                return;
+            }
+            let to_read = (remaining as usize).min(chunk_cap);
+            let mut buf = vec![0u8; to_read];
+            match f.read(&mut buf[..to_read]) {
+                Ok(0) => {
+                    let _ = chunk_tx.blocking_send(Err(
+                        "source file truncated while reading".into(),
+                    ));
+                    return;
+                }
+                Ok(n) => {
+                    buf.truncate(n);
+                    remaining -= n as u64;
+                    if chunk_tx.blocking_send(Ok(buf)).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = chunk_tx.blocking_send(Err(e.to_string()));
+                    return;
+                }
+            }
+        }
+    });
+
+    let mut s = conn.open_uni().await.map_err(|e| e.to_string())?;
+    let _ = s.set_priority(super::identity::transport_tuning::BULK_STREAM_PRIORITY);
+    let header = match kind {
+        BulkTransferKind::Drag => StreamHeader::DragFile {
+            drag_id: id,
+            rel_path,
+            size: actual_size,
+        },
+        BulkTransferKind::Clip => StreamHeader::ClipFile {
+            offer_id: id,
+            rel_path,
+            size: actual_size,
+        },
+    };
+    write_frame(&mut s, &header).await.map_err(|e| e.to_string())?;
+    stream_file_chunks(chunk_rx, &mut s, actual_size, &cancel_handle, on_chunk).await?;
+    let _ = reader_task.await;
+    if cancel_handle.is_cancelled() {
+        let _ = s.reset(quic_cancel_varint());
+        return Err(TRANSFER_CANCELLED_ERR.to_string());
+    }
+    if let Err(e) = s.finish() {
+        if cancel_handle.is_cancelled() {
+            let _ = s.reset(quic_cancel_varint());
+            return Err(TRANSFER_CANCELLED_ERR.to_string());
+        }
+        return Err(e.to_string());
+    }
+    match s.stopped().await {
+        Ok(Some(code)) if code.into_inner() == QUIC_CANCEL_ERROR_CODE as u64 => {
+            return Err(TRANSFER_CANCELLED_ERR.to_string());
+        }
+        _ => {}
+    }
+    if cancel_handle.is_cancelled() {
+        return Err(TRANSFER_CANCELLED_ERR.to_string());
+    }
+    Ok(())
+}
+
+pub async fn send_drag_file(
+    conn: &quinn::Connection,
+    drag_id: String,
+    rel_path: String,
+    path: &Path,
+    size: u64,
+) -> Result<(), String> {
+    send_drag_file_with_progress(conn, drag_id, rel_path, path, size, |_, _| {}).await
+}
+
+pub async fn send_drag_file_with_progress<F: FnMut(u64, u64)>(
+    conn: &quinn::Connection,
+    drag_id: String,
+    rel_path: String,
+    path: &Path,
+    size: u64,
+    on_chunk: F,
+) -> Result<(), String> {
+    send_bulk_file_stream(conn, BulkTransferKind::Drag, drag_id, rel_path, path, size, on_chunk).await
+}
+
+pub async fn send_clip_file(
+    conn: &quinn::Connection,
+    offer_id: String,
+    rel_path: String,
+    path: &Path,
+    size: u64,
+) -> Result<(), String> {
+    send_clip_file_with_progress(conn, offer_id, rel_path, path, size, |_, _| {}).await
+}
+
+pub async fn send_clip_file_with_progress<F: FnMut(u64, u64)>(
+    conn: &quinn::Connection,
+    offer_id: String,
+    rel_path: String,
+    path: &Path,
+    size: u64,
+    on_chunk: F,
+) -> Result<(), String> {
+    send_bulk_file_stream(conn, BulkTransferKind::Clip, offer_id, rel_path, path, size, on_chunk).await
+}
+
+/// Streams a `DragFile` or `ClipFile` while logging lifecycle events and driving
+/// throttled progress updates via `on_progress`.
+pub async fn send_tracked_bulk_file(
+    conn: &quinn::Connection,
+    kind: BulkTransferKind,
+    side: &'static str,
+    id: String,
+    rel_path: String,
+    path: &Path,
+    size: u64,
+    mut on_progress: impl FnMut(u8),
+) -> Result<(), String> {
+    let prefix = kind.log_prefix();
+    let mut throttle = ProgressThrottle::new();
+    let mut sent_file = 0u64;
+    super::debug_log::note(|| format!(
+        "{prefix}_START side={side} id={id} rel={rel_path} size={size}"
+    ));
+    let res = send_bulk_file_stream(
+        conn,
+        kind,
+        id.clone(),
+        rel_path.clone(),
+        path,
+        size,
+        |delta, got| {
+            sent_file = got;
+            let (pct, _) = advance_outbound_progress(&id, delta, got, size);
+            if let Some(p) = throttle.should_emit(pct, false) {
+                on_progress(p);
+            }
+        },
+    )
+    .await;
+    match res {
+        Ok(()) => {
+            if size == 0 {
+                let (pct, done) = advance_outbound_progress(&id, 0, 0, 0);
+                if done {
+                    on_progress(pct.max(100));
+                }
+            } else if sent_file >= size {
+                if let Some(p) = throttle.should_emit(100, true) {
+                    on_progress(p);
+                }
+            }
+            super::debug_log::note(|| format!(
+                "{prefix}_DONE side={side} id={id} rel={rel_path}"
+            ));
+            Ok(())
+        }
+        Err(e) => {
+            clear_outbound_total(&id);
+            if e == TRANSFER_CANCELLED_ERR {
+                super::debug_log::note(|| format!(
+                    "{prefix}_CANCELLED side={side} id={id} rel={rel_path}"
+                ));
+            } else {
+                super::debug_log::note(|| format!(
+                    "{prefix}_ERR side={side} id={id} rel={rel_path} err={e}"
+                ));
+            }
+            Err(e)
+        }
+    }
+}
+
+static OUTBOUND_TOTALS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> =
+    std::sync::OnceLock::new();
+
+fn outbound_totals() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>> {
+    OUTBOUND_TOTALS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn register_outbound_total(id: &str, total_bytes: u64) {
+    if let Ok(mut g) = outbound_totals().lock() {
+        g.insert(id.to_string(), (0, total_bytes));
+    }
+}
+
+pub fn outbound_total_size(id: &str) -> Option<u64> {
+    outbound_totals()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(id).map(|(_, total)| *total))
+}
+
+/// Advance outbound byte count for `id`. Returns `(pct, all_bytes_sent)` using the
+/// registered multi-file total when present, or the single-file fallback otherwise.
+pub fn advance_outbound_progress(
+    id: &str,
+    delta: u64,
+    fallback_sent: u64,
+    fallback_total: u64,
+) -> (u8, bool) {
+    if let Ok(mut g) = outbound_totals().lock() {
+        if let Some((sent, total)) = g.get_mut(id) {
+            *sent = sent.saturating_add(delta);
+            let done = *sent >= *total;
+            let pct = pct_for_bytes(*sent, *total);
+            if done {
+                g.remove(id);
+            }
+            return (pct, done);
+        }
+    }
+    let done = fallback_sent >= fallback_total;
+    (pct_for_bytes(fallback_sent, fallback_total), done)
+}
+
+pub fn clear_outbound_total(id: &str) {
+    if let Ok(mut g) = outbound_totals().lock() {
+        g.remove(id);
+    }
+}
+
+pub async fn send_cursor_file(
+    conn: &quinn::Connection,
+    role: String,
+    name: String,
+    data: &[u8],
+) -> Result<(), String> {
+    let mut s = conn.open_uni().await.map_err(|e| e.to_string())?;
+    let _ = s.set_priority(super::identity::transport_tuning::BULK_STREAM_PRIORITY);
+    write_frame(
+        &mut s,
+        &StreamHeader::CursorFile {
+            role,
+            name,
+            size: data.len() as u64,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    s.write_all(data).await.map_err(|e| e.to_string())?;
+    s.finish().map_err(|e| e.to_string())?;
+    let _ = s.stopped().await;
+    Ok(())
+}
+// --- end SPEC-25a ---
 
 #[cfg(test)]
 mod tests {

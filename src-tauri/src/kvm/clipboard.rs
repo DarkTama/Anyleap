@@ -35,6 +35,9 @@ pub fn kvm_set_sync_settings(text: bool, image: bool, files: bool) {
 pub enum ClipboardSyncAction {
     SendText,
     SendImage,
+    // --- SPEC-25a ---
+    SendFiles,
+    // --- end SPEC-25a ---
     None,
 }
 
@@ -70,6 +73,135 @@ pub fn choose_clipboard_action(
         ClipboardSyncAction::None
     }
 }
+
+// --- SPEC-25a ---
+/// Priority: `CF_HDROP` files (when `sync_files`) -> `CF_UNICODETEXT` -> `CF_DIB`.
+pub fn choose_clipboard_action_v2(
+    has_files: bool,
+    has_text: bool,
+    has_image: bool,
+    sync_files: bool,
+    sync_text: bool,
+    sync_image: bool,
+) -> ClipboardSyncAction {
+    if has_files && sync_files {
+        ClipboardSyncAction::SendFiles
+    } else {
+        choose_clipboard_action(has_text, has_image, sync_text, sync_image)
+    }
+}
+
+/// Build a Win32 `CF_HDROP` (`DROPFILES` + UTF-16 double-null-terminated paths) payload.
+pub fn build_dropfiles_bytes(paths: &[std::path::PathBuf]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20 + paths.len() * 64);
+    // DROPFILES { pFiles: 20, pt: (0,0), fNC: 0, fWide: 1 }
+    out.extend_from_slice(&20u32.to_le_bytes());
+    out.extend_from_slice(&0i32.to_le_bytes());
+    out.extend_from_slice(&0i32.to_le_bytes());
+    out.extend_from_slice(&0i32.to_le_bytes());
+    out.extend_from_slice(&1i32.to_le_bytes());
+    for p in paths {
+        let wide: Vec<u16> = p.as_os_str().to_string_lossy().encode_utf16().collect();
+        for u in wide {
+            out.extend_from_slice(&u.to_le_bytes());
+        }
+        out.extend_from_slice(&0u16.to_le_bytes());
+    }
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+#[cfg(windows)]
+pub unsafe fn read_hdrop_paths(hdrop: windows::Win32::UI::Shell::HDROP) -> Vec<std::path::PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::UI::Shell::DragQueryFileW;
+
+    let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, None);
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let len = DragQueryFileW(hdrop, i, None);
+        if len == 0 {
+            continue;
+        }
+        let mut buf = vec![0u16; (len + 1) as usize];
+        let copied = DragQueryFileW(hdrop, i, Some(&mut buf));
+        if copied > 0 {
+            let os = OsString::from_wide(&buf[..copied as usize]);
+            out.push(std::path::PathBuf::from(os));
+        }
+    }
+    out
+}
+
+pub fn set_clipboard_files(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    if !super::dragdrop::file_clipboard_enabled() || !sync_files_enabled() {
+        return Ok(());
+    }
+    SUPPRESS_ECHO.store(true, Ordering::SeqCst);
+
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::DataExchange::*;
+        use windows::Win32::System::Memory::*;
+
+        let payload = build_dropfiles_bytes(paths);
+        let ok = with_clipboard_retry(|| {
+            let _ = EmptyClipboard();
+            if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, payload.len()) {
+                let ptr = GlobalLock(h);
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(payload.as_ptr(), ptr as *mut u8, payload.len());
+                    let _ = GlobalUnlock(h);
+                    let _ = SetClipboardData(15, Some(HANDLE(h.0))); // CF_HDROP = 15
+                    return Some(());
+                }
+            }
+            None
+        });
+
+        if ok.is_none() {
+            SUPPRESS_ECHO.store(false, Ordering::SeqCst);
+            return Err("Failed to open clipboard for files".to_string());
+        }
+    }
+
+    tokio::spawn(async {
+        tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
+        SUPPRESS_ECHO.store(false, Ordering::SeqCst);
+    });
+
+    Ok(())
+}
+
+pub fn get_clipboard_files() -> Option<Vec<std::path::PathBuf>> {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::DataExchange::*;
+        use windows::Win32::UI::Shell::HDROP;
+
+        if IsClipboardFormatAvailable(15).is_ok() {
+            return with_clipboard_retry(|| {
+                if let Ok(handle) = GetClipboardData(15) {
+                    let paths = read_hdrop_paths(HDROP(handle.0));
+                    if !paths.is_empty() {
+                        return Some(paths);
+                    }
+                }
+                None
+            });
+        }
+        None
+    }
+
+    #[cfg(not(windows))]
+    None
+}
+// --- end SPEC-25a ---
 
 #[cfg(windows)]
 unsafe fn with_clipboard_retry<F, R>(f: F) -> Option<R>
@@ -256,6 +388,13 @@ fn has_clipboard_image() -> bool {
     unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(8).is_ok() }
 }
 
+// --- SPEC-25a ---
+#[cfg(windows)]
+fn has_clipboard_files() -> bool {
+    unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(15).is_ok() }
+}
+// --- end SPEC-25a ---
+
 pub fn start_clipboard_sync(
     tx: mpsc::Sender<Outbound>,
     is_running: Arc<AtomicBool>,
@@ -277,12 +416,72 @@ pub fn start_clipboard_sync(
                     if !should_suppress_echo() {
                         let tx_clone = tx.clone();
                         tokio::task::spawn_blocking(move || {
-                            match choose_clipboard_action(
+                            match choose_clipboard_action_v2(
+                                has_clipboard_files(),
                                 has_clipboard_text(),
                                 has_clipboard_image(),
+                                super::dragdrop::file_clipboard_enabled() && sync_files_enabled(),
                                 sync_text_enabled(),
                                 sync_image_enabled(),
                             ) {
+                                ClipboardSyncAction::SendFiles => {
+                                    if let Some(paths) = get_clipboard_files() {
+                                        if let Ok((files, sources)) =
+                                            super::staging::collect_paths_to_file_meta(&paths)
+                                        {
+                                            if !files.is_empty() {
+                                                let offer_id = uuid::Uuid::new_v4().to_string();
+                                                let total_bytes: u64 = files
+                                                    .iter()
+                                                    .filter(|f| !f.is_dir)
+                                                    .map(|f| f.size)
+                                                    .sum();
+                                                let prefetch = super::staging::decide_clip_offer_mode(
+                                                    total_bytes,
+                                                    super::staging::clip_prefetch_limit_mb(),
+                                                ) == super::staging::ClipOfferMode::Prefetch;
+                                                let sources_for_stream = if prefetch {
+                                                    Some(sources)
+                                                } else {
+                                                    let summary = files
+                                                        .first()
+                                                        .map(|f| f.rel_path.clone())
+                                                        .unwrap_or_else(|| "Files".to_string());
+                                                    super::staging::insert_pending_outbound_clip(
+                                                        super::staging::PendingOutboundClip {
+                                                            offer_id: offer_id.clone(),
+                                                            files: files.clone(),
+                                                            sources,
+                                                            summary,
+                                                            total_bytes,
+                                                            created_at: std::time::Instant::now(),
+                                                        },
+                                                    );
+                                                    None
+                                                };
+                                                let _ = tx_clone.blocking_send(Outbound::Packet(
+                                                    KvmPacket::FileClipOffer {
+                                                        offer_id: offer_id.clone(),
+                                                        files,
+                                                    },
+                                                ));
+                                                if let Some(sources) = sources_for_stream {
+                                                    for (rel_path, disk_path) in sources {
+                                                        let size = std::fs::metadata(&disk_path)
+                                                            .map(|m| m.len())
+                                                            .unwrap_or(0);
+                                                        let _ = tx_clone.blocking_send(Outbound::ClipFile {
+                                                            offer_id: offer_id.clone(),
+                                                            rel_path,
+                                                            path: disk_path,
+                                                            size,
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 ClipboardSyncAction::SendText => {
                                     if let Some(text) = get_clipboard_text() {
                                         if !text.is_empty() {
@@ -352,4 +551,30 @@ mod tests {
         assert!(should_apply_inbound(InboundClipboardKind::Image, false, true));
         assert!(!should_apply_inbound(InboundClipboardKind::Image, true, false));
     }
+
+    // --- SPEC-25a ---
+    #[test]
+    fn clipboard_v2_prioritizes_files_when_enabled_and_builds_dropfiles() {
+        assert_eq!(
+            choose_clipboard_action_v2(true, true, true, true, true, true),
+            ClipboardSyncAction::SendFiles
+        );
+        assert_eq!(
+            choose_clipboard_action_v2(true, true, false, false, true, true),
+            ClipboardSyncAction::SendText
+        );
+        assert_eq!(
+            choose_clipboard_action_v2(true, false, false, false, true, true),
+            ClipboardSyncAction::None
+        );
+
+        let bytes = build_dropfiles_bytes(&[
+            std::path::PathBuf::from("C:\\tmp\\a.txt"),
+            std::path::PathBuf::from("C:\\tmp\\b.txt"),
+        ]);
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 20);
+        assert_eq!(i32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1); // fWide = 1
+        assert!(bytes.ends_with(&[0, 0, 0, 0])); // double-null UTF-16 terminator
+    }
+    // --- end SPEC-25a ---
 }
