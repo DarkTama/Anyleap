@@ -153,7 +153,11 @@ impl TransferCancelRegistry {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let st = &mut *guard;
         let key = (conn_id, id.to_string());
-        Self::record_recent(&mut st.cancelled_recent, &mut st.cancelled_order, key.clone());
+        Self::record_recent(
+            &mut st.cancelled_recent,
+            &mut st.cancelled_order,
+            key.clone(),
+        );
         if let Some(handle) = st.active.get(&key).cloned() {
             handle.cancelled.store(true, Ordering::Release);
             handle.notify.notify_waiters();
@@ -179,7 +183,11 @@ impl TransferCancelRegistry {
             .collect();
         let mut out = Vec::new();
         for key in matching_keys {
-            Self::record_recent(&mut st.cancelled_recent, &mut st.cancelled_order, key.clone());
+            Self::record_recent(
+                &mut st.cancelled_recent,
+                &mut st.cancelled_order,
+                key.clone(),
+            );
             if let Some(handle) = st.active.get(&key).cloned() {
                 handle.cancelled.store(true, Ordering::Release);
                 handle.notify.notify_waiters();
@@ -209,7 +217,11 @@ impl TransferCancelRegistry {
             .collect();
         let mut out = Vec::new();
         for key in matching_keys {
-            Self::record_recent(&mut st.cancelled_recent, &mut st.cancelled_order, key.clone());
+            Self::record_recent(
+                &mut st.cancelled_recent,
+                &mut st.cancelled_order,
+                key.clone(),
+            );
             if let Some(handle) = st.active.get(&key).cloned() {
                 handle.cancelled.store(true, Ordering::Release);
                 handle.notify.notify_waiters();
@@ -227,7 +239,11 @@ impl TransferCancelRegistry {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let st = &mut *guard;
         let key = (conn_id, id.to_string());
-        Self::record_recent(&mut st.cancelled_recent, &mut st.cancelled_order, key.clone());
+        Self::record_recent(
+            &mut st.cancelled_recent,
+            &mut st.cancelled_order,
+            key.clone(),
+        );
         if let Some(handle) = st.active.get(&key) {
             handle.cancelled.store(true, Ordering::Release);
             handle.notify.notify_waiters();
@@ -387,7 +403,9 @@ async fn write_part_with_progress<R: AsyncRead + Unpin, F: FnMut(u64, u64)>(
     cancel: Option<&ActiveTransferHandle>,
     mut on_chunk: F,
 ) -> Result<(), WritePartError> {
-    let mut f = tokio::fs::File::create(part).await.map_err(WritePartError::Io)?;
+    let mut f = tokio::fs::File::create(part)
+        .await
+        .map_err(WritePartError::Io)?;
     let (mut buf, mut got) = (vec![0u8; TRANSFER_CHUNK_BYTES], 0u64);
     loop {
         if cancel.is_some_and(ActiveTransferHandle::is_cancelled) {
@@ -505,8 +523,11 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
             if !allow_files {
                 return Err("file transfer sync disabled".into());
             }
-            let safe = sanitize_name(&name).ok_or_else(|| format!("rejected file name {name:?}"))?;
-            tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+            let safe =
+                sanitize_name(&name).ok_or_else(|| format!("rejected file name {name:?}"))?;
+            tokio::fs::create_dir_all(dir)
+                .await
+                .map_err(|e| e.to_string())?;
             let target = unique_path(dir, &safe);
             let part = PathBuf::from(format!("{}.part", target.display()));
             if let Err(e) = write_part_with_progress(r, &part, size, None, |_, _| {}).await {
@@ -516,21 +537,35 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                     WritePartError::Io(ioe) => ioe.to_string(),
                 });
             }
-            tokio::fs::rename(&part, &target).await.map_err(|e| e.to_string())?;
-            let name = target.file_name().and_then(|n| n.to_str()).unwrap_or(&safe).to_string();
+            tokio::fs::rename(&part, &target)
+                .await
+                .map_err(|e| e.to_string())?;
+            let name = target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&safe)
+                .to_string();
             Ok(TransferEvent::File { name, size })
         }
         StreamHeader::ClipboardImage { .. } => {
             let mut data = Vec::new();
-            r.take(MAX_IMAGE + 1).read_to_end(&mut data).await.map_err(|e| e.to_string())?;
+            r.take(MAX_IMAGE + 1)
+                .read_to_end(&mut data)
+                .await
+                .map_err(|e| e.to_string())?;
             if data.len() as u64 > MAX_IMAGE {
                 return Err("clipboard image too large".into());
             }
             Ok(TransferEvent::ClipboardImage { data })
         }
         // --- SPEC-25c ---
-        StreamHeader::OpenFile { transfer_id, name, size } => {
-            let safe = sanitize_name(&name).ok_or_else(|| format!("rejected file name {name:?}"))?;
+        StreamHeader::OpenFile {
+            transfer_id,
+            name,
+            size,
+        } => {
+            let safe =
+                sanitize_name(&name).ok_or_else(|| format!("rejected file name {name:?}"))?;
             let meta = TransferCancelMeta {
                 id: transfer_id.clone(),
                 kind: "open".to_string(),
@@ -670,7 +705,11 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                     });
                 }
             }
-            let final_name = target.file_name().and_then(|n| n.to_str()).unwrap_or(&safe).to_string();
+            let final_name = target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&safe)
+                .to_string();
             Ok(TransferEvent::OpenFile {
                 transfer_id,
                 name: final_name,
@@ -680,7 +719,11 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
         }
         // --- end SPEC-25c ---
         // --- SPEC-25a ---
-        StreamHeader::DragFile { drag_id, rel_path, size } => {
+        StreamHeader::DragFile {
+            drag_id,
+            rel_path,
+            size,
+        } => {
             if !allow_drag {
                 let msg = "drag-and-drop file transfer disabled".to_string();
                 emit_bulk_failed(transfer_tx, &drag_id, "drag", &rel_path, &msg);
@@ -704,7 +747,11 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                 size,
             })
         }
-        StreamHeader::ClipFile { offer_id, rel_path, size } => {
+        StreamHeader::ClipFile {
+            offer_id,
+            rel_path,
+            size,
+        } => {
             if !allow_clip {
                 let msg = "file clipboard transfer disabled".to_string();
                 emit_bulk_failed(transfer_tx, &offer_id, "clip", &rel_path, &msg);
@@ -745,15 +792,20 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                 return Err("cursor file size mismatch".into());
             }
             Ok(TransferEvent::CursorFile { role, name, data })
-        }
-        // --- end SPEC-25a ---
+        } // --- end SPEC-25a ---
     }
 }
 
-pub async fn send_image(conn: &quinn::Connection, format: String, data: Vec<u8>) -> Result<(), String> {
+pub async fn send_image(
+    conn: &quinn::Connection,
+    format: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
     let mut s = conn.open_uni().await.map_err(|e| e.to_string())?;
     let _ = s.set_priority(super::identity::transport_tuning::BULK_STREAM_PRIORITY);
-    write_frame(&mut s, &StreamHeader::ClipboardImage { format }).await.map_err(|e| e.to_string())?;
+    write_frame(&mut s, &StreamHeader::ClipboardImage { format })
+        .await
+        .map_err(|e| e.to_string())?;
     s.write_all(&data).await.map_err(|e| e.to_string())?;
     s.finish().map_err(|e| e.to_string())?;
     let _ = s.stopped().await;
@@ -761,13 +813,23 @@ pub async fn send_image(conn: &quinn::Connection, format: String, data: Vec<u8>)
 }
 
 pub async fn send_file(conn: &quinn::Connection, path: &Path) -> Result<(), String> {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("transfer.bin").to_string();
-    let mut f = tokio::fs::File::open(path).await.map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("transfer.bin")
+        .to_string();
+    let mut f = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| e.to_string())?;
     let size = f.metadata().await.map_err(|e| e.to_string())?.len();
     let mut s = conn.open_uni().await.map_err(|e| e.to_string())?;
     let _ = s.set_priority(super::identity::transport_tuning::BULK_STREAM_PRIORITY);
-    write_frame(&mut s, &StreamHeader::File { name, size }).await.map_err(|e| e.to_string())?;
-    tokio::io::copy(&mut f, &mut s).await.map_err(|e| e.to_string())?;
+    write_frame(&mut s, &StreamHeader::File { name, size })
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::io::copy(&mut f, &mut s)
+        .await
+        .map_err(|e| e.to_string())?;
     s.finish().map_err(|e| e.to_string())?;
     let _ = s.stopped().await;
     Ok(())
@@ -1065,9 +1127,8 @@ async fn send_bulk_file_stream<F: FnMut(u64, u64)>(
             let mut buf = vec![0u8; to_read];
             match f.read(&mut buf[..to_read]) {
                 Ok(0) => {
-                    let _ = chunk_tx.blocking_send(Err(
-                        "source file truncated while reading".into(),
-                    ));
+                    let _ =
+                        chunk_tx.blocking_send(Err("source file truncated while reading".into()));
                     return;
                 }
                 Ok(n) => {
@@ -1099,7 +1160,9 @@ async fn send_bulk_file_stream<F: FnMut(u64, u64)>(
             size: actual_size,
         },
     };
-    write_frame(&mut s, &header).await.map_err(|e| e.to_string())?;
+    write_frame(&mut s, &header)
+        .await
+        .map_err(|e| e.to_string())?;
     stream_file_chunks(chunk_rx, &mut s, actual_size, &cancel_handle, on_chunk).await?;
     let _ = reader_task.await;
     if cancel_handle.is_cancelled() {
@@ -1143,7 +1206,16 @@ pub async fn send_drag_file_with_progress<F: FnMut(u64, u64)>(
     size: u64,
     on_chunk: F,
 ) -> Result<(), String> {
-    send_bulk_file_stream(conn, BulkTransferKind::Drag, drag_id, rel_path, path, size, on_chunk).await
+    send_bulk_file_stream(
+        conn,
+        BulkTransferKind::Drag,
+        drag_id,
+        rel_path,
+        path,
+        size,
+        on_chunk,
+    )
+    .await
 }
 
 pub async fn send_clip_file(
@@ -1164,7 +1236,16 @@ pub async fn send_clip_file_with_progress<F: FnMut(u64, u64)>(
     size: u64,
     on_chunk: F,
 ) -> Result<(), String> {
-    send_bulk_file_stream(conn, BulkTransferKind::Clip, offer_id, rel_path, path, size, on_chunk).await
+    send_bulk_file_stream(
+        conn,
+        BulkTransferKind::Clip,
+        offer_id,
+        rel_path,
+        path,
+        size,
+        on_chunk,
+    )
+    .await
 }
 
 /// Streams a `DragFile` or `ClipFile` while logging lifecycle events and driving
@@ -1182,9 +1263,9 @@ pub async fn send_tracked_bulk_file(
     let prefix = kind.log_prefix();
     let mut throttle = ProgressThrottle::new();
     let mut sent_file = 0u64;
-    super::debug_log::note(|| format!(
-        "{prefix}_START side={side} id={id} rel={rel_path} size={size}"
-    ));
+    super::debug_log::note(|| {
+        format!("{prefix}_START side={side} id={id} rel={rel_path} size={size}")
+    });
     let res = send_bulk_file_stream(
         conn,
         kind,
@@ -1213,29 +1294,28 @@ pub async fn send_tracked_bulk_file(
                     on_progress(p);
                 }
             }
-            super::debug_log::note(|| format!(
-                "{prefix}_DONE side={side} id={id} rel={rel_path}"
-            ));
+            super::debug_log::note(|| format!("{prefix}_DONE side={side} id={id} rel={rel_path}"));
             Ok(())
         }
         Err(e) => {
             clear_outbound_total(&id);
             if e == TRANSFER_CANCELLED_ERR {
-                super::debug_log::note(|| format!(
-                    "{prefix}_CANCELLED side={side} id={id} rel={rel_path}"
-                ));
+                super::debug_log::note(|| {
+                    format!("{prefix}_CANCELLED side={side} id={id} rel={rel_path}")
+                });
             } else {
-                super::debug_log::note(|| format!(
-                    "{prefix}_ERR side={side} id={id} rel={rel_path} err={e}"
-                ));
+                super::debug_log::note(|| {
+                    format!("{prefix}_ERR side={side} id={id} rel={rel_path} err={e}")
+                });
             }
             Err(e)
         }
     }
 }
 
-static OUTBOUND_TOTALS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> =
-    std::sync::OnceLock::new();
+static OUTBOUND_TOTALS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>,
+> = std::sync::OnceLock::new();
 
 fn outbound_totals() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>> {
     OUTBOUND_TOTALS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
@@ -1315,11 +1395,30 @@ mod tests {
     #[test]
     fn sanitizer() {
         assert_eq!(sanitize_name("a.txt").as_deref(), Some("a.txt"));
-        assert_eq!(sanitize_name("..\\..\\AppData\\Startup\\x.bat").as_deref(), Some("x.bat"));
+        assert_eq!(
+            sanitize_name("..\\..\\AppData\\Startup\\x.bat").as_deref(),
+            Some("x.bat")
+        );
         assert_eq!(sanitize_name("../../etc/passwd").as_deref(), Some("passwd"));
-        assert_eq!(sanitize_name("C:\\Windows\\evil.dll").as_deref(), Some("evil.dll"));
+        assert_eq!(
+            sanitize_name("C:\\Windows\\evil.dll").as_deref(),
+            Some("evil.dll")
+        );
         assert_eq!(sanitize_name("/abs/path/f.bin").as_deref(), Some("f.bin"));
-        for bad in ["", ".", "..", "a/..", "dir/", "CON", "nul.txt", "COM1", "lpt9.log", "a:b", "x<y", "ads.txt:s"] {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a/..",
+            "dir/",
+            "CON",
+            "nul.txt",
+            "COM1",
+            "lpt9.log",
+            "a:b",
+            "x<y",
+            "ads.txt:s",
+        ] {
             assert_eq!(sanitize_name(bad), None, "{bad:?}");
         }
         assert_eq!(sanitize_name("tail. .").as_deref(), Some("tail"));
@@ -1342,7 +1441,15 @@ mod tests {
     async fn size_mismatch_leaves_no_files() {
         let d = std::env::temp_dir().join(format!("anyleap-recv-{}", std::process::id()));
         let (mut w, mut r) = tokio::io::duplex(4096);
-        write_frame(&mut w, &StreamHeader::File { name: "f.bin".into(), size: 10 }).await.unwrap();
+        write_frame(
+            &mut w,
+            &StreamHeader::File {
+                name: "f.bin".into(),
+                size: 10,
+            },
+        )
+        .await
+        .unwrap();
         w.write_all(b"abc").await.unwrap();
         drop(w);
         assert!(receive_with_policy(&mut r, &d, true).await.is_err());
@@ -1355,7 +1462,15 @@ mod tests {
         let d = std::env::temp_dir().join(format!("anyleap-rej-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (mut w, mut r) = tokio::io::duplex(4096);
-        write_frame(&mut w, &StreamHeader::File { name: "f.bin".into(), size: 4 }).await.unwrap();
+        write_frame(
+            &mut w,
+            &StreamHeader::File {
+                name: "f.bin".into(),
+                size: 4,
+            },
+        )
+        .await
+        .unwrap();
         w.write_all(b"abcd").await.unwrap();
         drop(w);
         assert!(receive_with_policy(&mut r, &d, false).await.is_err());
@@ -1367,11 +1482,29 @@ mod tests {
         let mut t = ProgressThrottle::new();
         let t0 = Instant::now();
         assert_eq!(t.should_emit_at(0, t0, false), Some(0));
-        assert_eq!(t.should_emit_at(5, t0 + Duration::from_millis(20), false), None);
-        assert_eq!(t.should_emit_at(25, t0 + Duration::from_millis(99), false), None);
-        assert_eq!(t.should_emit_at(25, t0 + Duration::from_millis(100), false), Some(25));
-        assert_eq!(t.should_emit_at(25, t0 + Duration::from_millis(250), false), None);
-        assert_eq!(t.should_emit_at(100, t0 + Duration::from_millis(120), true), Some(100));
-        assert_eq!(t.should_emit_at(100, t0 + Duration::from_millis(300), true), None);
+        assert_eq!(
+            t.should_emit_at(5, t0 + Duration::from_millis(20), false),
+            None
+        );
+        assert_eq!(
+            t.should_emit_at(25, t0 + Duration::from_millis(99), false),
+            None
+        );
+        assert_eq!(
+            t.should_emit_at(25, t0 + Duration::from_millis(100), false),
+            Some(25)
+        );
+        assert_eq!(
+            t.should_emit_at(25, t0 + Duration::from_millis(250), false),
+            None
+        );
+        assert_eq!(
+            t.should_emit_at(100, t0 + Duration::from_millis(120), true),
+            Some(100)
+        );
+        assert_eq!(
+            t.should_emit_at(100, t0 + Duration::from_millis(300), true),
+            None
+        );
     }
 }

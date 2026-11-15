@@ -280,7 +280,10 @@ pub struct KvmStatus {
 #[derive(Debug, Clone)]
 pub enum Outbound {
     Packet(KvmPacket),
-    Image { format: String, data: Vec<u8> },
+    Image {
+        format: String,
+        data: Vec<u8>,
+    },
     // --- SPEC-25c ---
     OpenFile {
         transfer_id: String,
@@ -311,8 +314,13 @@ pub enum Outbound {
 /// Bulk transfers completed on a unidirectional stream.
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
-    File { name: String, size: u64 },
-    ClipboardImage { data: Vec<u8> },
+    File {
+        name: String,
+        size: u64,
+    },
+    ClipboardImage {
+        data: Vec<u8>,
+    },
     // --- SPEC-25c ---
     OpenFile {
         transfer_id: String,
@@ -366,8 +374,13 @@ pub enum TransferEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StreamHeader {
-    File { name: String, size: u64 },
-    ClipboardImage { format: String },
+    File {
+        name: String,
+        size: u64,
+    },
+    ClipboardImage {
+        format: String,
+    },
     // --- SPEC-25c ---
     OpenFile {
         transfer_id: String,
@@ -439,7 +452,9 @@ where
     }
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).await?;
-    serde_json::from_slice(&body).map(Some).map_err(std::io::Error::other)
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(std::io::Error::other)
 }
 
 /// Mouse delta datagram: `dx: i32, dy: i32, seq: u32`, little-endian.
@@ -580,7 +595,10 @@ mod tests {
             }],
         };
         let s_json = serde_json::to_string(&seams_pkt).expect("serialize seams");
-        assert_eq!(serde_json::from_str::<KvmPacket>(&s_json).unwrap(), seams_pkt);
+        assert_eq!(
+            serde_json::from_str::<KvmPacket>(&s_json).unwrap(),
+            seams_pkt
+        );
 
         let legacy_topo = r#"{"computers":[],"links":[]}"#;
         let topo: TopologyConfig = serde_json::from_str(legacy_topo).expect("legacy topo");
@@ -600,7 +618,11 @@ mod tests {
 
     #[test]
     fn test_delta_datagram_roundtrip() {
-        let delta = UdpMouseDelta { dx: 14, dy: -8, seq: 102 };
+        let delta = UdpMouseDelta {
+            dx: 14,
+            dy: -8,
+            seq: 102,
+        };
         let bytes = encode_delta(&delta);
         assert_eq!(bytes.len(), 12);
         assert_eq!(decode_delta(&bytes), Some(delta));
@@ -610,14 +632,27 @@ mod tests {
     #[tokio::test]
     async fn test_frame_roundtrip() {
         let (mut a, mut b) = tokio::io::duplex(1024);
-        let pkt = KvmPacket::ClipboardText { text: "héllo".into() };
+        let pkt = KvmPacket::ClipboardText {
+            text: "héllo".into(),
+        };
         write_frame(&mut a, &pkt).await.unwrap();
-        write_frame(&mut a, &StreamHeader::File { name: "x.txt".into(), size: 3 }).await.unwrap();
+        write_frame(
+            &mut a,
+            &StreamHeader::File {
+                name: "x.txt".into(),
+                size: 3,
+            },
+        )
+        .await
+        .unwrap();
         drop(a);
         assert_eq!(read_frame::<_, KvmPacket>(&mut b).await.unwrap(), Some(pkt));
         assert_eq!(
             read_frame::<_, StreamHeader>(&mut b).await.unwrap(),
-            Some(StreamHeader::File { name: "x.txt".into(), size: 3 })
+            Some(StreamHeader::File {
+                name: "x.txt".into(),
+                size: 3
+            })
         );
         assert!(read_frame::<_, KvmPacket>(&mut b).await.unwrap().is_none());
     }
@@ -625,7 +660,9 @@ mod tests {
     #[tokio::test]
     async fn test_oversized_frame_rejected() {
         let (mut a, mut b) = tokio::io::duplex(64);
-        tokio::io::AsyncWriteExt::write_all(&mut a, &u32::MAX.to_be_bytes()).await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut a, &u32::MAX.to_be_bytes())
+            .await
+            .unwrap();
         assert!(read_frame::<_, KvmPacket>(&mut b).await.is_err());
     }
 
@@ -694,13 +731,25 @@ mod tests {
             KvmPacket::DragOffer {
                 drag_id: "d-1".into(),
                 files: vec![
-                    FileMeta { rel_path: "folder".into(), size: 0, is_dir: true },
-                    FileMeta { rel_path: "folder/a.txt".into(), size: 42, is_dir: false },
+                    FileMeta {
+                        rel_path: "folder".into(),
+                        size: 0,
+                        is_dir: true,
+                    },
+                    FileMeta {
+                        rel_path: "folder/a.txt".into(),
+                        size: 42,
+                        is_dir: false,
+                    },
                 ],
                 button: 1,
             },
-            KvmPacket::DragReady { drag_id: "d-1".into() },
-            KvmPacket::DragCancel { drag_id: "d-1".into() },
+            KvmPacket::DragReady {
+                drag_id: "d-1".into(),
+            },
+            KvmPacket::DragCancel {
+                drag_id: "d-1".into(),
+            },
             KvmPacket::DragResult {
                 drag_id: "d-1".into(),
                 outcome: DragOutcome::Failed,
@@ -708,10 +757,18 @@ mod tests {
             },
             KvmPacket::FileClipOffer {
                 offer_id: "c-1".into(),
-                files: vec![FileMeta { rel_path: "pic.png".into(), size: 1024, is_dir: false }],
+                files: vec![FileMeta {
+                    rel_path: "pic.png".into(),
+                    size: 1024,
+                    is_dir: false,
+                }],
             },
-            KvmPacket::ClipFetchRequest { offer_id: "c-1".into() },
-            KvmPacket::CursorSchemeOffer { roles: vec!["Arrow".into(), "Hand".into()] },
+            KvmPacket::ClipFetchRequest {
+                offer_id: "c-1".into(),
+            },
+            KvmPacket::CursorSchemeOffer {
+                roles: vec!["Arrow".into(), "Hand".into()],
+            },
         ];
         for p in packets {
             let json = serde_json::to_string(&p).unwrap();
@@ -720,9 +777,21 @@ mod tests {
         }
 
         let headers = vec![
-            StreamHeader::DragFile { drag_id: "d-1".into(), rel_path: "folder/a.txt".into(), size: 42 },
-            StreamHeader::ClipFile { offer_id: "c-1".into(), rel_path: "pic.png".into(), size: 1024 },
-            StreamHeader::CursorFile { role: "Arrow".into(), name: "arrow.cur".into(), size: 512 },
+            StreamHeader::DragFile {
+                drag_id: "d-1".into(),
+                rel_path: "folder/a.txt".into(),
+                size: 42,
+            },
+            StreamHeader::ClipFile {
+                offer_id: "c-1".into(),
+                rel_path: "pic.png".into(),
+                size: 1024,
+            },
+            StreamHeader::CursorFile {
+                role: "Arrow".into(),
+                name: "arrow.cur".into(),
+                size: 512,
+            },
         ];
         for h in headers {
             let json = serde_json::to_string(&h).unwrap();

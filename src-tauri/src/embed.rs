@@ -2,6 +2,7 @@ use tauri::AppHandle;
 
 #[cfg(windows)]
 mod win_embed {
+    use crate::state::AppState;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
@@ -14,7 +15,6 @@ mod win_embed {
         SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_POPUP,
         WS_THICKFRAME, WS_VISIBLE,
     };
-    use crate::state::AppState;
 
     static EMBEDDED_HWNDS: OnceLock<Arc<Mutex<HashMap<String, isize>>>> = OnceLock::new();
 
@@ -23,7 +23,10 @@ mod win_embed {
     }
 
     pub fn get_embedded_hwnd_for_serial(serial: &str) -> Option<isize> {
-        get_embedded_map().lock().ok().and_then(|map| map.get(serial).copied())
+        get_embedded_map()
+            .lock()
+            .ok()
+            .and_then(|map| map.get(serial).copied())
     }
     pub fn remove_embedded_hwnd_for_serial(serial: &str) {
         if let Ok(mut map) = get_embedded_map().lock() {
@@ -58,7 +61,8 @@ mod win_embed {
             tauri_hwnd_raw,
             hwnd: None,
         };
-        let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
+        let _ =
+            unsafe { EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut EnumData as isize)) };
         data.hwnd
     }
 
@@ -103,7 +107,11 @@ mod win_embed {
             // Reparent window
             let _ = SetParent(scrcpy_hwnd, Some(tauri_hwnd));
             let parent_style = GetWindowLongPtrW(tauri_hwnd, GWL_STYLE);
-            SetWindowLongPtrW(tauri_hwnd, GWL_STYLE, parent_style | WS_CLIPCHILDREN.0 as isize);
+            SetWindowLongPtrW(
+                tauri_hwnd,
+                GWL_STYLE,
+                parent_style | WS_CLIPCHILDREN.0 as isize,
+            );
             // Update window styles: remove popups/captions/thickframe, make it child + visible
             let mut style = GetWindowLongPtrW(scrcpy_hwnd, GWL_STYLE);
             style &= !(WS_POPUP.0 as isize | WS_CAPTION.0 as isize | WS_THICKFRAME.0 as isize);

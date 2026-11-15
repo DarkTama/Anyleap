@@ -311,16 +311,13 @@ pub fn merge_devices(
     let mut enriched = Vec::with_capacity(raw.len());
     for mut dev in raw {
         let is_wifi = is_wifi_serial(&dev.serial);
-        let hw = hw_serials
-            .get(&dev.serial)
-            .cloned()
-            .or_else(|| {
-                if is_wifi {
-                    mdns_hw_for_endpoint(mdns, &dev.serial)
-                } else {
-                    Some(dev.serial.clone())
-                }
-            });
+        let hw = hw_serials.get(&dev.serial).cloned().or_else(|| {
+            if is_wifi {
+                mdns_hw_for_endpoint(mdns, &dev.serial)
+            } else {
+                Some(dev.serial.clone())
+            }
+        });
         dev.hw_serial = hw.clone();
         enriched.push(Enriched {
             info: dev,
@@ -341,7 +338,10 @@ pub fn merge_devices(
             if item.is_wifi {
                 if let Some((host, port)) = split_wifi_serial(&item.info.serial) {
                     if !is_loopback_host(&host) {
-                        live_wifi_ports_by_host.entry(host).or_default().insert(port);
+                        live_wifi_ports_by_host
+                            .entry(host)
+                            .or_default()
+                            .insert(port);
                     }
                 }
             }
@@ -364,10 +364,7 @@ pub fn merge_devices(
 
     for item in enriched {
         if item.is_wifi && item.info.state == "offline" {
-            let dead_by_hw = item
-                .hw
-                .as_ref()
-                .is_some_and(|hw| live_hw_set.contains(hw));
+            let dead_by_hw = item.hw.as_ref().is_some_and(|hw| live_hw_set.contains(hw));
             let dead_by_host = split_wifi_serial(&item.info.serial).is_some_and(|(host, port)| {
                 !is_loopback_host(&host)
                     && (live_wifi_ports_by_host
@@ -383,10 +380,7 @@ pub fn merge_devices(
             }
         }
 
-        let key = item
-            .hw
-            .clone()
-            .unwrap_or_else(|| item.info.serial.clone());
+        let key = item.hw.clone().unwrap_or_else(|| item.info.serial.clone());
         if !groups.contains_key(&key) {
             group_order.push(key.clone());
         }
@@ -481,9 +475,10 @@ pub fn find_mdns_connect_match<'a>(
     mdns: &'a [MdnsService],
 ) -> Option<&'a MdnsService> {
     if let Some(ref hw) = target.hw_serial {
-        if let Some(svc) = mdns.iter().find(|s| {
-            s.service_type == SVC_CONNECT && s.hw_serial.as_deref() == Some(hw.as_str())
-        }) {
+        if let Some(svc) = mdns
+            .iter()
+            .find(|s| s.service_type == SVC_CONNECT && s.hw_serial.as_deref() == Some(hw.as_str()))
+        {
             return Some(svc);
         }
     }
@@ -693,8 +688,14 @@ USBONLY999             unauthorized transport_id:4
         );
 
         let mut hw_map = HashMap::new();
-        hw_map.insert("140892554J008528".to_string(), "140892554J008528".to_string());
-        hw_map.insert("192.168.0.175:46391".to_string(), "140892554J008528".to_string());
+        hw_map.insert(
+            "140892554J008528".to_string(),
+            "140892554J008528".to_string(),
+        );
+        hw_map.insert(
+            "192.168.0.175:46391".to_string(),
+            "140892554J008528".to_string(),
+        );
 
         let merged = merge_devices(raw, &hw_map, &mdns);
         assert_eq!(merged.dead_serials, vec!["192.168.0.175:40921"]);
@@ -706,7 +707,10 @@ USBONLY999             unauthorized transport_id:4
         assert_eq!(pixel.hw_serial.as_deref(), Some("140892554J008528"));
         assert_eq!(pixel.state, "device");
         assert_eq!(pixel.transports.usb.as_deref(), Some("140892554J008528"));
-        assert_eq!(pixel.transports.wifi.as_deref(), Some("192.168.0.175:46391"));
+        assert_eq!(
+            pixel.transports.wifi.as_deref(),
+            Some("192.168.0.175:46391")
+        );
 
         // Unauthorized USB keeps USB serial as hw_serial.
         let usb_unauth = &merged.devices[1];
@@ -727,13 +731,22 @@ USBONLY999             unauthorized transport_id:4
             "140892554J008528 unauthorized\n192.168.0.175:46391 device model:Pixel_7\n",
         );
         let mut hw_map = HashMap::new();
-        hw_map.insert("192.168.0.175:46391".to_string(), "140892554J008528".to_string());
+        hw_map.insert(
+            "192.168.0.175:46391".to_string(),
+            "140892554J008528".to_string(),
+        );
         let merged = merge_devices(raw, &hw_map, &[]);
         assert_eq!(merged.devices.len(), 1);
         assert_eq!(merged.devices[0].serial, "192.168.0.175:46391");
         assert_eq!(merged.devices[0].state, "device");
-        assert_eq!(merged.devices[0].transports.usb.as_deref(), Some("140892554J008528"));
-        assert_eq!(merged.devices[0].transports.wifi.as_deref(), Some("192.168.0.175:46391"));
+        assert_eq!(
+            merged.devices[0].transports.usb.as_deref(),
+            Some("140892554J008528")
+        );
+        assert_eq!(
+            merged.devices[0].transports.wifi.as_deref(),
+            Some("192.168.0.175:46391")
+        );
     }
 
     #[test]

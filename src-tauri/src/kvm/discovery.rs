@@ -170,7 +170,10 @@ mod tests {
     #[test]
     fn broadcast_addr_computes_directed_broadcast() {
         assert_eq!(
-            broadcast_addr(Ipv4Addr::new(192, 168, 1, 42), Ipv4Addr::new(255, 255, 255, 0)),
+            broadcast_addr(
+                Ipv4Addr::new(192, 168, 1, 42),
+                Ipv4Addr::new(255, 255, 255, 0)
+            ),
             Ipv4Addr::new(192, 168, 1, 255)
         );
         assert_eq!(
@@ -178,11 +181,17 @@ mod tests {
             Ipv4Addr::new(10, 0, 255, 255)
         );
         assert_eq!(
-            broadcast_addr(Ipv4Addr::new(172, 16, 10, 5), Ipv4Addr::new(255, 255, 240, 0)),
+            broadcast_addr(
+                Ipv4Addr::new(172, 16, 10, 5),
+                Ipv4Addr::new(255, 255, 240, 0)
+            ),
             Ipv4Addr::new(172, 16, 15, 255)
         );
         assert_eq!(
-            broadcast_addr(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(255, 255, 255, 255)),
+            broadcast_addr(
+                Ipv4Addr::new(192, 168, 1, 1),
+                Ipv4Addr::new(255, 255, 255, 255)
+            ),
             Ipv4Addr::new(192, 168, 1, 1)
         );
     }

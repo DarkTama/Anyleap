@@ -231,8 +231,10 @@ impl ResamplerState {
             } else {
                 let i0 = self.pos.floor() as usize;
                 let i1 = (i0 + 1).min(num_frames - 1);
-                let (al, ar) = read_stereo_sample(&input[i0 * block_align..], fmt, bytes_per_sample);
-                let (bl, br) = read_stereo_sample(&input[i1 * block_align..], fmt, bytes_per_sample);
+                let (al, ar) =
+                    read_stereo_sample(&input[i0 * block_align..], fmt, bytes_per_sample);
+                let (bl, br) =
+                    read_stereo_sample(&input[i1 * block_align..], fmt, bytes_per_sample);
                 (al, ar, bl, br, (self.pos - i0 as f64) as f32)
             };
             let l = l0 + (l1 - l0) * t;
@@ -260,7 +262,9 @@ fn read_sample_f32(bytes: &[u8], fmt: MixFormatDesc) -> f32 {
                 >> 8;
             raw as f32 / 8_388_608.0
         }
-        (false, 32) => i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f32 / 2_147_483_648.0,
+        (false, 32) => {
+            i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f32 / 2_147_483_648.0
+        }
         _ => 0.0,
     }
 }
@@ -698,12 +702,15 @@ pub fn on_linked_server_started(outgoing_tx: broadcast::Sender<Outbound>, app_ha
 }
 
 pub fn on_linked_peer_connected() {
-    controller().linked_peer_count.fetch_add(1, Ordering::AcqRel);
+    controller()
+        .linked_peer_count
+        .fetch_add(1, Ordering::AcqRel);
 }
 
 pub fn on_linked_peer_disconnected(remaining_peers: usize) {
     let c = controller();
-    c.linked_peer_count.store(remaining_peers, Ordering::Release);
+    c.linked_peer_count
+        .store(remaining_peers, Ordering::Release);
     if remaining_peers == 0 {
         on_linked_audio_stop();
         c.session_mute_unsupported.store(false, Ordering::Release);
@@ -775,7 +782,10 @@ pub fn on_linked_audio_start(
 
 pub fn on_linked_audio_stop() {
     stop_linked_capture("audio_stop");
-    if controller().session_mute_unsupported.load(Ordering::Acquire) {
+    if controller()
+        .session_mute_unsupported
+        .load(Ordering::Acquire)
+    {
         send_linked_mute_state(LINKED_MUTE_UNSUPPORTED);
     } else {
         send_linked_mute_state(LINKED_MUTE_UNMUTED);
@@ -1091,15 +1101,16 @@ mod wasapi {
         )?;
         let wait = WaitForSingleObject(ev.0, 3000);
         if wait != WAIT_OBJECT_0 {
-            return Err(windows::core::Error::from_hresult(windows::core::HRESULT(-1)));
+            return Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+                -1,
+            )));
         }
         let mut activate_hr = HRESULT(0);
         let mut activated = None;
         operation.GetActivateResult(&mut activate_hr, &mut activated)?;
         activate_hr.ok()?;
-        let punk = activated.ok_or_else(|| {
-            windows::core::Error::from_hresult(windows::core::HRESULT(-1))
-        })?;
+        let punk = activated
+            .ok_or_else(|| windows::core::Error::from_hresult(windows::core::HRESULT(-1)))?;
         punk.cast::<IAudioClient>()
     }
 
@@ -1112,12 +1123,8 @@ mod wasapi {
         else {
             return LINKED_MUTE_UNSUPPORTED;
         };
-        let prior_muted = ep_vol
-            .GetMute()
-            .map(|b| b.as_bool())
-            .unwrap_or(false);
-        let (should_mute, we_applied, state) =
-            decide_apply_mute(prior_muted, true, true, false);
+        let prior_muted = ep_vol.GetMute().map(|b| b.as_bool()).unwrap_or(false);
+        let (should_mute, we_applied, state) = decide_apply_mute(prior_muted, true, true, false);
         let marker = MuteMarker {
             endpoint_id: device_id,
             prior_muted,
@@ -1140,7 +1147,9 @@ mod wasapi {
             }
         }
         debug_log::note(|| {
-            format!("AUDIO_MUTE_APPLY prior_muted={prior_muted} we_muted={we_applied} state={state}")
+            format!(
+                "AUDIO_MUTE_APPLY prior_muted={prior_muted} we_muted={we_applied} state={state}"
+            )
         });
         state
     }
@@ -1200,7 +1209,9 @@ mod wasapi {
                         let cur = ep_vol.GetMute().ok().map(|b| b.as_bool());
                         if decide_restore_mute(Some(&m), cur) {
                             let _ = ep_vol.SetMute(false, std::ptr::null());
-                            debug_log::note(|| "AUDIO_MUTE_RESTORE source=crash_marker".to_string());
+                            debug_log::note(|| {
+                                "AUDIO_MUTE_RESTORE source=crash_marker".to_string()
+                            });
                         }
                     }
                 }
@@ -1236,7 +1247,8 @@ mod wasapi {
             let epoch = Instant::now();
 
             while !stop.load(Ordering::Acquire) {
-                let want_process_loopback = mute_local && !session_unsupported.load(Ordering::Acquire);
+                let want_process_loopback =
+                    mute_local && !session_unsupported.load(Ordering::Acquire);
                 let mut using_process_loopback = false;
                 let mut device_id = String::new();
                 let mut mix_desc = MixFormatDesc {
@@ -1267,7 +1279,14 @@ mod wasapi {
                                 | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
                                 | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
                             if client
-                                .Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 200_000, 0, &wfx_float, None)
+                                .Initialize(
+                                    AUDCLNT_SHAREMODE_SHARED,
+                                    flags,
+                                    200_000,
+                                    0,
+                                    &wfx_float,
+                                    None,
+                                )
                                 .is_ok()
                             {
                                 using_process_loopback = true;
@@ -1277,13 +1296,22 @@ mod wasapi {
                                     wFormatTag: WAVE_FORMAT_PCM as u16,
                                     nChannels: AUDIO_CHANNELS,
                                     nSamplesPerSec: AUDIO_SAMPLE_RATE,
-                                    nAvgBytesPerSec: AUDIO_SAMPLE_RATE * (AUDIO_CHANNELS as u32) * 2,
+                                    nAvgBytesPerSec: AUDIO_SAMPLE_RATE
+                                        * (AUDIO_CHANNELS as u32)
+                                        * 2,
                                     nBlockAlign: AUDIO_CHANNELS * 2,
                                     wBitsPerSample: 16,
                                     cbSize: 0,
                                 };
                                 if client
-                                    .Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 200_000, 0, &wfx_i16, None)
+                                    .Initialize(
+                                        AUDCLNT_SHAREMODE_SHARED,
+                                        flags,
+                                        200_000,
+                                        0,
+                                        &wfx_i16,
+                                        None,
+                                    )
                                     .is_ok()
                                 {
                                     using_process_loopback = true;
@@ -1318,7 +1346,9 @@ mod wasapi {
                             send_linked_mute_state(LINKED_MUTE_UNMUTED);
                         }
                         debug_log::note(|| {
-                            format!("AUDIO_CAPTURE_MODE mode=endpoint_loopback mute_local={mute_local}")
+                            format!(
+                                "AUDIO_CAPTURE_MODE mode=endpoint_loopback mute_local={mute_local}"
+                            )
                         });
                         emit_audio_state(true, 0.0);
 
@@ -1422,7 +1452,8 @@ mod wasapi {
                         std::thread::sleep(Duration::from_millis(5));
                     }
 
-                    if !using_process_loopback && last_device_check.elapsed() >= DEVICE_POLL_INTERVAL
+                    if !using_process_loopback
+                        && last_device_check.elapsed() >= DEVICE_POLL_INTERVAL
                     {
                         last_device_check = Instant::now();
                         if let Some(cur_id) = default_render_id(&enumerator) {
@@ -1464,8 +1495,8 @@ mod wasapi {
                         }
 
                         if num_frames > 0 {
-                            let is_silent =
-                                (flags & AUDCLNT_BUFFERFLAGS_SILENT_FLAG) != 0 || data_ptr.is_null();
+                            let is_silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT_FLAG) != 0
+                                || data_ptr.is_null();
                             if is_silent {
                                 if trailing_silent_frames < 2 && !pcm_accum.is_empty() {
                                     let pad =
@@ -1498,7 +1529,8 @@ mod wasapi {
                             }
 
                             while pcm_accum.len() >= AUDIO_PACKET_BYTES {
-                                let frame: Vec<u8> = pcm_accum.drain(..AUDIO_PACKET_BYTES).collect();
+                                let frame: Vec<u8> =
+                                    pcm_accum.drain(..AUDIO_PACKET_BYTES).collect();
                                 let pk = compute_pcm16_peak(&frame);
                                 if pk > peak_window {
                                     peak_window = pk;
@@ -1521,15 +1553,19 @@ mod wasapi {
                         }
                     }
 
-                    if using_process_loopback && last_silence_check.elapsed() >= Duration::from_millis(200) {
+                    if using_process_loopback
+                        && last_silence_check.elapsed() >= Duration::from_millis(200)
+                    {
                         last_silence_check = Instant::now();
                         let other_peak = query_render_peak(&enumerator, true, our_pid);
                         let now_ms = epoch.elapsed().as_millis() as u64;
-                        let triggered = silence_guard.step(now_ms, other_peak, silence_guard_pcm_peak);
+                        let triggered =
+                            silence_guard.step(now_ms, other_peak, silence_guard_pcm_peak);
                         silence_guard_pcm_peak = 0.0;
                         if triggered {
                             debug_log::note(|| {
-                                "AUDIO_MUTE_FALLBACK reason=runtime_silence_guard_triggered".to_string()
+                                "AUDIO_MUTE_FALLBACK reason=runtime_silence_guard_triggered"
+                                    .to_string()
                             });
                             restore_active_mute("silence_guard");
                             session_unsupported.store(true, Ordering::Release);
@@ -1885,7 +1921,7 @@ mod tests {
 
         assert_eq!(jb.pop()[0], 77); // seq 0
         assert_eq!(jb.pop()[0], 88); // seq 1
-        // seq 2 missing -> repeat last frame (88) ONCE
+                                     // seq 2 missing -> repeat last frame (88) ONCE
         assert_eq!(jb.pop()[0], 88);
         // seq 3 missing -> silence
         assert!(jb.pop().iter().all(|&b| b == 0));
@@ -1954,14 +1990,29 @@ mod tests {
     #[test]
     fn mute_apply_and_restore_decisions_respect_prior_user_mute_and_crash_marker() {
         // Normal mute_local=true when endpoint was unmuted
-        assert_eq!(decide_apply_mute(false, true, true, false), (true, true, LINKED_MUTE_MUTED));
+        assert_eq!(
+            decide_apply_mute(false, true, true, false),
+            (true, true, LINKED_MUTE_MUTED)
+        );
         // Endpoint already muted by user -> do NOT mark we_applied_mute
-        assert_eq!(decide_apply_mute(true, true, true, false), (false, false, LINKED_MUTE_MUTED));
+        assert_eq!(
+            decide_apply_mute(true, true, true, false),
+            (false, false, LINKED_MUTE_MUTED)
+        );
         // mute_local=false -> do not mute, stay unmuted
-        assert_eq!(decide_apply_mute(false, false, true, false), (false, false, LINKED_MUTE_UNMUTED));
+        assert_eq!(
+            decide_apply_mute(false, false, true, false),
+            (false, false, LINKED_MUTE_UNMUTED)
+        );
         // Process loopback unavailable or session unsupported -> unsupported, do not mute
-        assert_eq!(decide_apply_mute(false, true, false, false), (false, false, LINKED_MUTE_UNSUPPORTED));
-        assert_eq!(decide_apply_mute(false, true, true, true), (false, false, LINKED_MUTE_UNSUPPORTED));
+        assert_eq!(
+            decide_apply_mute(false, true, false, false),
+            (false, false, LINKED_MUTE_UNSUPPORTED)
+        );
+        assert_eq!(
+            decide_apply_mute(false, true, true, true),
+            (false, false, LINKED_MUTE_UNSUPPORTED)
+        );
 
         let we_muted = MuteMarker {
             endpoint_id: "ep-1".into(),
@@ -2012,8 +2063,7 @@ mod tests {
 
     #[cfg(windows)]
     fn encode_ps_utf16le_base64(script: &str) -> String {
-        const TBL: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const TBL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut bytes = Vec::with_capacity(script.len() * 2);
         for u in script.encode_utf16() {
             bytes.extend_from_slice(&u.to_le_bytes());
@@ -2026,8 +2076,16 @@ mod tests {
             let n = (b0 << 16) | (b1 << 8) | b2;
             out.push(TBL[(n >> 18) & 63] as char);
             out.push(TBL[(n >> 12) & 63] as char);
-            out.push(if chunk.len() > 1 { TBL[(n >> 6) & 63] as char } else { '=' });
-            out.push(if chunk.len() > 2 { TBL[n & 63] as char } else { '=' });
+            out.push(if chunk.len() > 1 {
+                TBL[(n >> 6) & 63] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                TBL[n & 63] as char
+            } else {
+                '='
+            });
         }
         out
     }
@@ -2035,8 +2093,13 @@ mod tests {
     #[cfg(windows)]
     fn query_default_endpoint_muted() -> Option<(String, bool)> {
         use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-        use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
-        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+        use windows::Win32::Media::Audio::{
+            eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+        };
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+            COINIT_MULTITHREADED,
+        };
         unsafe {
             let com_ok = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
             let res = (|| -> Option<(String, bool)> {
@@ -2082,7 +2145,8 @@ mod tests {
             f.write_all(&1u16.to_le_bytes()).unwrap(); // PCM
             f.write_all(&channels.to_le_bytes()).unwrap();
             f.write_all(&sample_rate.to_le_bytes()).unwrap();
-            f.write_all(&(sample_rate * channels as u32 * 2).to_le_bytes()).unwrap();
+            f.write_all(&(sample_rate * channels as u32 * 2).to_le_bytes())
+                .unwrap();
             f.write_all(&(channels * 2).to_le_bytes()).unwrap();
             f.write_all(&bits.to_le_bytes()).unwrap();
             f.write_all(b"data").unwrap();
@@ -2183,7 +2247,11 @@ mod tests {
             non_silent_packets > 0 || unsupported,
             "expected either non-silent PCM while muted or clean fallback to unsupported"
         );
-        assert_eq!(muted_after, Some(false), "endpoint mute must be restored after stop");
+        assert_eq!(
+            muted_after,
+            Some(false),
+            "endpoint mute must be restored after stop"
+        );
     }
 
     #[cfg(windows)]
@@ -2191,17 +2259,26 @@ mod tests {
     #[test]
     fn verify_crash_marker_restores_endpoint_mute_on_startup() {
         use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-        use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
-        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+        use windows::Win32::Media::Audio::{
+            eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+        };
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+        };
 
         let (ep_id, prior_muted) = query_default_endpoint_muted().expect("default render endpoint");
-        assert!(!prior_muted, "precondition: default render endpoint must start unmuted");
+        assert!(
+            !prior_muted,
+            "precondition: default render endpoint must start unmuted"
+        );
 
         unsafe {
             let com_ok = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).unwrap();
-            let dev = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).unwrap();
+            let dev = enumerator
+                .GetDefaultAudioEndpoint(eRender, eConsole)
+                .unwrap();
             let ep_vol: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).unwrap();
             ep_vol.SetMute(true, std::ptr::null()).unwrap();
             if com_ok {
@@ -2220,7 +2297,14 @@ mod tests {
         restore_mute_from_crash_marker();
 
         let after = query_default_endpoint_muted().map(|(_, m)| m);
-        assert_eq!(after, Some(false), "startup crash-marker recovery must unmute endpoint");
-        assert!(!marker_path.exists(), "crash marker file must be removed after recovery");
+        assert_eq!(
+            after,
+            Some(false),
+            "startup crash-marker recovery must unmute endpoint"
+        );
+        assert!(
+            !marker_path.exists(),
+            "crash marker file must be removed after recovery"
+        );
     }
 }

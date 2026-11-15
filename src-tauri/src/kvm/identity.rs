@@ -18,7 +18,10 @@ pub fn provider() -> Arc<CryptoProvider> {
 
 /// SHA-256 of the certificate DER, lowercase hex.
 pub fn fingerprint(cert: &[u8]) -> String {
-    Sha256::digest(cert).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(cert)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 pub struct Identity {
@@ -31,7 +34,10 @@ impl Identity {
     pub fn load_or_create(dir: &Path) -> Result<Self, String> {
         let (cp, kp) = (dir.join("kvm_identity.der"), dir.join("kvm_identity.key"));
         if let (Ok(cert), Ok(key)) = (std::fs::read(&cp), std::fs::read(&kp)) {
-            return Ok(Self { cert: cert.into(), key });
+            return Ok(Self {
+                cert: cert.into(),
+                key,
+            });
         }
         let ck = rcgen::generate_simple_self_signed(vec!["anyleap-kvm".to_string()])
             .map_err(|e| format!("Identity generation failed: {e}"))?;
@@ -39,7 +45,10 @@ impl Identity {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         std::fs::write(&cp, &cert).map_err(|e| e.to_string())?;
         std::fs::write(&kp, &key).map_err(|e| e.to_string())?;
-        Ok(Self { cert: cert.into(), key })
+        Ok(Self {
+            cert: cert.into(),
+            key,
+        })
     }
 
     pub fn key_der(&self) -> PrivatePkcs8KeyDer<'static> {
@@ -76,7 +85,10 @@ impl TrustStore {
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        Self { path, peers: Mutex::new(peers) }
+        Self {
+            path,
+            peers: Mutex::new(peers),
+        }
     }
 
     fn save(&self, peers: &[TrustedPeer]) {
@@ -86,15 +98,29 @@ impl TrustStore {
     }
 
     pub fn contains(&self, fp: &str) -> bool {
-        self.peers.lock().unwrap().iter().any(|p| p.fingerprint == fp)
+        self.peers
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.fingerprint == fp)
     }
 
     pub fn by_address(&self, addr: &str) -> Option<TrustedPeer> {
-        self.peers.lock().unwrap().iter().find(|p| p.address == addr).cloned()
+        self.peers
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.address == addr)
+            .cloned()
     }
 
     pub fn by_fingerprint(&self, fp: &str) -> Option<TrustedPeer> {
-        self.peers.lock().unwrap().iter().find(|p| p.fingerprint == fp).cloned()
+        self.peers
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.fingerprint == fp)
+            .cloned()
     }
 
     /// Insert or replace (by `computer_id`).
@@ -138,10 +164,20 @@ impl ServerCertVerifier for AnyCert {
     ) -> Result<ServerCertVerified, TlsError> {
         Ok(ServerCertVerified::assertion())
     }
-    fn verify_tls12_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, TlsError> {
+    fn verify_tls12_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
         verify_tls12_signature(m, c, d, &self.0.signature_verification_algorithms)
     }
-    fn verify_tls13_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, TlsError> {
+    fn verify_tls13_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
         verify_tls13_signature(m, c, d, &self.0.signature_verification_algorithms)
     }
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -153,13 +189,28 @@ impl ClientCertVerifier for AnyCert {
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
         &[]
     }
-    fn verify_client_cert(&self, _: &CertificateDer<'_>, _: &[CertificateDer<'_>], _: UnixTime) -> Result<ClientCertVerified, TlsError> {
+    fn verify_client_cert(
+        &self,
+        _: &CertificateDer<'_>,
+        _: &[CertificateDer<'_>],
+        _: UnixTime,
+    ) -> Result<ClientCertVerified, TlsError> {
         Ok(ClientCertVerified::assertion())
     }
-    fn verify_tls12_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, TlsError> {
+    fn verify_tls12_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
         verify_tls12_signature(m, c, d, &self.0.signature_verification_algorithms)
     }
-    fn verify_tls13_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, TlsError> {
+    fn verify_tls13_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
         verify_tls13_signature(m, c, d, &self.0.signature_verification_algorithms)
     }
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {

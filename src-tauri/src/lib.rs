@@ -206,7 +206,10 @@ pub fn run() {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Sessions mutex poisoned, could not kill child processes: {}", e);
+                            eprintln!(
+                                "Sessions mutex poisoned, could not kill child processes: {}",
+                                e
+                            );
                         }
                     }
                 }

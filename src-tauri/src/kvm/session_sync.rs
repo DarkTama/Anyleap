@@ -318,11 +318,7 @@ pub fn handle_inbound_session_packet(app: &AppHandle, is_lock_packet: bool) {
                 now_epoch_ms().saturating_add(SLEEP_ECHO_SUPPRESS_MS),
                 Ordering::SeqCst,
             );
-            run_inbound_session_action(
-                app,
-                sleep_local_workstation,
-                "Failed to put PC to sleep",
-            );
+            run_inbound_session_action(app, sleep_local_workstation, "Failed to put PC to sleep");
         }
     }
 }
@@ -582,8 +578,12 @@ mod tests {
     #[test]
     fn trap_release_decision_on_local_events() {
         assert!(should_release_trap_on_local_event(LocalSessionEvent::Lock));
-        assert!(should_release_trap_on_local_event(LocalSessionEvent::Suspend));
-        assert!(!should_release_trap_on_local_event(LocalSessionEvent::Unlock));
+        assert!(should_release_trap_on_local_event(
+            LocalSessionEvent::Suspend
+        ));
+        assert!(!should_release_trap_on_local_event(
+            LocalSessionEvent::Unlock
+        ));
     }
 
     #[test]

@@ -222,7 +222,11 @@ where
 }
 
 pub fn set_clipboard_text(text: &str) -> Result<(), String> {
-    if !should_apply_inbound(InboundClipboardKind::Text, sync_text_enabled(), sync_image_enabled()) {
+    if !should_apply_inbound(
+        InboundClipboardKind::Text,
+        sync_text_enabled(),
+        sync_image_enabled(),
+    ) {
         return Ok(());
     }
     SUPPRESS_ECHO.store(true, Ordering::SeqCst);
@@ -241,7 +245,11 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
             if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, bytes_len) {
                 let ptr = GlobalLock(h);
                 if !ptr.is_null() {
-                    std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr as *mut u8, bytes_len);
+                    std::ptr::copy_nonoverlapping(
+                        utf16.as_ptr() as *const u8,
+                        ptr as *mut u8,
+                        bytes_len,
+                    );
                     let _ = GlobalUnlock(h);
                     let _ = SetClipboardData(13, Some(HANDLE(h.0)));
                     return Some(());
@@ -265,7 +273,11 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
 }
 
 pub fn set_clipboard_image(data: &[u8]) -> Result<(), String> {
-    if !should_apply_inbound(InboundClipboardKind::Image, sync_text_enabled(), sync_image_enabled()) {
+    if !should_apply_inbound(
+        InboundClipboardKind::Image,
+        sync_text_enabled(),
+        sync_image_enabled(),
+    ) {
         return Ok(());
     }
     if data.len() > 15_000_000 {
@@ -395,10 +407,7 @@ fn has_clipboard_files() -> bool {
 }
 // --- end SPEC-25a ---
 
-pub fn start_clipboard_sync(
-    tx: mpsc::Sender<Outbound>,
-    is_running: Arc<AtomicBool>,
-) {
+pub fn start_clipboard_sync(tx: mpsc::Sender<Outbound>, is_running: Arc<AtomicBool>) {
     tokio::spawn(async move {
         #[cfg(windows)]
         unsafe {
@@ -436,10 +445,11 @@ pub fn start_clipboard_sync(
                                                     .filter(|f| !f.is_dir)
                                                     .map(|f| f.size)
                                                     .sum();
-                                                let prefetch = super::staging::decide_clip_offer_mode(
-                                                    total_bytes,
-                                                    super::staging::clip_prefetch_limit_mb(),
-                                                ) == super::staging::ClipOfferMode::Prefetch;
+                                                let prefetch =
+                                                    super::staging::decide_clip_offer_mode(
+                                                        total_bytes,
+                                                        super::staging::clip_prefetch_limit_mb(),
+                                                    ) == super::staging::ClipOfferMode::Prefetch;
                                                 let sources_for_stream = if prefetch {
                                                     Some(sources)
                                                 } else {
@@ -470,12 +480,14 @@ pub fn start_clipboard_sync(
                                                         let size = std::fs::metadata(&disk_path)
                                                             .map(|m| m.len())
                                                             .unwrap_or(0);
-                                                        let _ = tx_clone.blocking_send(Outbound::ClipFile {
-                                                            offer_id: offer_id.clone(),
-                                                            rel_path,
-                                                            path: disk_path,
-                                                            size,
-                                                        });
+                                                        let _ = tx_clone.blocking_send(
+                                                            Outbound::ClipFile {
+                                                                offer_id: offer_id.clone(),
+                                                                rel_path,
+                                                                path: disk_path,
+                                                                size,
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -546,10 +558,26 @@ mod tests {
         );
 
         // Inbound gating via should_apply_inbound (pure, no global state mutation)
-        assert!(should_apply_inbound(InboundClipboardKind::Text, true, false));
-        assert!(!should_apply_inbound(InboundClipboardKind::Text, false, true));
-        assert!(should_apply_inbound(InboundClipboardKind::Image, false, true));
-        assert!(!should_apply_inbound(InboundClipboardKind::Image, true, false));
+        assert!(should_apply_inbound(
+            InboundClipboardKind::Text,
+            true,
+            false
+        ));
+        assert!(!should_apply_inbound(
+            InboundClipboardKind::Text,
+            false,
+            true
+        ));
+        assert!(should_apply_inbound(
+            InboundClipboardKind::Image,
+            false,
+            true
+        ));
+        assert!(!should_apply_inbound(
+            InboundClipboardKind::Image,
+            true,
+            false
+        ));
     }
 
     // --- SPEC-25a ---
