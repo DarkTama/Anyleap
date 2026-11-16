@@ -77,6 +77,7 @@ function App() {
   const hudNoticeRef = useRef<string | null>(null);
   const hudNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasHudNoticeRef = useRef(false);
+  const hudOpIdRef = useRef(0);
 
   const devices = useAppStore((s) => s.devices);
   const selectedSerial = useAppStore((s) => s.selectedSerial);
@@ -405,7 +406,7 @@ function App() {
     (s) => !!s.status.receiver_entered || (!!s.status.controller_edge && !s.status.is_input_trapped)
   );
 
-  const closeHudWindow = useCallback(async () => {
+  const destroyExistingHudWindow = useCallback(async () => {
     const w = await WebviewWindow.getByLabel("kvm-hud").catch(() => null);
     if (w) {
       await w.close().catch(() => {});
@@ -413,8 +414,14 @@ function App() {
     }
   }, []);
 
+  const closeHudWindow = useCallback(async () => {
+    hudOpIdRef.current += 1;
+    await destroyExistingHudWindow();
+  }, [destroyExistingHudWindow]);
+
   const openHudWindow = useCallback(
-    async (opts: { width: number; height: number; url: string }) => {
+    async (opts: { width: number; height: number; url: string }): Promise<boolean> => {
+      const opId = ++hudOpIdRef.current;
       const MARGIN = 16;
       const screenW = window.screen.availWidth || 1920;
       const screenH = window.screen.availHeight || 1080;
@@ -423,7 +430,10 @@ function App() {
       const x = right ? Math.max(MARGIN, screenW - opts.width - MARGIN) : MARGIN;
       const y = bottom ? Math.max(MARGIN, screenH - opts.height - MARGIN) : MARGIN;
 
-      await closeHudWindow();
+      await destroyExistingHudWindow();
+      if (hudOpIdRef.current !== opId) {
+        return false;
+      }
       try {
         const w = new WebviewWindow("kvm-hud", {
           url: opts.url,
@@ -445,17 +455,20 @@ function App() {
           void w.setIgnoreCursorEvents(true).catch(() => {});
         });
         w.once("tauri://error", (e) => console.error("kvm-hud window error:", e));
+        return true;
       } catch (e) {
         console.error("Failed to spawn native desktop HUD overlay:", e);
+        return false;
       }
     },
-    [kvmHudCorner, closeHudWindow]
+    [kvmHudCorner, destroyExistingHudWindow]
   );
 
   // Transient toast: appears on the machine that just received the cursor,
   // stays ~1.8 s, is click-through, and never lingers over the user's work.
   useEffect(() => {
     if (hudNoticeRef.current) return;
+    let cancelled = false;
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
     if (!(kvmIndicatorHud && kvmHasPeers && kvmOwnsCursor)) {
@@ -464,15 +477,17 @@ function App() {
     }
 
     (async () => {
-      await openHudWindow({
+      const opened = await openHudWindow({
         width: 200,
         height: 36,
         url: "index.html?kvm_hud=1",
       });
+      if (cancelled || !opened) return;
       closeTimer = setTimeout(() => void closeHudWindow(), 1800);
     })();
 
     return () => {
+      cancelled = true;
       if (closeTimer) clearTimeout(closeTimer);
     };
   }, [kvmIndicatorHud, kvmHudCorner, kvmHasPeers, kvmOwnsCursor, openHudWindow, closeHudWindow]);

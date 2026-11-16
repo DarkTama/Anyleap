@@ -130,7 +130,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
     setError(null);
     try {
       await disconnectDevice(host, port);
-      await syncDevicesAndMigrate();
+      await syncDevicesAndMigrate(undefined, undefined, { force: true });
       logActivity({
         kind: "device",
         title: `Disconnected ${device.serial}`,
@@ -377,7 +377,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
     setError(null);
     try {
       await disconnectDevice(host, port);
-      await syncDevicesAndMigrate();
+      await syncDevicesAndMigrate(undefined, undefined, { force: true });
       logActivity({
         kind: "device",
         title: `Disconnected ${wifiEp}`,

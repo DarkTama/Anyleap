@@ -25,8 +25,38 @@ type RefreshResult = SyncResult & {
   results: ReconnectResult[];
 };
 
+export const DEVICE_SYNC_COOLDOWN_MS = 2000;
+
 let inFlightSync: Promise<SyncResult> | null = null;
 let inFlightRefresh: Promise<RefreshResult> | null = null;
+let lastSyncResult: SyncResult | null = null;
+let lastSyncAtMs: number | null = null;
+let lastRefreshResult: RefreshResult | null = null;
+let lastRefreshAtMs: number | null = null;
+
+/**
+ * Pure decision helper: reuse a recently completed device sync/refresh result
+ * within the cooldown window unless `force` is explicitly requested.
+ */
+export function shouldReuseRecentDeviceSync(
+  lastCompletedAtMs: number | null,
+  nowMs: number,
+  cooldownMs: number = DEVICE_SYNC_COOLDOWN_MS,
+  force = false,
+): boolean {
+  if (force || lastCompletedAtMs === null) return false;
+  const elapsed = nowMs - lastCompletedAtMs;
+  return elapsed >= 0 && elapsed < cooldownMs;
+}
+
+export function resetDeviceSyncStateForTest(): void {
+  inFlightSync = null;
+  inFlightRefresh = null;
+  lastSyncResult = null;
+  lastSyncAtMs = null;
+  lastRefreshResult = null;
+  lastRefreshAtMs = null;
+}
 
 export function repairKeyFor(target: {
   saved?: SavedDevice | null;
@@ -94,7 +124,9 @@ async function runSyncDevicesAndMigrate(
   }
 
   const latest = useAppStore.getState();
-  latest.setDevices(devices);
+  if (JSON.stringify(latest.devices) !== JSON.stringify(devices)) {
+    latest.setDevices(devices);
+  }
   clearLiveRepairFlags(devices, nextSaved, latest.repairNeeded, latest.setRepairNeeded);
 
   const resolved = resolveDeviceTarget(latest.selectedSerial, devices, nextSaved);
@@ -113,11 +145,14 @@ async function runSyncDevicesAndMigrate(
  * Fetch current adb devices + mDNS connect services, deduplicate live transports by
  * hardware serial, migrate any legacy IP:port saved entries/nicknames, and keep
  * `selectedSerial` pointing at the active transport for the selected phone.
- * Concurrent calls without preloaded snapshots coalesce onto the in-flight sync.
+ * Concurrent calls without preloaded snapshots coalesce onto the in-flight sync,
+ * and back-to-back calls within the cooldown window reuse the recent snapshot
+ * unless `opts.force` is set.
  */
 export function syncDevicesAndMigrate(
   preloadedDevices?: DeviceInfo[],
   preloadedMdns?: MdnsService[],
+  opts?: { force?: boolean },
 ): Promise<SyncResult> {
   if (preloadedDevices || preloadedMdns) {
     return runSyncDevicesAndMigrate(preloadedDevices, preloadedMdns);
@@ -125,9 +160,21 @@ export function syncDevicesAndMigrate(
   if (inFlightSync) {
     return inFlightSync;
   }
-  inFlightSync = runSyncDevicesAndMigrate().finally(() => {
-    inFlightSync = null;
-  });
+  if (
+    lastSyncResult &&
+    shouldReuseRecentDeviceSync(lastSyncAtMs, Date.now(), DEVICE_SYNC_COOLDOWN_MS, opts?.force)
+  ) {
+    return Promise.resolve(lastSyncResult);
+  }
+  inFlightSync = runSyncDevicesAndMigrate()
+    .then((res) => {
+      lastSyncResult = res;
+      lastSyncAtMs = Date.now();
+      return res;
+    })
+    .finally(() => {
+      inFlightSync = null;
+    });
   return inFlightSync;
 }
 
@@ -253,8 +300,9 @@ export async function reconnectSavedDevice(
 
 async function runRefreshAndReconnectDevices(opts?: {
   silentRepair?: boolean;
+  force?: boolean;
 }): Promise<RefreshResult> {
-  const initial = await syncDevicesAndMigrate();
+  const initial = await syncDevicesAndMigrate(undefined, undefined, { force: opts?.force });
   const offlineSaved = initial.savedDevices.filter((s) => {
     if (!s.host) return false;
     const live = matchConnected(s, initial.devices);
@@ -273,23 +321,37 @@ async function runRefreshAndReconnectDevices(opts?: {
     .filter((r): r is PromiseFulfilledResult<ReconnectResult> => r.status === "fulfilled")
     .map((r) => r.value);
 
-  const finalSync = await syncDevicesAndMigrate();
+  const finalSync = await syncDevicesAndMigrate(undefined, undefined, { force: true });
   return { ...finalSync, results };
 }
 
 /**
  * Refresh adb devices + migrate saved devices, auto-reconnect any offline saved
  * wireless devices via mDNS / stored endpoint, and re-sync the merged device list.
- * Concurrent calls coalesce onto the active refresh promise.
+ * Concurrent calls coalesce onto the active refresh promise, and rapid follow-up
+ * calls within the cooldown window reuse the recent result unless `opts.force` is set.
  */
 export function refreshAndReconnectDevices(opts?: {
   silentRepair?: boolean;
+  force?: boolean;
 }): Promise<RefreshResult> {
   if (inFlightRefresh) {
     return inFlightRefresh;
   }
-  inFlightRefresh = runRefreshAndReconnectDevices(opts).finally(() => {
-    inFlightRefresh = null;
-  });
+  if (
+    lastRefreshResult &&
+    shouldReuseRecentDeviceSync(lastRefreshAtMs, Date.now(), DEVICE_SYNC_COOLDOWN_MS, opts?.force)
+  ) {
+    return Promise.resolve(lastRefreshResult);
+  }
+  inFlightRefresh = runRefreshAndReconnectDevices(opts)
+    .then((res) => {
+      lastRefreshResult = res;
+      lastRefreshAtMs = Date.now();
+      return res;
+    })
+    .finally(() => {
+      inFlightRefresh = null;
+    });
   return inFlightRefresh;
 }

@@ -14,8 +14,11 @@ vi.mock("./settingsStore", () => ({
 import { useAppStore } from "../store/useAppStore";
 import { adbErrorDeduper } from "./adbError";
 import {
+  DEVICE_SYNC_COOLDOWN_MS,
   reconnectSavedDevice,
   refreshAndReconnectDevices,
+  resetDeviceSyncStateForTest,
+  shouldReuseRecentDeviceSync,
   syncDevicesAndMigrate,
 } from "./deviceSync";
 import { discoverWireless, listDevices, reconnectWireless } from "./tauri";
@@ -24,6 +27,7 @@ import type { SavedDevice } from "./types";
 describe("deviceSync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDeviceSyncStateForTest();
     adbErrorDeduper.reset();
     useAppStore.setState({
       devices: [],
@@ -128,5 +132,32 @@ describe("deviceSync", () => {
 
     expect(setErrorSpy).toHaveBeenCalledTimes(1);
     expect(setErrorSpy.mock.calls[0][0]).toContain("Could not start ADB server on port 5037");
+  });
+
+  it("shouldReuseRecentDeviceSync enforces cooldown window unless forced", () => {
+    expect(shouldReuseRecentDeviceSync(null, 5000)).toBe(false);
+    expect(shouldReuseRecentDeviceSync(1000, 1000)).toBe(true);
+    expect(shouldReuseRecentDeviceSync(1000, 1000 + DEVICE_SYNC_COOLDOWN_MS - 1)).toBe(true);
+    expect(shouldReuseRecentDeviceSync(1000, 1000 + DEVICE_SYNC_COOLDOWN_MS)).toBe(false);
+    expect(shouldReuseRecentDeviceSync(1000, 1500, DEVICE_SYNC_COOLDOWN_MS, true)).toBe(false);
+  });
+
+  it("debounces back-to-back syncDevicesAndMigrate and refreshAndReconnectDevices within cooldown unless forced", async () => {
+    vi.mocked(listDevices).mockResolvedValue([]);
+    vi.mocked(discoverWireless).mockResolvedValue([]);
+
+    await syncDevicesAndMigrate();
+    await syncDevicesAndMigrate();
+    expect(listDevices).toHaveBeenCalledTimes(1);
+
+    await syncDevicesAndMigrate(undefined, undefined, { force: true });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+
+    await refreshAndReconnectDevices({ silentRepair: true });
+    await refreshAndReconnectDevices({ silentRepair: true });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+
+    await refreshAndReconnectDevices({ silentRepair: true, force: true });
+    expect(listDevices).toHaveBeenCalledTimes(3);
   });
 });
