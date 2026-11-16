@@ -71,11 +71,14 @@ The tiered backend phone-data service and Phone tab dashboard for a connected `A
 - **Conversation (`MessageStore`)**: Memory-only chat history aggregated from `MessagingStyle` / `category=msg` notification dumps, keyed by `<package>::<conversationKey>`, deduplicated by `(sender, text, timestampMs)`, capped at 200 messages per conversation, never logged or written to disk, and cleared on device disconnect or app exit.
 - **Audio-Only (`audio_only`)**: Headless PC audio playback via `scrcpy --no-video --no-window` (refused if a mirror session with audio is already active on the same device).
 
-### Phone Workspace (`PhoneView`)
-The ADB-only companion view for a selected `AdbDevice` (requiring no companion app on the phone):
+### Phone Workspace (`PhoneView`, `SPEC-27`)
+The ADB-only companion dashboard for a selected `AdbDevice` (requiring no companion app on the phone):
+- **Overview (`OverviewView`)**: Status cards for battery, storage/RAM, Wi-Fi/cellular signal, and device info, plus quick actions (Mirror, Audio-only, and Wi-Fi/Bluetooth/DND toggles with wireless Wi-Fi-off confirmation).
+- **Messages (`MessagesView`)**: Read-only chat history aggregated in memory from chat notifications, grouped by app and conversation, and cleared on disconnect or app exit.
+- **Notifications (`NotificationsView`)**: Active notifications grouped by resolved app label with persisted per-app mute filtering (`mutedPackages`) applied to both the list and native desktop toasts.
+- **Gallery (`GalleryView`)**: Infinite-scroll (pages of 60) windowed grid of MediaStore photos and videos across all albums, with an in-app photo viewer, direct PC playback for videos, and single/multi-select downloads via `pull_device_file`.
 - **Device Storage Browser (`FilesView`)**: Sandboxed file operations scoped to `/storage/emulated/0` via `stat`, `adb pull`, `adb push`, and `rm -r`.
-- **Photo Gallery (`PhotosView`)**: Paginated, lazy-loaded grid of `DCIM/Camera` and `Pictures/Screenshots` images backed by a 500 MB LRU/atime local disk cache.
-- **Read-Only Notifications (`NotificationsView`)**: In-memory view of active notifications parsed from `dumpsys notification --noredact` (never persisted or logged), with optional desktop pop-ups.
+- **Apps Launcher (`AppsView`)**: Searchable list/grid of installed user and system apps (resolved via cached app labels) with one-click per-app mirror launch.
 
 ### ADB Quick Actions
 Direct device-control and session utilities executed over `adb` and `scrcpy`: URL handoff (`VIEW` intent), per-app virtual display windows (`--new-display --start-app`), system toggles (`svc`/`cmd notification`), MP4 screen recording (`--record`), Windows battery threshold notifications, and telephony intents (`CALL`/`DIAL`, `KEYCODE_ENDCALL`).
