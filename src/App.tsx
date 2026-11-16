@@ -819,7 +819,16 @@ function App() {
       )}
 
       <main className="relative flex flex-1 overflow-hidden">
-        {activeTab === "devices" && <StudioDeck onOpenPair={() => setPairOpen(true)} />}
+        {activeTab === "devices" && (
+          <StudioDeck
+            onOpenPair={() => setPairOpen(true)}
+            onViewPhoneDetails={(serial) => {
+              setSelectedPhoneSerial(serial);
+              setPhoneSubTab("overview");
+              setActiveTab("phone");
+            }}
+          />
+        )}
         {activeTab === "phone" && (
           <PhoneView
             subTab={phoneSubTab}

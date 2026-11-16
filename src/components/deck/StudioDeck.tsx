@@ -7,9 +7,11 @@ import {
   EyeOff,
   Sun,
   MousePointer2,
+  Layers,
+  History,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
-import { logActivity } from "@/stores/activityStore";
+import { logActivity, useActivityStore } from "@/stores/activityStore";
 import {
   startMirror,
   stopMirror,
@@ -33,15 +35,20 @@ import { DeviceRack } from "./DeviceRack";
 import { DeviceHeroCard } from "./DeviceHeroCard";
 import { LaunchMatrix } from "./LaunchMatrix";
 import { DpiVisualizer } from "./DpiVisualizer";
-import { TimelinePanel } from "./TimelinePanel";
+import { ActivityTabPanel, isFailedActivity } from "./TimelinePanel";
+import { usePhoneHubStore } from "@/stores/phoneHubStore";
+import { usePhoneOverviewListener } from "./phoneOverviewStore";
 import { CameraLaunchDialog } from "@/components/CameraLaunchDialog";
 import type { DeviceInfo, SavedDevice } from "@/lib/types";
 
+type DeckSectionTab = "presets" | "activity";
+
 interface StudioDeckProps {
   onOpenPair?: () => void;
+  onViewPhoneDetails?: (serial: string) => void;
 }
 
-export function StudioDeck({ onOpenPair }: StudioDeckProps) {
+export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) {
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
   const sessions = useAppStore((s) => s.sessions);
@@ -55,11 +62,32 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   const setCurrentMode = useAppStore((s) => s.setCurrentMode);
   const batteryMap = useAppStore((s) => s.batteryMap);
   const repairNeeded = useAppStore((s) => s.repairNeeded);
+  const activities = useActivityStore((s) => s.activities);
+  const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
+
+  usePhoneOverviewListener();
 
   const [refreshing, setRefreshing] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [sectionTab, setSectionTab] = useState<DeckSectionTab>("presets");
+
+  const failedActivityCount = useMemo(
+    () => activities.filter(isFailedActivity).length,
+    [activities],
+  );
+
+  const handleViewPhoneDetails = (serial: string) => {
+    setSelectedSerial(serial);
+    if (onViewPhoneDetails) {
+      onViewPhoneDetails(serial);
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("anyleap:navigate-phone-overview", { detail: { serial } }),
+    );
+  };
 
   // Active target device resolution grouped by hardware serial
   const resolved = useMemo(
@@ -263,8 +291,8 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
         onOpenPair={onOpenPair}
       />
 
-      {/* Right Column: Workbench & Launch Bay */}
-      <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-5 space-y-4">
+      {/* Right Column: Connect & Mirror Workbench */}
+      <div className="flex flex-1 min-w-0 flex-col overflow-y-auto bg-ink-950 p-5 space-y-4">
         {/* Device Hero Card */}
         <DeviceHeroCard
           activeDevice={activeDevice}
@@ -279,6 +307,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
           activeSession={activeSession}
           currentMode={currentMode}
           battery={activeSerial ? batteryMap[activeSerial] : undefined}
+          overview={activeSerial ? overviewBySerial[activeSerial] : undefined}
           launching={launching}
           reconnecting={reconnecting}
           refreshing={refreshing}
@@ -286,10 +315,63 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
           onReconnect={handleReconnect}
           onRefresh={handleRefresh}
           onOpenPair={onOpenPair}
+          onViewPhoneDetails={handleViewPhoneDetails}
         />
 
-        {/* Mode Matrix Grid */}
-        <LaunchMatrix currentMode={currentMode} onSelectMode={setCurrentMode} />
+        {/* Section Tabs: Mirroring presets | Activity */}
+        <div>
+          <div
+            className="flex items-center gap-1 border-b border-ink-700"
+            role="tablist"
+            aria-label="Devices sections"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sectionTab === "presets"}
+              onClick={() => setSectionTab("presets")}
+              className={`btn-tactile -mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium cursor-pointer ${
+                sectionTab === "presets"
+                  ? "border-gold-400 text-gold-400"
+                  : "border-transparent text-text-muted hover:text-text-strong"
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>Mirroring presets</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sectionTab === "activity"}
+              onClick={() => setSectionTab("activity")}
+              className={`btn-tactile -mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium cursor-pointer ${
+                sectionTab === "activity"
+                  ? "border-gold-400 text-gold-400"
+                  : "border-transparent text-text-muted hover:text-text-strong"
+              }`}
+            >
+              <History className="h-3.5 w-3.5" />
+              <span>Activity</span>
+              <span className="rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] leading-none text-text">
+                {activities.length}
+              </span>
+              {failedActivityCount > 0 && (
+                <span
+                  aria-label={`${failedActivityCount} failed`}
+                  className="rounded bg-status-danger-bg px-1.5 py-0.5 font-mono text-[10px] leading-none text-status-danger"
+                >
+                  {failedActivityCount} failed
+                </span>
+              )}
+            </button>
+          </div>
+
+          <div role="tabpanel" className="pt-4 space-y-4">
+            {sectionTab === "presets" ? (
+              <>
+                {/* Mode Matrix Grid */}
+                <LaunchMatrix currentMode={currentMode} onSelectMode={setCurrentMode} />
 
         {/* Dynamic Mode-Specific Parameter Dock */}
         {currentMode === "flex" && (
@@ -529,11 +611,14 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
               </span>
             </button>
           )}
+                </div>
+              </>
+            ) : (
+              <ActivityTabPanel />
+            )}
+          </div>
         </div>
       </div>
-
-      {/* Deck Side Panel: Activity Timeline */}
-      <TimelinePanel />
 
       {/* Camera Launch Dialog */}
       {activeSerial && (

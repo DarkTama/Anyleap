@@ -7,6 +7,9 @@ import { ControlBar } from "./ControlBar";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import { CameraLaunchDialog } from "./CameraLaunchDialog";
+import { usePhoneHubStore } from "@/stores/phoneHubStore";
+import { resolveBatteryChipData } from "./deck/phoneOverviewStore";
+import { BatteryChip, TransportChip } from "./deck/rack/DeviceConditionChips";
 import {
   disconnectDevice,
   startMirror,
@@ -67,6 +70,8 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
   const openDoctor = useAppStore((s) => s.openDoctor);
+  const batteryMap = useAppStore((s) => s.batteryMap);
+  const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -94,6 +99,12 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
   };
 
   const wireless = Boolean(device.transports?.wifi || isWifiSerial(device.serial));
+  const dualTransport = Boolean(device.transports?.usb && device.transports?.wifi);
+  const transport = dualTransport ? "dual" : wireless ? "wifi" : "usb";
+  const batteryChip = resolveBatteryChipData(
+    overviewBySerial[device.serial],
+    batteryMap[device.serial],
+  );
   const status = deviceStatusOf(device, sessions);
   const session = findSessionForDevice({ device }, sessions);
 
@@ -194,6 +205,8 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
             </span>
           )}
           <span className="font-mono text-xs text-text-muted">{device.serial}</span>
+          <TransportChip transport={transport} />
+          <BatteryChip battery={batteryChip} showUnknown={status !== "offline"} />
           {status === "offline" ? (
             <DeviceStateBadge state={device.state} />
           ) : (
@@ -282,6 +295,8 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const setNickname = useAppStore((s) => s.setNickname);
   const openDoctor = useAppStore((s) => s.openDoctor);
   const repairNeeded = useAppStore((s) => s.repairNeeded);
+  const batteryMap = useAppStore((s) => s.batteryMap);
+  const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const serial = device?.serial;
@@ -450,6 +465,21 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
           <span className="font-mono text-xs text-text-muted">
             {serial ?? `${saved.host}:${saved.port}`}
           </span>
+          <TransportChip
+            transport={
+              device?.transports?.usb && device?.transports?.wifi
+                ? "dual"
+                : device?.transports?.usb || (serial && !isWifiSerial(serial))
+                ? "usb"
+                : "wifi"
+            }
+          />
+          {serial && (
+            <BatteryChip
+              battery={resolveBatteryChipData(overviewBySerial[serial], batteryMap[serial])}
+              showUnknown={status !== "offline"}
+            />
+          )}
           <StatusBadge status={status} mode={session?.mode} />
           {rowRepairMsg && (
             <span className="text-[11px] text-status-danger">{rowRepairMsg}</span>

@@ -1,38 +1,13 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  Usb,
-  Wifi,
-  Battery,
-  BatteryCharging,
-  Pencil,
-  Check,
-  X,
-  Trash2,
-  Unplug,
-  Play,
-  Square,
-  RefreshCw,
-  Stethoscope,
-  Link2,
-  Phone,
-  Send,
-} from "lucide-react";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+import { useState, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import {
   disconnectDevice,
   startMirror,
   stopMirror,
-  getBatteryInfo,
   openUrlOnDevice,
   placeCall,
 } from "@/lib/tauri";
-import { nextBatteryAlert, type BatteryAlertKind } from "@/lib/batteryAlerts";
 import { forgetSaved } from "@/lib/savedDevices";
 import {
   buildRows,
@@ -50,7 +25,15 @@ import {
   syncDevicesAndMigrate,
 } from "@/lib/deviceSync";
 import { saveNickname } from "@/lib/settingsStore";
-import type { BatteryInfo, SavedDevice } from "@/lib/types";
+import type { SavedDevice } from "@/lib/types";
+import { useBatteryPolling } from "./rack/useBatteryPolling";
+import { RackHeader } from "./rack/RackHeader";
+import { RackEmptyState } from "./rack/RackEmptyState";
+import { DeviceListItem, type TransportKind } from "./rack/DeviceListItem";
+import { PairingEntryCard } from "./rack/PairingEntryCard";
+import type { QuickActionState } from "./rack/DeviceConnectionControls";
+import { usePhoneHubStore } from "@/stores/phoneHubStore";
+import { resolveBatteryChipData } from "./phoneOverviewStore";
 
 interface DeviceRackProps {
   selectedSerial: string | null;
@@ -74,73 +57,21 @@ export function DeviceRack({
   const setNickname = useAppStore((s) => s.setNickname);
   const batteryMap = useAppStore((s) => s.batteryMap);
   const setBatteryInfo = useAppStore((s) => s.setBatteryInfo);
+  const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
   const openDoctor = useAppStore((s) => s.openDoctor);
   const repairNeeded = useAppStore((s) => s.repairNeeded);
 
-  const prevBatteryRef = useRef<Record<string, BatteryInfo>>({});
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [busySerial, setBusySerial] = useState<string | null>(null);
   const [failedSerial, setFailedSerial] = useState<string | null>(null);
-  const [quickAction, setQuickAction] = useState<{ serial: string; kind: "url" | "call" } | null>(null);
+  const [quickAction, setQuickAction] = useState<QuickActionState | null>(null);
   const [quickInput, setQuickInput] = useState("");
   const [quickNote, setQuickNote] = useState<{ serial: string; text: string } | null>(null);
 
   const { savedRows, otherDevices } = buildRows(devices, savedDevices, sessions);
 
-  const notifyBattery = async (deviceName: string, kind: BatteryAlertKind, level: number) => {
-    try {
-      let granted = await isPermissionGranted();
-      if (!granted) {
-        const perm = await requestPermission();
-        granted = perm === "granted";
-      }
-      if (!granted) return;
-      sendNotification({
-        title: kind === "low" ? `${deviceName}: Battery low (${level}%)` : `${deviceName}: Battery full (100%)`,
-        body:
-          kind === "low"
-            ? "Plug in your device to avoid disconnecting."
-            : "Device is fully charged.",
-      });
-    } catch {
-      // best-effort notification
-    }
-  };
-
-  // Poll battery telemetry for connected devices
-  useEffect(() => {
-    let cancelled = false;
-    const fetchBatteries = async () => {
-      for (const dev of devices) {
-        if (dev.state === "device") {
-          try {
-            const info = await getBatteryInfo(dev.serial);
-            if (!cancelled) {
-              const prev = prevBatteryRef.current[dev.serial];
-              prevBatteryRef.current[dev.serial] = info;
-              if (appPrefs.batteryAlerts) {
-                const alert = nextBatteryAlert(prev, info);
-                if (alert) {
-                  void notifyBattery(dev.model || dev.product || dev.serial, alert, info.level ?? 0);
-                }
-              }
-              setBatteryInfo(dev.serial, info);
-            }
-          } catch {
-            // best-effort
-          }
-        }
-      }
-    };
-
-    fetchBatteries();
-    const timer = setInterval(fetchBatteries, 15000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [devices, setBatteryInfo, appPrefs.batteryAlerts]);
+  useBatteryPolling(devices, setBatteryInfo, appPrefs.batteryAlerts);
 
   const openQuickInput = async (serial: string, kind: "url" | "call") => {
     if (quickAction?.serial === serial && quickAction.kind === kind) {
@@ -336,29 +267,10 @@ export function DeviceRack({
 
   return (
     <div className="flex h-full w-72 shrink-0 flex-col border-r border-ink-700 bg-ink-900 select-none">
-      {/* Rack Title Header */}
-      <div className="flex items-center justify-between border-b border-ink-700 px-4 py-3 bg-ink-900">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
-            Device Rack
-          </span>
-          <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[9px] font-mono text-text-muted border border-ink-700">
-            {savedRows.length + otherDevices.length}
-          </span>
-        </div>
-        <span className="font-mono text-[10px] text-text-muted">USB / WI-FI</span>
-      </div>
+      <RackHeader deviceCount={savedRows.length + otherDevices.length} />
 
-      {/* Device Rack Items Scroll */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
-        {savedRows.length === 0 && otherDevices.length === 0 && (
-          <div className="rounded-xl border border-dashed border-ink-700 p-5 text-center">
-            <p className="text-xs text-text font-medium">No devices detected</p>
-            <p className="mt-1 text-[11px] text-text-muted leading-relaxed">
-              Connect via USB with USB Debugging enabled, or click Pair Device.
-            </p>
-          </div>
-        )}
+        {savedRows.length === 0 && otherDevices.length === 0 && <RackEmptyState />}
 
         {/* Live connected other devices (USB or ad-hoc wireless) */}
         {otherDevices.map((dev) => {
@@ -377,229 +289,45 @@ export function DeviceRack({
             device: dev,
           });
           const nicknameKey = getNicknameKey({ serial: dev.serial, device: dev });
-          const batt = batteryMap[dev.serial];
+          const transport: TransportKind = wireless ? "wifi" : "usb";
 
           return (
-            <div
+            <DeviceListItem
               key={dev.hw_serial || dev.serial}
-              onClick={() => onSelectDevice(dev.serial)}
-              className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
-                isSelected
-                  ? "border-gold-400 bg-ink-800"
-                  : "border-ink-700 bg-ink-950/60 text-text-muted hover:border-text-muted hover:bg-ink-800/60"
-              }`}
-            >
-              {/* Header: Status Beacon & Hardware Identity */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div
-                    className={`h-2 w-2 rounded-full shrink-0 ${
-                      status === "mirroring"
-                        ? "bg-gold-400"
-                        : status === "connected"
-                        ? "bg-status-success"
-                        : "bg-status-danger"
-                    }`}
-                  />
-                  <div className="min-w-0">
-                    <span className="font-semibold text-xs text-text-strong truncate block">
-                      {dev.model || dev.product || dev.serial}
-                    </span>
-
-                    {/* Nickname inline display / edit */}
-                    {editingSerial === dev.serial ? (
-                      <div
-                        className="mt-1 flex items-center gap-1"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <input
-                          type="text"
-                          className="h-6 rounded bg-ink-800 px-1.5 text-xs text-text-strong border border-gold-400 outline-none w-28"
-                          value={editingName}
-                          autoFocus
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSaveNickname(nicknameKey, dev.serial);
-                            if (e.key === "Escape") setEditingSerial(null);
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleSaveNickname(nicknameKey, dev.serial)}
-                          className="btn-tactile text-gold-400 hover:text-text-strong p-0.5"
-                        >
-                          <Check className="h-3 w-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingSerial(null)}
-                          className="btn-tactile text-text-muted hover:text-text p-0.5"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <span className="text-[11px] text-text-muted truncate">
-                          {nickname ? `"${nickname}"` : dev.serial}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleStartNicknameEdit(dev.serial, nickname || "");
-                          }}
-                          className="hover-reveal text-text-muted hover:text-text-strong"
-                        >
-                          <Pencil className="h-2.5 w-2.5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Transport Badge */}
-                <div className="flex items-center gap-1 rounded bg-ink-800 px-1.5 py-0.5 border border-ink-700 text-[10px] font-mono text-text shrink-0">
-                  {wireless ? (
-                    <>
-                      <Wifi className="h-3 w-3 text-mist-300" />
-                      <span>Wi-Fi</span>
-                    </>
-                  ) : (
-                    <>
-                      <Usb className="h-3 w-3 text-text-muted" />
-                      <span>USB</span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Hardware Telemetry Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-ink-700 pt-2 text-[10px] text-text-muted font-mono">
-                <span className="truncate max-w-[120px]">{dev.serial}</span>
-                {batt?.level !== null && batt?.level !== undefined && (
-                  <div className="flex items-center gap-1 text-text">
-                    {batt.charging ? (
-                      <BatteryCharging className="h-3 w-3 text-status-success" />
-                    ) : (
-                      <Battery className="h-3 w-3 text-text-muted" />
-                    )}
-                    <span>{batt.level}%</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Quick Actions Row */}
-              <div
-                className="mt-2.5 flex items-center gap-1.5"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {status === "mirroring" && session ? (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => handleStop(session.id, dev.serial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-status-danger-bg py-1 text-[11px] font-medium text-status-danger border border-status-danger/40 hover:opacity-90"
-                  >
-                    <Square className="h-3 w-3 fill-current" />
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => handleMirror(dev.serial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
-                  >
-                    <Play className="h-3 w-3 fill-current" />
-                    Launch
-                  </button>
-                )}
-
-                {(dev.state !== "device" || failedSerial === dev.serial) && (
-                  <button
-                    type="button"
-                    onClick={() => openDoctor(dev.serial)}
-                    className="btn-tactile rounded-md bg-status-warning-bg p-1 text-status-warning border border-status-warning/40 hover:opacity-90"
-                    title="Run Connection Doctor"
-                  >
-                    <Stethoscope className="h-3.5 w-3.5" />
-                  </button>
-                )}
-
-                {wireless && (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => handleDisconnect(dev.serial)}
-                    className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-text-strong hover:border-text-muted"
-                    title="Disconnect wireless"
-                  >
-                    <Unplug className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => void openQuickInput(dev.serial, "url")}
-                  className={`btn-tactile rounded-md p-1 border ${
-                    quickAction?.serial === dev.serial && quickAction.kind === "url"
-                      ? "bg-ink-800 text-gold-400 border-gold-400"
-                      : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
-                  }`}
-                  title="Open link on phone"
-                >
-                  <Link2 className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => void openQuickInput(dev.serial, "call")}
-                  className={`btn-tactile rounded-md p-1 border ${
-                    quickAction?.serial === dev.serial && quickAction.kind === "call"
-                      ? "bg-ink-800 text-gold-400 border-gold-400"
-                      : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
-                  }`}
-                  title="Call…"
-                >
-                  <Phone className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              {quickAction?.serial === dev.serial && (
-                <div
-                  className="popover-panel mt-2 flex items-center gap-1"
-                  style={{ "--transform-origin": "top right" } as React.CSSProperties}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <input
-                    type={quickAction.kind === "call" ? "tel" : "url"}
-                    value={quickInput}
-                    autoFocus
-                    onChange={(e) => setQuickInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void submitQuickInput(dev.serial);
-                      if (e.key === "Escape") setQuickAction(null);
-                    }}
-                    placeholder={quickAction.kind === "url" ? "https://…" : "+1 555 123 4567"}
-                    className="h-7 min-w-0 flex-1 rounded-md border border-ink-700 bg-ink-800 px-2 text-[11px] text-text-strong placeholder:text-text-muted focus:border-gold-400 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    disabled={isBusy || !quickInput.trim()}
-                    onClick={() => void submitQuickInput(dev.serial)}
-                    className="btn-tactile rounded-md border border-gold-400 bg-gold-400 p-1.5 text-ink-950 hover:bg-gold-600 disabled:opacity-40"
-                    title={quickAction.kind === "url" ? "Open on phone" : "Place call"}
-                  >
-                    <Send className="h-3 w-3" />
-                  </button>
-                </div>
-              )}
-              {quickNote?.serial === dev.serial && (
-                <div className="mt-1.5 text-[10px] text-status-warning">
-                  {quickNote.text}
-                </div>
-              )}
-            </div>
+              title={dev.model || dev.product || dev.serial}
+              subtitle={nickname ? `"${nickname}"` : dev.serial}
+              telemetryLabel={dev.serial}
+              status={status}
+              offlineTone="danger"
+              isSelected={isSelected}
+              transport={transport}
+              battery={resolveBatteryChipData(overviewBySerial[dev.serial], batteryMap[dev.serial])}
+              isEditing={editingSerial === dev.serial}
+              editingName={editingName}
+              serial={dev.serial}
+              hasSession={Boolean(session)}
+              isBusy={isBusy}
+              showDoctor={dev.state !== "device" || failedSerial === dev.serial}
+              showDisconnect={wireless}
+              canQuickAction={true}
+              canForget={false}
+              quickAction={quickAction}
+              quickInput={quickInput}
+              quickNote={quickNote?.serial === dev.serial ? quickNote.text : null}
+              onSelect={() => onSelectDevice(dev.serial)}
+              onStartEdit={() => handleStartNicknameEdit(dev.serial, nickname || "")}
+              onEditingNameChange={setEditingName}
+              onSaveEdit={() => void handleSaveNickname(nicknameKey, dev.serial)}
+              onCancelEdit={() => setEditingSerial(null)}
+              onStop={() => session && void handleStop(session.id, dev.serial)}
+              onLaunch={() => void handleMirror(dev.serial)}
+              onDoctor={() => openDoctor(dev.serial)}
+              onDisconnect={() => void handleDisconnect(dev.serial)}
+              onOpenQuickInput={(kind) => void openQuickInput(dev.serial, kind)}
+              onQuickInputChange={setQuickInput}
+              onSubmitQuickInput={() => void submitQuickInput(dev.serial)}
+              onCloseQuickInput={() => setQuickAction(null)}
+            />
           );
         })}
 
@@ -626,7 +354,6 @@ export function DeviceRack({
             device,
           });
           const nicknameKey = getNicknameKey({ serial, saved, device });
-          const batt = serial ? batteryMap[serial] : undefined;
           const rKey = repairKeyFor({ device, saved, serial: targetSerial });
           const rowRepairMsg =
             status === "offline" || (device && device.state !== "device")
@@ -638,287 +365,74 @@ export function DeviceRack({
           const usbOnly = Boolean(
             !dualTransport && (device?.transports?.usb || (serial && !isWifiSerial(serial))),
           );
+          const transport: TransportKind = dualTransport
+            ? "dual"
+            : usbOnly
+            ? "usb"
+            : "wifi";
+          const telemetryLabel =
+            status === "offline"
+              ? rowRepairMsg
+                ? MSG_NEEDS_REPAIR
+                : "Saved Device"
+              : serial ?? targetSerial;
 
           return (
-            <div
+            <DeviceListItem
               key={saved.id}
-              onClick={() => onSelectDevice(targetSerial)}
-              className={`btn-tactile group relative rounded-xl border p-3 cursor-pointer ${
-                isSelected
-                  ? "border-gold-400 bg-ink-800"
-                  : status === "offline"
-                  ? "border-ink-700/60 bg-ink-950/40 opacity-75 hover:opacity-100 hover:border-text-muted"
-                  : "border-ink-700 bg-ink-950/60 text-text-muted hover:border-text-muted hover:bg-ink-800/60"
-              }`}
-            >
-              {/* Header */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div
-                    className={`h-2 w-2 rounded-full shrink-0 ${
-                      status === "mirroring"
-                        ? "bg-gold-400"
-                        : status === "connected"
-                        ? "bg-status-success"
-                        : "bg-text-muted"
-                    }`}
-                  />
-                  <div className="min-w-0">
-                    <span className="font-semibold text-xs text-text-strong truncate block">
-                      {saved.label || targetSerial}
-                    </span>
-
-                    {/* Nickname inline display / edit */}
-                    {editingSerial === targetSerial ? (
-                      <div
-                        className="mt-1 flex items-center gap-1"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <input
-                          type="text"
-                          className="h-6 rounded bg-ink-800 px-1.5 text-xs text-text-strong border border-gold-400 outline-none w-28"
-                          value={editingName}
-                          autoFocus
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSaveNickname(nicknameKey, serial);
-                            if (e.key === "Escape") setEditingSerial(null);
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleSaveNickname(nicknameKey, serial)}
-                          className="btn-tactile text-gold-400 hover:text-text-strong p-0.5"
-                        >
-                          <Check className="h-3 w-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingSerial(null)}
-                          className="btn-tactile text-text-muted hover:text-text p-0.5"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <span className="text-[11px] text-text-muted truncate">
-                          {nickname ? `"${nickname}"` : targetSerial}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleStartNicknameEdit(targetSerial, nickname || "");
-                          }}
-                          className="hover-reveal text-text-muted hover:text-text-strong"
-                        >
-                          <Pencil className="h-2.5 w-2.5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Transport Badge */}
-                <div className="flex items-center gap-1 rounded bg-ink-800 px-1.5 py-0.5 border border-ink-700 text-[10px] font-mono text-text shrink-0">
-                  {dualTransport ? (
-                    <>
-                      <Usb className="h-3 w-3 text-status-success" />
-                      <span>USB + Wi-Fi</span>
-                    </>
-                  ) : usbOnly ? (
-                    <>
-                      <Usb className="h-3 w-3 text-text-muted" />
-                      <span>USB</span>
-                    </>
-                  ) : (
-                    <>
-                      <Wifi className="h-3 w-3 text-mist-300" />
-                      <span>Wi-Fi</span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Hardware Telemetry Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-ink-700 pt-2 text-[10px] text-text-muted font-mono">
-                <span className="truncate max-w-[140px]">
-                  {status === "offline"
-                    ? rowRepairMsg
-                      ? MSG_NEEDS_REPAIR
-                      : "Saved Device"
-                    : serial}
-                </span>
-                {batt?.level !== null && batt?.level !== undefined && (
-                  <div className="flex items-center gap-1 text-text">
-                    {batt.charging ? (
-                      <BatteryCharging className="h-3 w-3 text-status-success" />
-                    ) : (
-                      <Battery className="h-3 w-3 text-text-muted" />
-                    )}
-                    <span>{batt.level}%</span>
-                  </div>
-                )}
-              </div>
-
-              {rowRepairMsg && (
-                <div
-                  className="mt-2 flex items-center justify-between gap-2 rounded-md border border-status-danger/40 bg-status-danger-bg px-2 py-1 text-[10px] text-status-danger"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <span className="truncate">{rowRepairMsg}</span>
-                  {onOpenPair && (
-                    <button
-                      type="button"
-                      onClick={onOpenPair}
-                      className="btn-tactile shrink-0 rounded bg-gold-400 px-1.5 py-0.5 text-[10px] font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer"
-                    >
-                      Pair again
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Quick Actions */}
-              <div
-                className="mt-2.5 flex items-center gap-1.5"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {status === "offline" ? (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => handleConnect(saved)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
-                  >
-                    <RefreshCw className={`h-3 w-3 ${isBusy ? "animate-spin" : ""}`} />
-                    Connect
-                  </button>
-                ) : status === "mirroring" && session ? (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => handleStop(session.id, targetSerial)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-status-danger-bg py-1 text-[11px] font-medium text-status-danger border border-status-danger/40 hover:opacity-90"
-                  >
-                    <Square className="h-3 w-3 fill-current" />
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => serial && handleMirror(serial, saved)}
-                    className="btn-tactile flex-1 flex items-center justify-center gap-1 rounded-md bg-ink-800 py-1 text-[11px] font-medium text-text-strong border border-ink-700 hover:border-text-muted"
-                  >
-                    <Play className="h-3 w-3 fill-current" />
-                    Launch
-                  </button>
-                )}
-
-                {(failedSerial === saved.id || (serial && failedSerial === serial) || (device && device.state !== "device")) && (
-                  <button
-                    type="button"
-                    onClick={() => openDoctor(targetSerial)}
-                    className="btn-tactile rounded-md bg-status-warning-bg p-1 text-status-warning border border-status-warning/40 hover:opacity-90"
-                    title="Run Connection Doctor"
-                  >
-                    <Stethoscope className="h-3.5 w-3.5" />
-                  </button>
-                )}
-
-                {status !== "offline" && serial && (
-                  <>
-                    {(device?.transports?.wifi || isWifiSerial(serial)) && (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() =>
-                          handleDisconnect(device?.transports?.wifi ?? serial)
-                        }
-                        className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-text-strong hover:border-text-muted"
-                        title="Disconnect wireless"
-                      >
-                        <Unplug className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => void openQuickInput(serial, "url")}
-                      className={`btn-tactile rounded-md p-1 border ${
-                        quickAction?.serial === serial && quickAction.kind === "url"
-                          ? "bg-ink-800 text-gold-400 border-gold-400"
-                          : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
-                      }`}
-                      title="Open link on phone"
-                    >
-                      <Link2 className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => void openQuickInput(serial, "call")}
-                      className={`btn-tactile rounded-md p-1 border ${
-                        quickAction?.serial === serial && quickAction.kind === "call"
-                          ? "bg-ink-800 text-gold-400 border-gold-400"
-                          : "bg-ink-800 text-text-muted border-ink-700 hover:text-text-strong hover:border-text-muted"
-                      }`}
-                      title="Call…"
-                    >
-                      <Phone className="h-3.5 w-3.5" />
-                    </button>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => handleForget(saved.id)}
-                  className="btn-tactile rounded-md bg-ink-800 p-1 text-text-muted border border-ink-700 hover:text-status-danger hover:border-status-danger/40"
-                  title="Forget device"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              {serial && quickAction?.serial === serial && (
-                <div
-                  className="popover-panel mt-2 flex items-center gap-1"
-                  style={{ "--transform-origin": "top right" } as React.CSSProperties}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <input
-                    type={quickAction.kind === "call" ? "tel" : "url"}
-                    value={quickInput}
-                    autoFocus
-                    onChange={(e) => setQuickInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void submitQuickInput(serial);
-                      if (e.key === "Escape") setQuickAction(null);
-                    }}
-                    placeholder={quickAction.kind === "url" ? "https://…" : "+1 555 123 4567"}
-                    className="h-7 min-w-0 flex-1 rounded-md border border-ink-700 bg-ink-800 px-2 text-[11px] text-text-strong placeholder:text-text-muted focus:border-gold-400 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    disabled={isBusy || !quickInput.trim()}
-                    onClick={() => void submitQuickInput(serial)}
-                    className="btn-tactile rounded-md border border-gold-400 bg-gold-400 p-1.5 text-ink-950 hover:bg-gold-600 disabled:opacity-40"
-                    title={quickAction.kind === "url" ? "Open on phone" : "Place call"}
-                  >
-                    <Send className="h-3 w-3" />
-                  </button>
-                </div>
-              )}
-              {serial && quickNote?.serial === serial && (
-                <div className="mt-1.5 text-[10px] text-status-warning">
-                  {quickNote.text}
-                </div>
-              )}
-            </div>
+              title={saved.label || targetSerial}
+              subtitle={nickname ? `"${nickname}"` : targetSerial}
+              telemetryLabel={telemetryLabel}
+              status={status}
+              offlineTone="muted"
+              isSelected={isSelected}
+              isOfflineDimmed={true}
+              transport={transport}
+              battery={
+                serial
+                  ? resolveBatteryChipData(overviewBySerial[serial], batteryMap[serial])
+                  : null
+              }
+              repairMsg={rowRepairMsg}
+              isEditing={editingSerial === targetSerial}
+              editingName={editingName}
+              serial={serial}
+              hasSession={Boolean(session)}
+              isBusy={isBusy}
+              showDoctor={
+                failedSerial === saved.id ||
+                Boolean(serial && failedSerial === serial) ||
+                Boolean(device && device.state !== "device")
+              }
+              showDisconnect={Boolean(device?.transports?.wifi || (serial && isWifiSerial(serial)))}
+              canQuickAction={Boolean(status !== "offline" && serial)}
+              canForget={true}
+              quickAction={quickAction}
+              quickInput={quickInput}
+              quickNote={serial && quickNote?.serial === serial ? quickNote.text : null}
+              onSelect={() => onSelectDevice(targetSerial)}
+              onStartEdit={() => handleStartNicknameEdit(targetSerial, nickname || "")}
+              onEditingNameChange={setEditingName}
+              onSaveEdit={() => void handleSaveNickname(nicknameKey, serial)}
+              onCancelEdit={() => setEditingSerial(null)}
+              onOpenPair={onOpenPair}
+              onConnect={() => void handleConnect(saved)}
+              onStop={() => session && void handleStop(session.id, targetSerial)}
+              onLaunch={() => serial && void handleMirror(serial, saved)}
+              onDoctor={() => openDoctor(targetSerial)}
+              onDisconnect={() =>
+                serial && void handleDisconnect(device?.transports?.wifi ?? serial)
+              }
+              onOpenQuickInput={(kind) => serial && void openQuickInput(serial, kind)}
+              onQuickInputChange={setQuickInput}
+              onSubmitQuickInput={() => serial && void submitQuickInput(serial)}
+              onCloseQuickInput={() => setQuickAction(null)}
+              onForget={() => void handleForget(saved.id)}
+            />
           );
         })}
+
+        {onOpenPair && <PairingEntryCard onOpenPair={onOpenPair} />}
       </div>
     </div>
   );

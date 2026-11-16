@@ -1,22 +1,26 @@
 import { useEffect } from "react";
 import {
-  Battery,
-  BatteryCharging,
+  ArrowRight,
   Play,
   RefreshCw,
   Smartphone,
   Square,
   Stethoscope,
-  Usb,
   Wifi,
 } from "lucide-react";
-import { DeviceStateBadge } from "@/components/DeviceStateBadge";
-import { Badge } from "@/components/ui/badge";
-import { MSG_NEEDS_REPAIR } from "@/lib/deviceStatus";
+import { MSG_NEEDS_REPAIR, type DeviceStatus } from "@/lib/deviceStatus";
 import { getDeviceDetails } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
 import type { BatteryInfo, DeviceInfo, SavedDevice, SessionInfo } from "@/lib/types";
 import type { StudioMode } from "./LaunchMatrix";
+import type { PhoneOverview } from "@/types/phone";
+import { resolveBatteryChipData } from "./phoneOverviewStore";
+import {
+  BatteryChip,
+  StatusChip,
+  TransportChip,
+  type TransportKind,
+} from "./rack/DeviceConditionChips";
 
 interface DeviceHeroCardProps {
   activeDevice: DeviceInfo | SavedDevice | null;
@@ -31,6 +35,7 @@ interface DeviceHeroCardProps {
   activeSession: SessionInfo | null;
   currentMode: StudioMode;
   battery?: BatteryInfo;
+  overview?: PhoneOverview | null;
   launching: boolean;
   reconnecting: boolean;
   refreshing: boolean;
@@ -38,6 +43,7 @@ interface DeviceHeroCardProps {
   onReconnect: () => void;
   onRefresh: () => void;
   onOpenPair?: () => void;
+  onViewPhoneDetails?: (serial: string) => void;
 }
 
 const MODE_LABELS: Record<StudioMode, string> = {
@@ -60,6 +66,7 @@ export function DeviceHeroCard({
   activeSession,
   currentMode,
   battery,
+  overview,
   launching,
   reconnecting,
   refreshing,
@@ -67,6 +74,7 @@ export function DeviceHeroCard({
   onReconnect,
   onRefresh,
   onOpenPair,
+  onViewPhoneDetails,
 }: DeviceHeroCardProps) {
   const details = useAppStore((s) =>
     selectedSerial ? s.deviceDetailsCache[selectedSerial] : undefined,
@@ -131,18 +139,31 @@ export function DeviceHeroCard({
   const deviceState = "state" in activeDevice ? activeDevice.state : "offline";
   const connectionType = details?.connection ?? (isWireless ? "wifi" : "usb");
   const dualTransport = Boolean(hasUsb && hasWifi);
+  const transport: TransportKind = dualTransport
+    ? "dual"
+    : connectionType === "wifi"
+    ? "wifi"
+    : "usb";
+  const status: DeviceStatus = activeSession
+    ? "mirroring"
+    : isLive
+    ? "connected"
+    : "offline";
   const needsRepairMsg =
     !isLive && (repairMessage || (deviceState === "unauthorized" ? MSG_NEEDS_REPAIR : null));
   const resolvedTitle =
     nickname ||
     ("label" in activeDevice && activeDevice.label) ||
+    overview?.model ||
     details?.model ||
     displayName;
+  const androidVersion = overview?.androidVersion ?? details?.androidVersion;
+  const batteryChip = resolveBatteryChipData(overview, battery);
 
   return (
     <div className="rounded-xl border border-ink-700 bg-ink-900 px-4 py-3.5 space-y-2.5">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        {/* Left: Identity & Health */}
+        {/* Left: Identity & Compact Condition Chips */}
         <div className="flex items-center gap-3.5 min-w-0">
           <div
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${
@@ -159,51 +180,39 @@ export function DeviceHeroCard({
               <h2 className="truncate text-sm font-semibold text-text-strong">
                 {resolvedTitle}
               </h2>
-              {details?.androidVersion && (
+              {androidVersion && (
                 <span className="font-mono text-[11px] text-text-muted">
-                  Android {details.androidVersion}
+                  Android {androidVersion}
                 </span>
               )}
-              <Badge className="gap-1 border border-ink-700 bg-ink-800 text-text font-mono text-[10px]">
-                {dualTransport ? (
-                  <>
-                    <Usb className="h-3 w-3 text-status-success" />
-                    USB + Wi-Fi
-                  </>
-                ) : connectionType === "wifi" ? (
-                  <>
-                    <Wifi className="h-3 w-3 text-mist-300" />
-                    Wi-Fi
-                  </>
-                ) : (
-                  <>
-                    <Usb className="h-3 w-3 text-text-muted" />
-                    USB
-                  </>
-                )}
-              </Badge>
-              <DeviceStateBadge state={deviceState} />
+              <TransportChip transport={transport} />
+              <StatusChip status={status} />
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 font-mono text-[11px] text-text-muted">
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-text-muted">
               <span className="truncate">{selectedSerial ?? "—"}</span>
-              {details?.manufacturer && (
+              {isLive ? (
                 <>
                   <span className="text-ink-700">·</span>
-                  <span>{details.manufacturer}</span>
+                  <BatteryChip battery={batteryChip} showUnknown={true} />
+                  {selectedSerial && (
+                    <>
+                      <span className="text-ink-700">·</span>
+                      <button
+                        type="button"
+                        onClick={() => onViewPhoneDetails?.(selectedSerial)}
+                        className="btn-tactile inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-0.5 font-sans text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+                      >
+                        <span>View phone details</span>
+                        <ArrowRight className="h-3 w-3" />
+                      </button>
+                    </>
+                  )}
                 </>
-              )}
-              {battery?.level !== null && battery?.level !== undefined && (
+              ) : (
                 <>
                   <span className="text-ink-700">·</span>
-                  <span className="inline-flex items-center gap-1 text-text">
-                    {battery.charging ? (
-                      <BatteryCharging className="h-3.5 w-3.5 text-status-success" />
-                    ) : (
-                      <Battery className="h-3.5 w-3.5 text-text-muted" />
-                    )}
-                    {battery.level}%
-                  </span>
+                  <span>Phone details need a connection</span>
                 </>
               )}
             </div>
