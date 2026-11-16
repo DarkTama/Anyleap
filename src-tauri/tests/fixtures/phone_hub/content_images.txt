@@ -1,0 +1,4 @@
+Row: 0 _id=456585, _display_name=IMG-20260808-WA0071.jpg, bucket_display_name=Chat Images, _data=/storage/emulated/0/Android/media/com.example.chat/ChatApp/accounts/1001/Media/Chat Images/IMG-20260808-WA0071.jpg, datetaken=NULL, date_modified=1787287360, _size=2937705, width=4032, height=3024
+Row: 1 _id=456586, _display_name=Beach Sunset '26.jpg, bucket_display_name=Camera, _data=/storage/emulated/0/DCIM/Camera/Beach Sunset '26.jpg, datetaken=1787288000000, date_modified=1787288000, _size=3124500, width=4000, height=3000
+Row: 2 _id=456587, _display_name=Notes, Draft "v2".png, bucket_display_name=Screenshots, _data=/storage/emulated/0/Pictures/Screenshots/Notes, Draft "v2".png, datetaken=NULL, date_modified=1787287000, _size=412000, width=1080, height=2400
+Row: 3 _id=456588, _display_name=bad.jpg, bucket_display_name=Private, _data=/storage/emulated/0/../etc/passwd, datetaken=1787289000000, date_modified=1787289000, _size=100, width=10, height=10

@@ -1,0 +1,28 @@
+Current Notification Manager state:
+  Notification List:
+    NotificationRecord(0x0111aaaa: pkg=com.example.chat user=UserHandle{0} id=10 tag=null importance=4 key=0|com.example.chat|10|null|10100: Notification(channel=messages shortcut=conv_alex contentView=null vibrate=null sound=null defaults=0 flags=AUTO_CANCEL color=0xff000000 category=msg vis=PRIVATE))
+      key=0|com.example.chat|10|null|10100
+      appName=Example Chat
+      notification=
+            when=1700000100000/1700000100000
+            extras={
+                android.title=String (Alex)
+                android.template=String (android.app.Notification$MessagingStyle)
+                android.text=String (Hey! 👋
+Are we still on for 7pm?)
+                android.messages=Bundle[] (2)
+                  [0] Bundle[{extras=Bundle[{}], sender=Alex, text=Hey! 👋
+Are we still on for 7pm?, time=1700000100000}]
+                  [1] Bundle[{extras=Bundle[{}], sender=Alex, text=Let me know 🙂, time=1700000120000}]
+                android.isGroupConversation=Boolean (false)
+            }
+      shortcut=conv_alex found valid? true
+    NotificationRecord(0x0222bbbb: pkg=com.example.auth user=UserHandle{0} id=20 tag=null importance=4 key=0|com.example.auth|20|null|10200: Notification(channel=otp shortcut=null contentView=null flags=AUTO_CANCEL vis=PRIVATE))
+      key=0|com.example.auth|20|null|10200
+      notification=
+            when=1700000150000/1700000150000
+            extras={
+                android.title=String (Verification Code)
+                android.template=String (android.app.Notification$BigTextStyle)
+                android.text=String (Your code is 123456)
+            }

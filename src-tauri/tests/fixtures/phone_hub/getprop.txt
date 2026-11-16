@@ -1,0 +1,6 @@
+[ro.product.brand]: [GenericBrand]
+[ro.product.manufacturer]: [GenericMfg]
+[ro.product.model]: [Phone X1]
+[ro.build.version.release]: [15]
+[ro.build.version.security_patch]: [2026-10-05]
+[ro.serialno]: [ABC123456789]

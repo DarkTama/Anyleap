@@ -41,6 +41,8 @@ bytes = "1"
 rand = "0.8"
 sha2 = "0.10"
 if-addrs = "0.13"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+kamadak-exif = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.61"

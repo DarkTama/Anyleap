@@ -1,0 +1,8 @@
+POWER MANAGER (dumpsys power)
+  mWakefulness=Awake
+  mWakefulnessChanging=false
+  mIsPowered=true
+  Display Power: state=ON
+  mDreamingLockscreen=false
+  mShowingLockscreen=false
+  isStatusBarKeyguard=false

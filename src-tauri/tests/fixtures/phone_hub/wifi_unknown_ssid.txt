@@ -1,0 +1,2 @@
+Wi-Fi is enabled
+mWifiInfo SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, Supplicant state: COMPLETED, RSSI: -72, Link speed: 144Mbps, Frequency: 2437MHz

@@ -528,12 +528,16 @@ pub fn parse_list_cameras_output(stdout: &str) -> Vec<CameraDeviceOption> {
     results
 }
 
-async fn query_hw_serial_for_device(app: &AppHandle, serial: &str) -> Option<String> {
-    let cmd = adb_cmd(app).await.ok()?;
-    let script = format!(
+pub(crate) fn spec27_hw_serial_query_script() -> String {
+    format!(
         "getprop ro.serialno; echo {}; getprop ro.boot.serialno",
         HW_SERIAL_PROP_SEP
-    );
+    )
+}
+
+async fn query_hw_serial_for_device(app: &AppHandle, serial: &str) -> Option<String> {
+    let cmd = adb_cmd(app).await.ok()?;
+    let script = spec27_hw_serial_query_script();
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         cmd.args(["-s", serial, "shell", &script]).output(),
@@ -576,6 +580,9 @@ async fn list_devices_with_mdns(
         Err(_) => Vec::new(),
     };
     if raw.is_empty() {
+        // --- SPEC-27a ---
+        crate::phone_hub::poller::reconcile_connected_serials(app, &[]);
+        // --- end SPEC-27a ---
         return Ok((Vec::new(), mdns));
     }
 
@@ -598,6 +605,16 @@ async fn list_devices_with_mdns(
     }
 
     let merged = merge_devices(raw, &hw_serials, &mdns);
+    // --- SPEC-27a ---
+    let live_serials: Vec<String> = merged
+        .devices
+        .iter()
+        .filter(|d| d.state == "device")
+        .map(|d| d.serial.clone())
+        .collect();
+    crate::phone_hub::poller::reconcile_connected_serials(app, &live_serials);
+    crate::phone_hub::apps::trigger_apps_prefetch_for_serials(app, &live_serials);
+    // --- end SPEC-27a ---
     for dead in &merged.dead_serials {
         if let Ok(cmd) = adb_cmd(app).await {
             let _ = tokio::time::timeout(
@@ -815,6 +832,14 @@ async fn spawn_session(
     if stop_stale_sessions_for_serial(app, &serial).await {
         args = toggle_record_args(&args, None);
     }
+    // --- SPEC-27a ---
+    if !args
+        .iter()
+        .any(|a| a == "--no-audio" || a == "--no-audio-playback")
+    {
+        crate::phone_hub::audio_only::stop_for_serial(app, &serial);
+    }
+    // --- end SPEC-27a ---
     spawn_session_inner(app, serial, args, retried, mode, true).await
 }
 
@@ -1878,6 +1903,9 @@ pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Resul
         || combined.contains("disconnected")
         || combined.contains("no such device")
     {
+        // --- SPEC-27a ---
+        crate::phone_hub::poller::on_disconnect(&app, &target);
+        // --- end SPEC-27a ---
         Ok(())
     } else {
         Err(combined.trim().to_string())
@@ -3945,6 +3973,24 @@ pub async fn place_call(app: AppHandle, serial: String, number: String) -> Resul
 pub async fn end_call(app: AppHandle, serial: String) -> Result<(), String> {
     send_keyevent(app, serial, 6).await
 }
+
+// --- SPEC-27a ---
+pub(crate) async fn spec27_adb_cmd(
+    app: &AppHandle,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    adb_cmd(app).await
+}
+
+pub(crate) async fn spec27_scrcpy_cmd(
+    app: &AppHandle,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    scrcpy_cmd(app).await
+}
+
+pub(crate) async fn spec27_query_hw_serial(app: &AppHandle, serial: &str) -> Option<String> {
+    query_hw_serial_for_device(app, serial).await
+}
+// --- end SPEC-27a ---
 
 #[cfg(test)]
 mod spec20_tests {

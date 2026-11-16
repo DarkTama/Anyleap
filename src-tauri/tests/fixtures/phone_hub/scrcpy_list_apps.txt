@@ -1,0 +1,9 @@
+scrcpy 4.0 <https://github.com/Genymobile/scrcpy>
+[server] INFO: List of apps:
+ * Settings                       com.android.settings
+ * System UI                      com.android.systemui
+ - Example Chat                   com.example.chat
+ - Example Marketplace Online Shopping
+                                  com.example.shop
+ - NotePad 日本語                  com.example.notepad_jp
+ - Camera Studio Pro              com.example.camera.pro

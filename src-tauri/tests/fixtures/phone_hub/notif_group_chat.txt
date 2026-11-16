@@ -1,0 +1,18 @@
+Current Notification Manager state:
+  Notification List:
+    NotificationRecord(0x0333cccc: pkg=com.example.chat user=UserHandle{0} id=30 tag=null importance=4 key=0|com.example.chat|30|null|10100: Notification(channel=groups shortcut=grp_weekend contentView=null flags=AUTO_CANCEL category=msg vis=PRIVATE))
+      key=0|com.example.chat|30|null|10100
+      notification=
+            when=1700000200000/1700000200000
+            extras={
+                android.title=String (Weekend Crew)
+                android.conversationTitle=String (Weekend Crew)
+                android.template=String (android.app.Notification$MessagingStyle)
+                android.messages=Bundle[] (3)
+                  [0] Bundle[{extras=Bundle[{}], sender=Sam, text=مرحبا 🎉 ready for lunch?, time=1700000180000}]
+                  [1] Bundle[{extras=Bundle[{}], sender=Sam, text=Same name, different timestamp!, time=1700000190000}]
+                  [2] Bundle[{extras=Bundle[{}], sender=Jordan, text=On my way!
+Bring snacks 🍪, time=1700000200000}]
+                android.isGroupConversation=Boolean (true)
+            }
+      shortcut=grp_weekend found valid? true

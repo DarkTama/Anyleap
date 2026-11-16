@@ -3,6 +3,9 @@ mod device_identity;
 mod embed;
 pub mod kvm;
 mod phone_files;
+// --- SPEC-27a ---
+pub mod phone_hub;
+// --- end SPEC-27a ---
 mod state;
 mod wheel_swipe;
 use state::AppState;
@@ -41,6 +44,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
+        // --- SPEC-27a ---
+        .manage(phone_hub::PhoneHubState::default())
+        // --- end SPEC-27a ---
         .invoke_handler(tauri::generate_handler![
             commands::list_devices,
             commands::start_mirror,
@@ -119,6 +125,22 @@ pub fn run() {
             phone_files::list_device_photos,
             phone_files::cache_device_photo,
             phone_files::get_device_notifications,
+            // --- SPEC-27a ---
+            phone_hub::poller::phone_hub_watch,
+            phone_hub::poller::phone_hub_unwatch,
+            phone_hub::poller::phone_hub_set_settings,
+            phone_hub::poller::phone_get_overview,
+            phone_hub::apps::phone_list_apps,
+            phone_hub::apps::phone_open_app,
+            phone_hub::messages::phone_get_conversations,
+            phone_hub::messages::phone_mark_conversation_read,
+            phone_hub::media::phone_list_albums,
+            phone_hub::media::phone_list_media,
+            phone_hub::media::phone_media_thumbnail,
+            phone_hub::media::phone_open_media,
+            phone_hub::audio_only::phone_audio_start,
+            phone_hub::audio_only::phone_audio_stop,
+            // --- end SPEC-27a ---
         ])
         .setup(|app| {
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
@@ -198,6 +220,9 @@ pub fn run() {
                     return;
                 }
                 let app = window.app_handle();
+                // --- SPEC-27a ---
+                phone_hub::on_app_exit(app);
+                // --- end SPEC-27a ---
                 if let Some(state) = app.try_state::<AppState>() {
                     match state.sessions.lock() {
                         Ok(mut sessions) => {
@@ -217,8 +242,11 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, event| {
+        .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // --- SPEC-27a ---
+                phone_hub::on_app_exit(app_handle);
+                // --- end SPEC-27a ---
                 kvm::audio::on_app_exit();
                 kvm::debug_log::flush();
             }
