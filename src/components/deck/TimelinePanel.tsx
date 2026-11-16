@@ -47,6 +47,11 @@ const ALL_KINDS: ActivityKind[] = [
   "device",
 ];
 
+/** Returns true when an activity entry represents a failure/error. */
+export function isFailedActivity(item: Activity): boolean {
+  return /\bfailed\b|\berror\b/i.test(item.title);
+}
+
 function useNowTick(intervalMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -59,11 +64,19 @@ function useNowTick(intervalMs = 30_000): number {
 function ActivityRow({ item, now }: { item: Activity; now: number }) {
   const meta = KIND_META[item.kind] ?? KIND_META.device;
   const Icon = meta.icon;
+  const failed = isFailedActivity(item);
 
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2">
+    <div
+      role="listitem"
+      className={`flex items-start gap-2.5 rounded-lg border px-2.5 py-2 ${
+        failed
+          ? "border-status-danger/40 bg-status-danger-bg"
+          : "border-ink-700 bg-ink-900"
+      }`}
+    >
       <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-ink-700 bg-ink-800">
-        <Icon className={`h-3.5 w-3.5 ${meta.color}`} />
+        <Icon className={`h-3.5 w-3.5 ${failed ? "text-status-danger" : meta.color}`} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
@@ -73,7 +86,11 @@ function ActivityRow({ item, now }: { item: Activity; now: number }) {
           </span>
         </div>
         {(item.detail || item.durationMs !== undefined) && (
-          <p className="mt-0.5 truncate font-mono text-[10px] text-text-muted">
+          <p
+            className={`mt-0.5 break-words font-mono text-[10px] ${
+              failed ? "text-status-danger" : "text-text-muted"
+            }`}
+          >
             {[
               item.durationMs !== undefined ? formatDuration(item.durationMs) : null,
               item.detail ?? null,
@@ -83,6 +100,101 @@ function ActivityRow({ item, now }: { item: Activity; now: number }) {
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Tab-embedded Activity view for the two-column Devices layout (SPEC-27c Variant B).
+ */
+export function ActivityTabPanel() {
+  const activities = useActivityStore((s) => s.activities);
+  const clear = useActivityStore((s) => s.clear);
+  const setTimelineOpen = useAppStore((s) => s.setTimelineOpen);
+  const [filterKind, setFilterKind] = useState<ActivityKind | "all">("all");
+  const now = useNowTick();
+
+  const filtered = useMemo(() => {
+    if (filterKind === "all") return activities;
+    return activities.filter((a) => a.kind === filterKind);
+  }, [activities, filterKind]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Filter activity">
+          <button
+            type="button"
+            aria-pressed={filterKind === "all"}
+            onClick={() => setFilterKind("all")}
+            className={`btn-tactile rounded-md border px-2.5 py-1 text-[11px] font-medium cursor-pointer ${
+              filterKind === "all"
+                ? "border-ink-700 bg-ink-800 text-gold-400"
+                : "border-ink-700 bg-ink-900 text-text-muted hover:border-text-muted hover:text-text-strong"
+            }`}
+          >
+            All
+          </button>
+          {ALL_KINDS.map((kind) => {
+            const active = filterKind === kind;
+            return (
+              <button
+                key={kind}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setFilterKind(kind)}
+                className={`btn-tactile rounded-md border px-2.5 py-1 text-[11px] font-medium cursor-pointer ${
+                  active
+                    ? "border-ink-700 bg-ink-800 text-gold-400"
+                    : "border-ink-700 bg-ink-900 text-text-muted hover:border-text-muted hover:text-text-strong"
+                }`}
+              >
+                {KIND_META[kind].label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {activities.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void clear()}
+              className="btn-tactile flex items-center gap-1 rounded-md border border-ink-700 bg-ink-900 px-2 py-1 text-[11px] font-medium text-text hover:border-status-danger/50 hover:text-status-danger cursor-pointer"
+            >
+              <Trash2 className="h-3 w-3" />
+              <span>Clear</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setTimelineOpen(true)}
+            className="btn-tactile font-mono text-[11px] text-text-muted hover:text-gold-400 underline cursor-pointer"
+          >
+            Open drawer
+          </button>
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-ink-700 px-4 py-8 text-center">
+          <Clock className="mb-2 h-5 w-5 text-text-muted" />
+          <p className="text-xs font-medium text-text">
+            {filterKind === "all"
+              ? "No activity yet"
+              : `No ${KIND_META[filterKind].label.toLowerCase()} activity yet.`}
+          </p>
+          <p className="mt-1 text-[11px] text-text-muted">
+            Mirror sessions, file pushes, and device events appear here.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2" role="list">
+          {filtered.map((item) => (
+            <ActivityRow key={item.id} item={item} now={now} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
