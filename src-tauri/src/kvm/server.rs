@@ -24,6 +24,9 @@ const PAIR_LOCKOUT: Duration = Duration::from_millis(500);
 /// Cap for the first (pre-auth) frame of a connection.
 const MAX_HELLO: usize = 4096;
 
+/// Returns the current local monitor layout; queried on every pairing.
+pub type MonitorProvider = Arc<dyn Fn() -> Vec<MonitorDisplay> + Send + Sync>;
+
 #[derive(Clone)]
 struct ServerContext {
     security_pin: Arc<Mutex<String>>,
@@ -33,7 +36,7 @@ struct ServerContext {
     trust: Arc<TrustStore>,
     local_id: String,
     local_name: String,
-    local_monitors: Vec<MonitorDisplay>,
+    monitor_provider: MonitorProvider,
     download_dir: PathBuf,
     incoming_tx: broadcast::Sender<KvmPacket>,
     outgoing_tx: broadcast::Sender<Outbound>,
@@ -102,7 +105,7 @@ pub async fn start_kvm_server(
     trust: Arc<TrustStore>,
     local_id: String,
     local_name: String,
-    local_monitors: Vec<MonitorDisplay>,
+    monitor_provider: MonitorProvider,
     download_dir: PathBuf,
 ) -> Result<KvmServerHandle, String> {
     let (incoming_tx, _) = broadcast::channel(512);
@@ -129,7 +132,7 @@ pub async fn start_kvm_server(
         trust,
         local_id,
         local_name,
-        local_monitors,
+        monitor_provider,
         download_dir,
         incoming_tx: incoming_tx.clone(),
         outgoing_tx: outgoing_tx.clone(),
@@ -217,7 +220,7 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                 accepted,
                 computer_id: ctx.local_id.clone(),
                 name: ctx.local_name.clone(),
-                monitors: ctx.local_monitors.clone(),
+                monitors: (ctx.monitor_provider)(),
             };
             let _ = write_frame(&mut send, &ack).await;
             if !accepted {
@@ -604,7 +607,7 @@ mod tests {
             srv_trust.clone(),
             "srv".into(),
             "Server".into(),
-            default_mons(),
+            Arc::new(default_mons),
             dir.join("dl"),
         )
         .await
@@ -650,6 +653,79 @@ mod tests {
                 _ => return None,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn pair_ack_carries_monitor_layout_at_pairing_time() {
+        let dir = std::env::temp_dir().join(format!("anyleap-quic-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let srv_id = Identity::load_or_create(&dir.join("srv")).unwrap();
+        let cli_id = Identity::load_or_create(&dir.join("cli")).unwrap();
+        let mon = |w: i32, h: i32| MonitorDisplay {
+            id: "m".into(),
+            device_name: "m".into(),
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+            is_primary: true,
+        };
+        let layout_a = vec![mon(1920, 1080)];
+        let layout_b = vec![mon(1920, 1080), {
+            let mut m = mon(2560, 1440);
+            m.id = "m2".into();
+            m.x = 1920;
+            m.is_primary = false;
+            m
+        }];
+        let current = Arc::new(Mutex::new(layout_a.clone()));
+        let cur = Arc::clone(&current);
+        let srv = start_kvm_server(
+            0,
+            &srv_id,
+            Arc::new(TrustStore::load(None)),
+            "srv".into(),
+            "Server".into(),
+            Arc::new(move || cur.lock().unwrap().clone()),
+            dir.join("dl"),
+        )
+        .await
+        .unwrap();
+
+        let c1 = KvmClientHandle::connect(
+            "127.0.0.1",
+            srv.port,
+            "cli-1".into(),
+            "C1".into(),
+            default_mons(),
+            Some(srv.pin()),
+            &cli_id,
+            &TrustStore::load(None),
+            dir.join("c1-dl"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(c1.peer_monitors, layout_a);
+        drop(c1);
+
+        *current.lock().unwrap() = layout_b.clone();
+
+        let cli2_id = Identity::load_or_create(&dir.join("cli2")).unwrap();
+        let c2 = KvmClientHandle::connect(
+            "127.0.0.1",
+            srv.port,
+            "cli-2".into(),
+            "C2".into(),
+            default_mons(),
+            Some(srv.pin()),
+            &cli2_id,
+            &TrustStore::load(None),
+            dir.join("c2-dl"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(c2.peer_monitors, layout_b);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -766,7 +842,7 @@ mod tests {
             Arc::new(TrustStore::load(None)),
             "o".into(),
             "O".into(),
-            default_mons(),
+            Arc::new(default_mons),
             r.dir.join("dl2"),
         )
         .await
@@ -1090,7 +1166,10 @@ mod tests {
             srv_trust,
             "srv".into(),
             "Server".into(),
-            linked_mons.clone(),
+            {
+                let m = linked_mons.clone();
+                Arc::new(move || m.clone())
+            },
             dir.join("dl-srv"),
         )
         .await

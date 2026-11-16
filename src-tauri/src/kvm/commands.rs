@@ -1813,7 +1813,7 @@ async fn start_server_inner(
         trust,
         id.clone(),
         name.clone(),
-        monitors.clone(),
+        Arc::new(get_local_monitors),
         get_download_dir(),
     )
     .await?;
@@ -3910,7 +3910,7 @@ mod tests {
             Arc::new(TrustStore::load(None)),
             "local".into(),
             "Local".into(),
-            test_mons(),
+            Arc::new(test_mons),
             dir.join("dl-local"),
         )
         .await
@@ -3922,7 +3922,7 @@ mod tests {
             Arc::new(TrustStore::load(None)),
             "remote".into(),
             "Remote".into(),
-            test_mons(),
+            Arc::new(test_mons),
             dir.join("dl-remote"),
         )
         .await
@@ -4017,7 +4017,7 @@ mod tests {
             srv_trust.clone(),
             "srv".into(),
             "Server".into(),
-            test_mons(),
+            Arc::new(test_mons),
             dir.join("dl-srv"),
         )
         .await
