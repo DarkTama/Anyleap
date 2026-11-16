@@ -41,7 +41,7 @@
       "binaries/scrcpy"
     ],
     "resources": {
-      "binaries/scrcpy-server": "scrcpy/scrcpy-server",
+      "binaries/scrcpy-server": "scrcpy-res/scrcpy-server",
       "binaries/dll/*.dll": "",
       "binaries/*.png": ""
     },

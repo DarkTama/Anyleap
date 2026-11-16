@@ -155,7 +155,7 @@ jobs:
           $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           $stage = Join-Path $env:RUNNER_TEMP 'portable'
           if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-          New-Item -ItemType Directory -Force -Path $stage, (Join-Path $stage 'scrcpy') | Out-Null
+          New-Item -ItemType Directory -Force -Path $stage, (Join-Path $stage 'scrcpy-res') | Out-Null
 
           Copy-Item "$rel/anyleap.exe" $stage -Force
           # Sidecars resolve as <name>.exe next to the app at runtime (no target triple).
@@ -163,7 +163,7 @@ jobs:
           Copy-Item "$bin/scrcpy-x86_64-pc-windows-msvc.exe" (Join-Path $stage 'scrcpy.exe') -Force
           Copy-Item "$bin/dll/*.dll" $stage -Force
           Copy-Item "$bin/*.png"     $stage -Force
-          Copy-Item "$bin/scrcpy-server" (Join-Path $stage 'scrcpy/scrcpy-server') -Force
+          Copy-Item "$bin/scrcpy-server" (Join-Path $stage 'scrcpy-res/scrcpy-server') -Force
           if (Test-Path "$rel/WebView2Loader.dll") { Copy-Item "$rel/WebView2Loader.dll" $stage -Force }
 
           $zip = "AnyLeap-$ver-portable-win64.zip"
