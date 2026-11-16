@@ -45,6 +45,10 @@ Internal code names (`kvm`, `receiver`, `controller`, `hooks`, `KvmStatus`, etc.
 - **M2:** Changing edge or offset refreshes `status.controller_edge` and syncs canvas state on reconnect.
 - **M5:** `Forget` uses the peer's real `computer_id` and closes any active session (in either role) with that peer.
 - **L1:** Clipboard/file sync toggles in Settings apply immediately (`kvm_set_sync_settings` on change); remove unused `indicatorRipple` and `emergencyKeyCombo` settings.
+- **Post-v1.0.0 Overlay & Focus Handoff Reliability:**
+  - Suppress edge leaps while the foreground window is a non-AnyLeap topmost window covering the full edge monitor (e.g., a screen-capture overlay) or while any mouse button is physically held (verified outside low-level hook callbacks via cached hook-thread checks, engage-path validation, and async button reconciliation).
+  - Own-window focus handoff makes at most one `SetForegroundWindow` attempt to an eligible, non-elevated, non-shell Z-order window (never targeting the desktop shell window or minimizing windows) and debounces re-engages for 300 ms after a handoff.
+  - Return/release paths unconditionally clear pending trap/dwell/drag state and serialize HUD open/close transitions; frontend device sync debounces back-to-back calls within a short cooldown window.
 
 **Out of scope:** Per-monitor arrangement (future SPEC-24), multiple simultaneous Linked PCs, app autostart.
 

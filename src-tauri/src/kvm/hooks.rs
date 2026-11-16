@@ -28,7 +28,10 @@ use windows::Win32::System::Threading::{
     QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 #[cfg(windows)]
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    VK_XBUTTON1, VK_XBUTTON2,
+};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -37,12 +40,18 @@ const WM_KVM_RESTORE_CURSOR: u32 = WM_APP + 1;
 #[cfg(windows)]
 const WM_KVM_ENGAGE: u32 = WM_APP + 2;
 #[cfg(windows)]
+const WM_KVM_REFRESH_OVERLAY: u32 = WM_APP + 3;
+#[cfg(windows)]
 const WATCHDOG_INTERVAL_MS: u32 = 250;
 #[cfg(any(windows, test))]
 const WATCHDOG_BLIND_THRESHOLD_MS: u32 = 1000;
 const BLOCKED_NOTICE_COOLDOWN_MS: u64 = 1000;
 #[cfg(any(windows, test))]
 const TIMER_BLOCKED_NOTICE_COOLDOWN_MS: u64 = 5000;
+#[cfg(any(windows, test))]
+const ENGAGE_HANDOFF_DEBOUNCE_MS: u64 = 300;
+#[cfg(windows)]
+const SUPPRESSED_NOTE_COOLDOWN_MS: u64 = 1000;
 const SECURITY_MANDATORY_MEDIUM_RID: u32 = 0x2000;
 const SECURITY_MANDATORY_HIGH_RID: u32 = 0x3000;
 
@@ -112,6 +121,11 @@ static KEY_CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static KEY_ALT_DOWN: AtomicBool = AtomicBool::new(false);
 static EDGE_DWELL_START: AtomicU64 = AtomicU64::new(0);
 static EDGE_DWELL_SEAM_IDX: AtomicI32 = AtomicI32::new(-1);
+static LAST_HANDOFF_MS: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static CACHED_OVERLAY_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
+static LAST_SUPPRESSED_NOTE_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static LAST_BLOCKED_NOTICE_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
@@ -310,8 +324,7 @@ impl HookController {
     pub fn set_trapped(&self, trapped: bool) {
         IS_TRAPPED.store(trapped, Ordering::SeqCst);
         if !trapped {
-            CURSOR_CENTERED.store(false, Ordering::Release);
-            ENGAGE_PENDING.store(false, Ordering::Release);
+            reset_trapped_runtime_state();
             notify_hook_thread_restore();
         }
     }
@@ -332,14 +345,15 @@ impl HookController {
                 hwnd: debug_log::foreground_hwnd_raw(),
             });
         }
+        // Always clear pending engage/dwell/drag/modifier flags and restore
+        // cursor clip & visibility so return never leaves stale trap state.
+        reset_trapped_runtime_state();
+        KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
+        KEY_ALT_DOWN.store(false, Ordering::Relaxed);
+        notify_hook_thread_restore();
         if !was_trapped {
             return;
         }
-        CURSOR_CENTERED.store(false, Ordering::Release);
-        ENGAGE_PENDING.store(false, Ordering::Release);
-        EDGE_DWELL_START.store(0, Ordering::Relaxed);
-        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
-        notify_hook_thread_restore();
 
         let fallback_mon = MonitorDisplay {
             id: String::new(),
@@ -402,9 +416,8 @@ impl HookController {
                 reason: "emergency_release",
             });
         }
-        self.set_trapped(false);
-        EDGE_DWELL_START.store(0, Ordering::Relaxed);
-        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
+        IS_TRAPPED.store(false, Ordering::SeqCst);
+        reset_trapped_runtime_state();
         MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
         KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
         KEY_ALT_DOWN.store(false, Ordering::Relaxed);
@@ -413,7 +426,6 @@ impl HookController {
         }
         notify_hook_thread_restore();
         super::dragdrop::cancel_active_target_drag_with_reason("emergency_release");
-        super::dragdrop::hide_edge_catcher();
 
         try_send_packet(KvmPacket::EmergencyRelease);
         try_send_packet(KvmPacket::ReleaseAll);
@@ -695,8 +707,11 @@ impl HookController {
             return;
         }
 
+        LAST_HANDOFF_MS.store(0, Ordering::Relaxed);
         #[cfg(windows)]
         {
+            CACHED_OVERLAY_SUPPRESSED.store(false, Ordering::Release);
+            LAST_SUPPRESSED_NOTE_MS.store(0, Ordering::Relaxed);
             LAST_BLOCKED_NOTICE_MS.store(0, Ordering::Relaxed);
             LAST_TIMER_BLOCKED_NOTICE_MS.store(0, Ordering::Relaxed);
             HAS_LAST_HOOK_TICK.store(false, Ordering::Release);
@@ -729,6 +744,10 @@ impl HookController {
                     restore_cursor_visibility();
                     continue;
                 }
+                if msg.message == WM_KVM_REFRESH_OVERLAY {
+                    refresh_cached_overlay_suppression(our_pid);
+                    continue;
+                }
                 if msg.message == WM_KVM_ENGAGE {
                     if perform_engage_leap() && watchdog_timer_id == 0 {
                         watchdog_timer_id = SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None);
@@ -754,6 +773,13 @@ impl HookController {
                             }
                         }
                     } else if HAS_ACTIVE_LINK.load(Ordering::Acquire) {
+                        refresh_cached_overlay_suppression(our_pid);
+                        if MOUSE_BUTTONS_DOWN.load(Ordering::Acquire) != 0
+                            && !any_async_mouse_button_down()
+                        {
+                            MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+                            debug_log::note(|| "MOUSE_BUTTONS_RECONCILED cleared=1".to_string());
+                        }
                         check_timer_elevated_leap_block(our_pid);
                     }
                     continue;
@@ -782,16 +808,13 @@ impl HookController {
             self.emergency_release();
         }
         HAS_ACTIVE_LINK.store(false, Ordering::Release);
-        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
-        PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
-        // --- SPEC-25a ---
-        DRAG_MODE_ENGAGE.store(false, Ordering::Release);
-        super::dragdrop::set_drag_leap_in_progress(false);
-        super::dragdrop::hide_edge_catcher();
+        reset_trapped_runtime_state();
+        LAST_HANDOFF_MS.store(0, Ordering::Relaxed);
+        #[cfg(windows)]
+        CACHED_OVERLAY_SUPPRESSED.store(false, Ordering::Release);
         if let Ok(mut g) = drag_mode_engaged_slot().try_lock() {
             *g = None;
         }
-        // --- end SPEC-25a ---
         if let Ok(mut g) = leap_blocked_callback_slot().try_lock() {
             *g = None;
         }
@@ -806,19 +829,24 @@ impl HookController {
     }
 }
 
-#[cfg(windows)]
-fn disarm_trapped_in_callback() {
+fn reset_trapped_runtime_state() {
     IS_TRAPPED.store(false, Ordering::SeqCst);
     CURSOR_CENTERED.store(false, Ordering::Release);
     ENGAGE_PENDING.store(false, Ordering::Release);
     EDGE_DWELL_START.store(0, Ordering::Relaxed);
     EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
-    MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
     // --- SPEC-25a ---
     DRAG_MODE_ENGAGE.store(false, Ordering::Release);
+    PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
     super::dragdrop::set_drag_leap_in_progress(false);
     super::dragdrop::hide_edge_catcher();
     // --- end SPEC-25a ---
+}
+
+#[cfg(windows)]
+fn disarm_trapped_in_callback() {
+    reset_trapped_runtime_state();
+    MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
 }
 
 #[cfg(windows)]
@@ -1040,7 +1068,9 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
         EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
         // --- SPEC-25a ---
-        if super::dragdrop::drag_drop_enabled() {
+        if super::dragdrop::drag_drop_enabled()
+            && !CACHED_OVERLAY_SUPPRESSED.load(Ordering::Acquire)
+        {
             super::dragdrop::on_mouse_drag_probe((pt.x, pt.y), btns_down, false);
         } else if super::dragdrop::is_edge_catcher_visible() {
             super::dragdrop::hide_edge_catcher();
@@ -1168,6 +1198,24 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
         return None;
     }
 
+    if CACHED_OVERLAY_SUPPRESSED.load(Ordering::Acquire) {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
+        emit_leap_suppressed_note("topmost_fullscreen_overlay", 0, None);
+        return None;
+    }
+
+    if should_debounce_engage_after_handoff(
+        now_millis(),
+        LAST_HANDOFF_MS.load(Ordering::Relaxed),
+        ENGAGE_HANDOFF_DEBOUNCE_MS,
+    ) {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
+        emit_leap_suppressed_note("handoff_debounce", 0, None);
+        return None;
+    }
+
     let seam_idx = cand.seam_info.as_ref().map(|(i, _, _)| *i).unwrap_or(-1);
     let prev_seam = EDGE_DWELL_SEAM_IDX.swap(seam_idx, Ordering::Relaxed);
     if prev_seam != seam_idx {
@@ -1199,6 +1247,8 @@ fn check_dwell_resistance(resistance_ms: u64) -> bool {
     let start = EDGE_DWELL_START.load(Ordering::Relaxed);
     if start == 0 {
         EDGE_DWELL_START.store(now, Ordering::Relaxed);
+        #[cfg(windows)]
+        post_hook_thread_message(WM_KVM_REFRESH_OVERLAY);
         false
     } else if now.saturating_sub(start) >= resistance_ms {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
@@ -1269,19 +1319,139 @@ fn request_engage_leap(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HandoffMethod {
-    Shell,
     Next,
-    Minimize,
+    None,
 }
 
 impl HandoffMethod {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Shell => "shell",
             Self::Next => "next",
-            Self::Minimize => "minimize",
+            Self::None => "none",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RectBounds {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl RectBounds {
+    fn from_monitor(m: &MonitorDisplay) -> Self {
+        Self {
+            left: m.x,
+            top: m.y,
+            right: m.x.saturating_add(m.width),
+            bottom: m.y.saturating_add(m.height),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ForegroundOverlayCandidate {
+    pub hwnd: isize,
+    pub pid: u32,
+    pub visible: bool,
+    pub minimized: bool,
+    pub cloaked: bool,
+    pub topmost: bool,
+    pub rect: RectBounds,
+}
+
+pub(crate) fn rect_covers_monitor(window: RectBounds, monitor: RectBounds) -> bool {
+    monitor.right > monitor.left
+        && monitor.bottom > monitor.top
+        && window.left <= monitor.left
+        && window.top <= monitor.top
+        && window.right >= monitor.right
+        && window.bottom >= monitor.bottom
+}
+
+pub(crate) fn should_suppress_leap_for_topmost_overlay(
+    fg: ForegroundOverlayCandidate,
+    edge_monitors: &[RectBounds],
+    our_pid: u32,
+) -> bool {
+    if fg.hwnd == 0 || fg.pid == 0 || fg.pid == our_pid {
+        return false;
+    }
+    if !fg.visible || fg.minimized || fg.cloaked || !fg.topmost {
+        return false;
+    }
+    edge_monitors
+        .iter()
+        .any(|&mon| rect_covers_monitor(fg.rect, mon))
+}
+
+#[cfg(any(windows, test))]
+fn collect_edge_monitor_bounds(
+    main_monitors: &[MonitorDisplay],
+    seams: &[Seam],
+    has_remote_origin: bool,
+    link_edge: Edge,
+) -> Vec<RectBounds> {
+    if has_remote_origin {
+        let mut seen = Vec::new();
+        for s in seams {
+            if let Some(m) = main_monitors
+                .iter()
+                .find(|m| m.effective_id() == s.main_monitor_id)
+            {
+                let bounds = RectBounds::from_monitor(m);
+                if !seen.contains(&bounds) {
+                    seen.push(bounds);
+                }
+            }
+        }
+        return seen;
+    }
+
+    main_monitors
+        .iter()
+        .enumerate()
+        .filter(|(idx, m)| {
+            !main_monitors.iter().enumerate().any(|(other_idx, other)| {
+                if other_idx == *idx {
+                    return false;
+                }
+                match link_edge {
+                    Edge::Left => {
+                        other.x + other.width == m.x
+                            && other.y < m.y + m.height
+                            && other.y + other.height > m.y
+                    }
+                    Edge::Right => {
+                        other.x == m.x + m.width
+                            && other.y < m.y + m.height
+                            && other.y + other.height > m.y
+                    }
+                    Edge::Top => {
+                        other.y + other.height == m.y
+                            && other.x < m.x + m.width
+                            && other.x + other.width > m.x
+                    }
+                    Edge::Bottom => {
+                        other.y == m.y + m.height
+                            && other.x < m.x + m.width
+                            && other.x + other.width > m.x
+                    }
+                }
+            })
+        })
+        .map(|(_, m)| RectBounds::from_monitor(m))
+        .collect()
+}
+
+pub(crate) fn should_debounce_engage_after_handoff(
+    now_ms: u64,
+    last_handoff_ms: u64,
+    debounce_ms: u64,
+) -> bool {
+    last_handoff_ms != 0 && now_ms.saturating_sub(last_handoff_ms) < debounce_ms
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1299,7 +1469,15 @@ struct WindowCandidateInfo {
     cloaked: bool,
     minimized: bool,
     tool_window: bool,
+    is_shell_desktop: bool,
     elevation: ProcessElevation,
+}
+
+fn is_shell_or_desktop_class(class_name: &str) -> bool {
+    class_name.eq_ignore_ascii_case("Progman")
+        || class_name.eq_ignore_ascii_case("WorkerW")
+        || class_name.eq_ignore_ascii_case("Shell_TrayWnd")
+        || class_name.eq_ignore_ascii_case("Shell_SecondaryTrayWnd")
 }
 
 fn is_safe_handoff_elevation(elevation: ProcessElevation) -> bool {
@@ -1318,45 +1496,21 @@ fn is_eligible_handoff_target(info: WindowCandidateInfo, our_pid: u32) -> bool {
         && !info.cloaked
         && !info.minimized
         && !info.tool_window
+        && !info.is_shell_desktop
         && is_safe_handoff_elevation(info.elevation)
 }
 
 #[cfg(test)]
-fn select_next_handoff_target(
-    windows_in_z_order: &[WindowCandidateInfo],
-    our_pid: u32,
-) -> Option<isize> {
-    windows_in_z_order
-        .iter()
-        .copied()
-        .find(|w| is_eligible_handoff_target(*w, our_pid))
-        .map(|w| w.hwnd)
-}
-
-#[cfg(test)]
-fn select_preferred_handoff_targets(
-    shell: Option<WindowCandidateInfo>,
+fn select_handoff_target(
     windows_in_z_order: &[WindowCandidateInfo],
     our_pid: u32,
     fg_hwnd: isize,
-) -> Vec<(HandoffMethod, isize)> {
-    let mut targets = Vec::with_capacity(2);
-    if let Some(sh) = shell {
-        if sh.hwnd != 0
-            && sh.hwnd != fg_hwnd
-            && sh.pid != 0
-            && sh.pid != our_pid
-            && is_safe_handoff_elevation(sh.elevation)
-        {
-            targets.push((HandoffMethod::Shell, sh.hwnd));
-        }
-    }
-    if let Some(next_hwnd) = select_next_handoff_target(windows_in_z_order, our_pid) {
-        if next_hwnd != fg_hwnd && !targets.iter().any(|&(_, h)| h == next_hwnd) {
-            targets.push((HandoffMethod::Next, next_hwnd));
-        }
-    }
-    targets
+) -> Option<(HandoffMethod, isize)> {
+    windows_in_z_order
+        .iter()
+        .copied()
+        .find(|w| w.hwnd != fg_hwnd && is_eligible_handoff_target(*w, our_pid))
+        .map(|w| (HandoffMethod::Next, w.hwnd))
 }
 
 fn should_block_leap_for_foreground(
@@ -1527,13 +1681,28 @@ unsafe fn is_window_cloaked(hwnd: HWND) -> bool {
 }
 
 #[cfg(windows)]
+unsafe fn query_window_class_name(hwnd: HWND) -> String {
+    let mut buf = [0u16; 128];
+    let len = GetClassNameW(hwnd, &mut buf);
+    if len > 0 {
+        String::from_utf16_lossy(&buf[..len as usize])
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(windows)]
 unsafe fn is_window_safe_foreground(hwnd: HWND, our_pid: u32) -> bool {
     if hwnd.0.is_null() {
-        return true;
+        return false;
     }
     let mut pid = 0u32;
     let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
     if pid == 0 || pid == our_pid {
+        return false;
+    }
+    let class_name = query_window_class_name(hwnd);
+    if is_shell_or_desktop_class(&class_name) {
         return false;
     }
     let (elev, _) = query_process_info(pid);
@@ -1558,16 +1727,23 @@ unsafe fn find_next_handoff_windows(fg: HWND, our_pid: u32, limit: usize) -> Vec
         let ex_style = GetWindowLongW(next, GWL_EXSTYLE) as u32;
         let tool_window = (ex_style & WS_EX_TOOLWINDOW.0) != 0;
 
-        // Check cheap window attributes before DWM / OpenProcess token queries.
+        // Check cheap window attributes before class/DWM/OpenProcess queries.
         if next.0 as isize != 0
+            && next != fg
             && pid != 0
             && pid != our_pid
             && visible
             && !minimized
             && !tool_window
         {
-            let cloaked = is_window_cloaked(next);
-            let elevation = if cloaked {
+            let class_name = query_window_class_name(next);
+            let is_shell_desktop = is_shell_or_desktop_class(&class_name);
+            let cloaked = if is_shell_desktop {
+                true
+            } else {
+                is_window_cloaked(next)
+            };
+            let elevation = if cloaked || is_shell_desktop {
                 ProcessElevation::Unknown
             } else {
                 query_process_info(pid).0
@@ -1579,6 +1755,7 @@ unsafe fn find_next_handoff_windows(fg: HWND, our_pid: u32, limit: usize) -> Vec
                 cloaked,
                 minimized,
                 tool_window,
+                is_shell_desktop,
                 elevation,
             };
             if is_eligible_handoff_target(info, our_pid) {
@@ -1591,6 +1768,123 @@ unsafe fn find_next_handoff_windows(fg: HWND, our_pid: u32, limit: usize) -> Vec
         cur = next;
     }
     results
+}
+
+#[cfg(windows)]
+unsafe fn any_async_mouse_button_down() -> bool {
+    GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
+        || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0
+        || GetAsyncKeyState(i32::from(VK_MBUTTON.0)) < 0
+        || GetAsyncKeyState(i32::from(VK_XBUTTON1.0)) < 0
+        || GetAsyncKeyState(i32::from(VK_XBUTTON2.0)) < 0
+}
+
+#[cfg(windows)]
+fn emit_leap_suppressed_note(reason: &str, hwnd: isize, proc_name: Option<&str>) {
+    if !debug_log::is_enabled() {
+        return;
+    }
+    let now = now_millis();
+    let prev = LAST_SUPPRESSED_NOTE_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(prev) < SUPPRESSED_NOTE_COOLDOWN_MS {
+        return;
+    }
+    if LAST_SUPPRESSED_NOTE_MS
+        .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    let resolved_hwnd = if hwnd != 0 {
+        hwnd
+    } else {
+        debug_log::foreground_hwnd_raw()
+    };
+    let text = match proc_name {
+        Some(proc_name) => format!("LEAP_SUPPRESSED reason={reason} proc={proc_name}"),
+        None => format!("LEAP_SUPPRESSED reason={reason}"),
+    };
+    debug_log::record_event(DebugEvent::Note {
+        ts_us: debug_log::now_us(),
+        hwnd: resolved_hwnd,
+        text,
+    });
+}
+
+#[cfg(windows)]
+unsafe fn query_foreground_overlay_candidate(
+    our_pid: u32,
+) -> Option<(ForegroundOverlayCandidate, u32)> {
+    let fg = GetForegroundWindow();
+    if fg.0.is_null() {
+        return None;
+    }
+    let mut fg_pid = 0u32;
+    let _ = GetWindowThreadProcessId(fg, Some(&mut fg_pid));
+    if fg_pid == 0 || fg_pid == our_pid {
+        return None;
+    }
+    let visible = IsWindowVisible(fg).as_bool();
+    let minimized = IsIconic(fg).as_bool();
+    let ex_style = GetWindowLongW(fg, GWL_EXSTYLE) as u32;
+    let topmost = (ex_style & WS_EX_TOPMOST.0) != 0;
+    if !visible || minimized || !topmost {
+        return None;
+    }
+    let mut rect = RECT::default();
+    if GetWindowRect(fg, &mut rect).is_err() {
+        return None;
+    }
+    let cloaked = is_window_cloaked(fg);
+    let candidate = ForegroundOverlayCandidate {
+        hwnd: fg.0 as isize,
+        pid: fg_pid,
+        visible,
+        minimized,
+        cloaked,
+        topmost,
+        rect: RectBounds {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        },
+    };
+    Some((candidate, fg_pid))
+}
+
+#[cfg(windows)]
+unsafe fn refresh_cached_overlay_suppression(our_pid: u32) {
+    let Some((candidate, _)) = query_foreground_overlay_candidate(our_pid) else {
+        CACHED_OVERLAY_SUPPRESSED.store(false, Ordering::Release);
+        return;
+    };
+    let edge_monitors = if let Ok(layout) = controller_layout().try_lock() {
+        collect_edge_monitor_bounds(
+            &layout.main_monitors,
+            &layout.seams,
+            layout.remote_origin.is_some(),
+            Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed)),
+        )
+    } else {
+        Vec::new()
+    };
+    let suppressed = should_suppress_leap_for_topmost_overlay(candidate, &edge_monitors, our_pid);
+    CACHED_OVERLAY_SUPPRESSED.store(suppressed, Ordering::Release);
+}
+
+#[cfg(windows)]
+unsafe fn check_foreground_overlay_suppresses_leap(
+    our_pid: u32,
+    edge_mon: RectBounds,
+) -> Option<(HWND, String)> {
+    let (candidate, fg_pid) = query_foreground_overlay_candidate(our_pid)?;
+    if should_suppress_leap_for_topmost_overlay(candidate, &[edge_mon], our_pid) {
+        let (_, proc_name) = query_process_info(fg_pid);
+        Some((HWND(candidate.hwnd as *mut std::ffi::c_void), proc_name))
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -1759,7 +2053,6 @@ unsafe fn perform_watchdog_release(gap_ms: u32) {
     }
     restore_cursor_visibility();
     super::dragdrop::cancel_active_target_drag_with_reason("emergency_release");
-    super::dragdrop::hide_edge_catcher();
     try_send_packet(KvmPacket::EmergencyRelease);
     try_send_packet(KvmPacket::ReleaseAll);
 }
@@ -1777,67 +2070,57 @@ unsafe fn handoff_own_foreground_focus(log_enabled: bool) {
         return;
     }
 
-    let mut attempts: u32 = 0;
-    let mut final_method = HandoffMethod::Minimize;
-    let mut final_to = fg;
-    let mut ok = false;
+    LAST_HANDOFF_MS.store(now_millis(), Ordering::Relaxed);
 
-    // Prefer GetShellWindow() (desktop) first without AttachThreadInput so we
-    // never risk selecting an elevated Z-order neighbour like Taskmgr.exe.
-    let shell = GetShellWindow();
-    if !shell.0.is_null() && shell != fg {
-        let mut shell_pid = 0u32;
-        let _ = GetWindowThreadProcessId(shell, Some(&mut shell_pid));
-        if shell_pid != 0
-            && shell_pid != our_pid
-            && is_safe_handoff_elevation(query_process_info(shell_pid).0)
-        {
-            attempts += 1;
-            let _ = SetForegroundWindow(shell);
+    // Select at most one visible, non-cloaked, non-minimized, non-shell,
+    // non-elevated top-level window in Z-order and make at most one
+    // SetForegroundWindow attempt (never target Progman/desktop or minimize).
+    let next_target = find_next_handoff_windows(fg, our_pid, 1).into_iter().next();
+
+    let (final_method, final_to, api_name, api_ok, after, attempts, ok) = match next_target {
+        Some(next) => {
+            let set_fg_ok = SetForegroundWindow(next).as_bool();
             let after = GetForegroundWindow();
-            if after != fg && is_window_safe_foreground(after, our_pid) {
-                final_method = HandoffMethod::Shell;
-                final_to = after;
-                ok = true;
-            }
+            let safe_ok = set_fg_ok
+                && !after.0.is_null()
+                && after != fg
+                && is_window_safe_foreground(after, our_pid);
+            (
+                HandoffMethod::Next,
+                if safe_ok { after } else { next },
+                "SetForegroundWindow",
+                set_fg_ok,
+                after,
+                1u32,
+                safe_ok,
+            )
         }
-    }
-
-    // Only if GetShellWindow() failed, walk Z-order for a visible, non-cloaked,
-    // non-minimised, non-elevated top-level window that is not ours.
-    if !ok {
-        for next in find_next_handoff_windows(fg, our_pid, 8) {
-            attempts += 1;
-            let _ = SetForegroundWindow(next);
-            let _ = BringWindowToTop(next);
+        None => {
             let after = GetForegroundWindow();
-            if after != fg && is_window_safe_foreground(after, our_pid) {
-                final_method = HandoffMethod::Next;
-                final_to = after;
-                ok = true;
-                break;
-            }
+            (
+                HandoffMethod::None,
+                HWND::default(),
+                "none",
+                false,
+                after,
+                0u32,
+                false,
+            )
         }
-    }
-
-    if !ok {
-        attempts += 1;
-        let _ = ShowWindow(fg, SW_MINIMIZE);
-        let after = GetForegroundWindow();
-        final_method = HandoffMethod::Minimize;
-        final_to = after;
-        ok = after != fg;
-    }
+    };
 
     if log_enabled {
         debug_log::record_event(DebugEvent::Note {
             ts_us: debug_log::now_us(),
             hwnd: final_to.0 as isize,
             text: format!(
-                "FOCUS_HANDOFF from=0x{:X} to=0x{:X} method={} attempts={} ok={ok}",
+                "FOCUS_HANDOFF from=0x{:X} to=0x{:X} method={} api={} api_ok={} after=0x{:X} attempts={} ok={ok}",
                 fg.0 as isize,
                 final_to.0 as isize,
                 final_method.as_str(),
+                api_name,
+                api_ok,
+                after.0 as isize,
                 attempts,
             ),
         });
@@ -1856,24 +2139,40 @@ unsafe fn perform_engage_leap() -> bool {
 
     let log_enabled = debug_log::is_enabled();
     let our_pid = GetCurrentProcessId();
+    let is_drag_leap = DRAG_MODE_ENGAGE.load(Ordering::Acquire);
 
-    if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
-        // --- SPEC-25a ---
-        DRAG_MODE_ENGAGE.store(false, Ordering::Release);
-        super::dragdrop::set_drag_leap_in_progress(false);
-        // --- end SPEC-25a ---
-        block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
+    if should_debounce_engage_after_handoff(
+        now_millis(),
+        LAST_HANDOFF_MS.load(Ordering::Relaxed),
+        ENGAGE_HANDOFF_DEBOUNCE_MS,
+    ) {
+        disarm_trapped_in_callback();
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Note {
+                ts_us: debug_log::now_us(),
+                hwnd: debug_log::foreground_hwnd_raw(),
+                text: "LEAP_SUPPRESSED reason=handoff_debounce source=engage".to_string(),
+            });
+        }
         return false;
     }
 
-    handoff_own_foreground_focus(log_enabled);
+    if !is_drag_leap
+        && (MOUSE_BUTTONS_DOWN.load(Ordering::Acquire) != 0 || any_async_mouse_button_down())
+    {
+        disarm_trapped_in_callback();
+        if log_enabled {
+            debug_log::record_event(DebugEvent::Note {
+                ts_us: debug_log::now_us(),
+                hwnd: debug_log::foreground_hwnd_raw(),
+                text: "LEAP_SUPPRESSED reason=mouse_button_held source=engage".to_string(),
+            });
+        }
+        return false;
+    }
 
-    // Guard again in case minimizing our own window promoted an elevated window.
     if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
-        // --- SPEC-25a ---
-        DRAG_MODE_ENGAGE.store(false, Ordering::Release);
-        super::dragdrop::set_drag_leap_in_progress(false);
-        // --- end SPEC-25a ---
+        disarm_trapped_in_callback();
         block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
         return false;
     }
@@ -1882,6 +2181,54 @@ unsafe fn perform_engage_leap() -> bool {
     let my = TRAP_MON_Y.load(Ordering::Relaxed);
     let mw = TRAP_MON_W.load(Ordering::Relaxed);
     let mh = TRAP_MON_H.load(Ordering::Relaxed);
+    let edge_mon = RectBounds {
+        left: mx,
+        top: my,
+        right: mx.saturating_add(mw),
+        bottom: my.saturating_add(mh),
+    };
+
+    if let Some((fg, proc_name)) = check_foreground_overlay_suppresses_leap(our_pid, edge_mon) {
+        CACHED_OVERLAY_SUPPRESSED.store(true, Ordering::Release);
+        disarm_trapped_in_callback();
+        if log_enabled {
+            LAST_SUPPRESSED_NOTE_MS.store(now_millis(), Ordering::Relaxed);
+            debug_log::record_event(DebugEvent::Note {
+                ts_us: debug_log::now_us(),
+                hwnd: fg.0 as isize,
+                text: format!(
+                    "LEAP_SUPPRESSED reason=topmost_fullscreen_overlay source=engage proc={proc_name}"
+                ),
+            });
+        }
+        return false;
+    }
+
+    handoff_own_foreground_focus(log_enabled);
+
+    // Guard again in case handoff changed focus to an elevated window or topmost overlay.
+    if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
+        disarm_trapped_in_callback();
+        block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
+        return false;
+    }
+    if let Some((fg, proc_name)) = check_foreground_overlay_suppresses_leap(our_pid, edge_mon) {
+        CACHED_OVERLAY_SUPPRESSED.store(true, Ordering::Release);
+        disarm_trapped_in_callback();
+        if log_enabled {
+            LAST_SUPPRESSED_NOTE_MS.store(now_millis(), Ordering::Relaxed);
+            debug_log::record_event(DebugEvent::Note {
+                ts_us: debug_log::now_us(),
+                hwnd: fg.0 as isize,
+                text: format!(
+                    "LEAP_SUPPRESSED reason=topmost_fullscreen_overlay source=post_handoff proc={proc_name}"
+                ),
+            });
+        }
+        return false;
+    }
+    CACHED_OVERLAY_SUPPRESSED.store(false, Ordering::Release);
+
     let center_x = CLAMP_CENTER_X.load(Ordering::Relaxed);
     let center_y = CLAMP_CENTER_Y.load(Ordering::Relaxed);
     let relative_y = f32::from_bits(PENDING_ENGAGE_REL_Y.load(Ordering::Relaxed));
@@ -2225,18 +2572,25 @@ mod tests {
             cloaked: false,
             minimized: false,
             tool_window: false,
+            is_shell_desktop: false,
             elevation,
         }
     }
 
     #[test]
-    fn select_next_handoff_target_skips_elevated_unknown_cloaked_and_ineligible_windows() {
+    fn select_handoff_target_skips_shell_elevated_unknown_cloaked_and_ineligible_windows() {
         let our_pid = 1000;
+        let fg_hwnd = 0x05;
         let standard = ProcessElevation::Standard {
             integrity_rid: SECURITY_MANDATORY_MEDIUM_RID,
         };
         let list = [
+            candidate(fg_hwnd, 2000, standard),
             candidate(0x10, our_pid, standard),
+            WindowCandidateInfo {
+                is_shell_desktop: true,
+                ..candidate(0x15, 1999, standard)
+            },
             WindowCandidateInfo {
                 visible: false,
                 ..candidate(0x20, 2000, standard)
@@ -2265,46 +2619,204 @@ mod tests {
             candidate(0x50, 3000, standard),
             candidate(0x60, 4000, standard),
         ];
-        assert_eq!(select_next_handoff_target(&list, our_pid), Some(0x50));
+        assert_eq!(
+            select_handoff_target(&list, our_pid, fg_hwnd),
+            Some((HandoffMethod::Next, 0x50))
+        );
     }
 
     #[test]
-    fn select_next_handoff_target_returns_none_when_only_elevated_or_ineligible_exist() {
-        let our_pid = 1000;
-        let standard = ProcessElevation::Standard {
-            integrity_rid: SECURITY_MANDATORY_MEDIUM_RID,
-        };
-        let list = [
-            candidate(0, 2000, standard),
-            candidate(0x10, our_pid, standard),
-            candidate(0x20, 3000, ProcessElevation::Elevated),
-            candidate(0x30, 4000, ProcessElevation::Unknown),
-        ];
-        assert_eq!(select_next_handoff_target(&list, our_pid), None);
-    }
-
-    #[test]
-    fn select_preferred_handoff_targets_prefers_shell_first_and_skips_unsafe_shell() {
+    fn select_handoff_target_returns_none_when_only_shell_elevated_or_ineligible_exist() {
         let our_pid = 1000;
         let fg_hwnd = 0x05;
         let standard = ProcessElevation::Standard {
             integrity_rid: SECURITY_MANDATORY_MEDIUM_RID,
         };
-        let shell = candidate(0x20, 1500, standard);
-        let z_order = [
-            candidate(0x10, 2000, ProcessElevation::Elevated),
-            candidate(0x30, 3000, standard),
+        let list = [
+            candidate(0, 2000, standard),
+            candidate(fg_hwnd, 2000, standard),
+            candidate(0x10, our_pid, standard),
+            WindowCandidateInfo {
+                is_shell_desktop: true,
+                ..candidate(0x15, 1500, standard)
+            },
+            candidate(0x20, 3000, ProcessElevation::Elevated),
+            candidate(0x30, 4000, ProcessElevation::Unknown),
         ];
-        assert_eq!(
-            select_preferred_handoff_targets(Some(shell), &z_order, our_pid, fg_hwnd),
-            vec![(HandoffMethod::Shell, 0x20), (HandoffMethod::Next, 0x30)]
-        );
+        assert_eq!(select_handoff_target(&list, our_pid, fg_hwnd), None);
+    }
 
-        let elevated_shell = candidate(0x20, 1500, ProcessElevation::Elevated);
-        assert_eq!(
-            select_preferred_handoff_targets(Some(elevated_shell), &z_order, our_pid, fg_hwnd),
-            vec![(HandoffMethod::Next, 0x30)]
+    #[test]
+    fn shell_and_desktop_window_classes_are_never_targeted() {
+        assert!(is_shell_or_desktop_class("Progman"));
+        assert!(is_shell_or_desktop_class("progman"));
+        assert!(is_shell_or_desktop_class("WorkerW"));
+        assert!(is_shell_or_desktop_class("Shell_TrayWnd"));
+        assert!(is_shell_or_desktop_class("Shell_SecondaryTrayWnd"));
+        assert!(!is_shell_or_desktop_class("Chrome_WidgetWin_1"));
+        assert!(!is_shell_or_desktop_class(""));
+    }
+
+    #[test]
+    fn topmost_fullscreen_overlay_rule_suppresses_only_non_anyleap_topmost_covering_edge_monitor() {
+        let our_pid = 1000;
+        let edge_mon = RectBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let base = ForegroundOverlayCandidate {
+            hwnd: 0x1234,
+            pid: 2000,
+            visible: true,
+            minimized: false,
+            cloaked: false,
+            topmost: true,
+            rect: edge_mon,
+        };
+
+        // Topmost overlay covering the exact edge monitor suppresses leap.
+        assert!(should_suppress_leap_for_topmost_overlay(
+            base,
+            &[edge_mon],
+            our_pid
+        ));
+
+        // Multi-monitor overlay spanning across multiple displays also covers the edge monitor.
+        let multi_mon = ForegroundOverlayCandidate {
+            rect: RectBounds {
+                left: -1920,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            ..base
+        };
+        assert!(should_suppress_leap_for_topmost_overlay(
+            multi_mon,
+            &[edge_mon],
+            our_pid
+        ));
+
+        // Own process (AnyLeap) is never suppressed by this rule.
+        assert!(!should_suppress_leap_for_topmost_overlay(
+            ForegroundOverlayCandidate {
+                pid: our_pid,
+                ..base
+            },
+            &[edge_mon],
+            our_pid
+        ));
+
+        // Non-topmost fullscreen windows (e.g. normal maximized browser) still allow leaps.
+        assert!(!should_suppress_leap_for_topmost_overlay(
+            ForegroundOverlayCandidate {
+                topmost: false,
+                ..base
+            },
+            &[edge_mon],
+            our_pid
+        ));
+
+        // Partial topmost windows (e.g. taskbar or small floating widget) still allow leaps.
+        assert!(!should_suppress_leap_for_topmost_overlay(
+            ForegroundOverlayCandidate {
+                rect: RectBounds {
+                    left: 0,
+                    top: 1040,
+                    right: 1920,
+                    bottom: 1080,
+                },
+                ..base
+            },
+            &[edge_mon],
+            our_pid
+        ));
+
+        // Hidden, minimized, or cloaked topmost windows do not suppress leaps.
+        assert!(!should_suppress_leap_for_topmost_overlay(
+            ForegroundOverlayCandidate {
+                visible: false,
+                ..base
+            },
+            &[edge_mon],
+            our_pid
+        ));
+        assert!(!should_suppress_leap_for_topmost_overlay(
+            ForegroundOverlayCandidate {
+                minimized: true,
+                ..base
+            },
+            &[edge_mon],
+            our_pid
+        ));
+        assert!(!should_suppress_leap_for_topmost_overlay(
+            ForegroundOverlayCandidate {
+                cloaked: true,
+                ..base
+            },
+            &[edge_mon],
+            our_pid
+        ));
+    }
+
+    #[test]
+    fn collect_edge_monitor_bounds_picks_outer_edge_monitors() {
+        let left_mon = MonitorDisplay {
+            id: "mon-1".into(),
+            device_name: "DISPLAY1".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            is_primary: true,
+        };
+        let right_mon = MonitorDisplay {
+            id: "mon-2".into(),
+            device_name: "DISPLAY2".into(),
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            is_primary: false,
+        };
+        let bounds = collect_edge_monitor_bounds(
+            &[left_mon.clone(), right_mon.clone()],
+            &[],
+            false,
+            Edge::Left,
         );
+        assert_eq!(bounds, vec![RectBounds::from_monitor(&left_mon)]);
+
+        let seam = Seam {
+            side: Edge::Left,
+            main_monitor_id: "DISPLAY1".into(),
+            linked_monitor_id: "LINKED1".into(),
+            start: 0,
+            end: 1080,
+        };
+        let seam_bounds =
+            collect_edge_monitor_bounds(&[left_mon.clone(), right_mon], &[seam], true, Edge::Right);
+        assert_eq!(seam_bounds, vec![RectBounds::from_monitor(&left_mon)]);
+    }
+
+    #[test]
+    fn engage_debounce_suppresses_only_within_window_after_handoff() {
+        let cd = ENGAGE_HANDOFF_DEBOUNCE_MS;
+        assert_eq!(cd, 300);
+
+        // No prior handoff -> never debounced.
+        assert!(!should_debounce_engage_after_handoff(150, 0, cd));
+
+        // Within 300 ms after handoff (e.g. 180 ms later) -> debounced.
+        assert!(should_debounce_engage_after_handoff(1000, 1000, cd));
+        assert!(should_debounce_engage_after_handoff(1180, 1000, cd));
+        assert!(should_debounce_engage_after_handoff(1299, 1000, cd));
+
+        // At or beyond 300 ms -> allowed again.
+        assert!(!should_debounce_engage_after_handoff(1300, 1000, cd));
+        assert!(!should_debounce_engage_after_handoff(2000, 1000, cd));
     }
 
     #[test]

@@ -58,7 +58,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     };
     const nextSaved = await upsertSaved(device);
     setSavedDevices(nextSaved);
-    const { devices } = await syncDevicesAndMigrate();
+    const { devices } = await syncDevicesAndMigrate(undefined, undefined, { force: true });
     const resolved = resolveDeviceTarget(hw ?? `${host}:${port}`, devices, nextSaved);
     if (resolved.activeSerial) {
       setSelectedSerial(resolved.activeSerial);

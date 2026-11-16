@@ -127,7 +127,7 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
     setError(null);
     adbErrorDeduper.reset();
     try {
-      await refreshAndReconnectDevices({ silentRepair: true });
+      await refreshAndReconnectDevices({ silentRepair: true, force: true });
     } catch (e) {
       surfaceAdbError(e, setError);
     } finally {

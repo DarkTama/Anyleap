@@ -258,7 +258,7 @@ export function DeviceRack({
     setError(null);
     try {
       await disconnectDevice(host, Number(port));
-      await syncDevicesAndMigrate();
+      await syncDevicesAndMigrate(undefined, undefined, { force: true });
       logActivity({
         kind: "device",
         title: `Disconnected ${serial}`,
