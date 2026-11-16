@@ -26,7 +26,6 @@ import {
 import { MSG_NEEDS_REPAIR, resolveDeviceNickname, resolveDeviceTarget } from "@/lib/deviceStatus";
 import { surfaceAdbError } from "@/lib/adbError";
 import { refreshAndReconnectDevices } from "@/lib/deviceSync";
-import type { PhoneNotification } from "@/lib/types";
 import {
   isPermissionGranted,
   requestPermission,
@@ -35,6 +34,14 @@ import {
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
 import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
+import {
+  onPhoneNotifications,
+  phoneHubSetSettings,
+  phoneHubUnwatch,
+  phoneHubWatch,
+} from "@/services/phoneHubService";
+import { usePhoneHubStore } from "@/stores/phoneHubStore";
+import type { PhoneHubNotification } from "@/types/phone";
 import { UpdateModal } from "@/components/shell/UpdateModal";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
 import { loadAllowControl, useKvmStore } from "@/stores/kvmStore";
@@ -45,6 +52,8 @@ import type { StudioMode } from "@/components/deck/LaunchMatrix";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+
+const EMPTY_NOTIFICATIONS: PhoneHubNotification[] = [];
 
 function App() {
   const error = useAppStore((s) => s.error);
@@ -62,13 +71,12 @@ function App() {
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [activeTab, setActiveTab] = useState<ShellTab>("devices");
-  const [phoneSubTab, setPhoneSubTab] = useState<PhoneSubTab>("files");
+  const [phoneSubTab, setPhoneSubTab] = useState<PhoneSubTab>("overview");
   const [selectedPhoneSerial, setSelectedPhoneSerial] = useState<string | null>(null);
-  const [phoneNotifications, setPhoneNotifications] = useState<PhoneNotification[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
-  const seenNotifKeysRef = useRef<Set<string>>(new Set());
-  const seededNotifSerialRef = useRef<string | null>(null);
+  const seenNotifKeysBySerialRef = useRef<Map<string, Set<string>>>(new Map());
+  const prevOnlineSerialsRef = useRef<Set<string>>(new Set());
   const [pairOpen, setPairOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -94,62 +102,111 @@ function App() {
       ? selectedPhoneSerial
       : onlineDevices[0]?.serial ?? null;
 
+  const phoneNotifications = usePhoneHubStore((s) =>
+    activePhoneSerial
+      ? s.notificationsBySerial[activePhoneSerial] ?? EMPTY_NOTIFICATIONS
+      : EMPTY_NOTIFICATIONS,
+  );
+  const applyNotifications = usePhoneHubStore((s) => s.applyNotifications);
+  const markSerialDisconnected = usePhoneHubStore((s) => s.markSerialDisconnected);
+  const notificationPollSecs = usePhoneHubStore((s) => s.notificationPollSecs);
+
   const fetchPhoneNotifications = useCallback(async () => {
     if (!activePhoneSerial) return;
     setNotificationsLoading(true);
     setNotificationsError(null);
     try {
       const list = await getDeviceNotifications(activePhoneSerial);
-      setPhoneNotifications(list);
-
-      const isInitialSeed = seededNotifSerialRef.current !== activePhoneSerial;
-      if (isInitialSeed) {
-        seenNotifKeysRef.current = new Set(list.map((n) => n.key));
-        seededNotifSerialRef.current = activePhoneSerial;
-      } else if (desktopNotifications) {
-        const fresh = list.filter((n) => !seenNotifKeysRef.current.has(n.key));
-        for (const n of fresh) {
-          seenNotifKeysRef.current.add(n.key);
-        }
-        if (fresh.length > 0) {
-          let granted = await isPermissionGranted().catch(() => false);
-          if (!granted) {
-            const perm = await requestPermission().catch(() => "denied");
-            granted = perm === "granted";
-          }
-          if (granted) {
-            for (const n of fresh) {
-              sendNotification({
-                title: n.title || n.app_label || n.package,
-                body: n.text || undefined,
-              });
-            }
-          }
-        }
-      } else {
-        for (const n of list) {
-          seenNotifKeysRef.current.add(n.key);
-        }
-      }
+      const normalized: PhoneHubNotification[] = list.map((n) => ({
+        key: n.key,
+        package: n.package,
+        appLabel: n.app_label || n.package,
+        title: n.title,
+        text: n.text,
+        postedUnix: n.posted_unix,
+      }));
+      applyNotifications(activePhoneSerial, normalized);
     } catch (e) {
       setNotificationsError(String(e));
     } finally {
       setNotificationsLoading(false);
     }
-  }, [activePhoneSerial, desktopNotifications]);
+  }, [activePhoneSerial, applyNotifications]);
 
-  const shouldPollNotifications =
-    !!activePhoneSerial &&
-    ((activeTab === "phone" && phoneSubTab === "notifications") || desktopNotifications);
+  // Clear per-serial memory-only state when a phone disconnects
+  useEffect(() => {
+    const current = new Set(onlineDevices.map((d) => d.serial));
+    for (const prevSerial of prevOnlineSerialsRef.current) {
+      if (!current.has(prevSerial)) {
+        markSerialDisconnected(prevSerial);
+        seenNotifKeysBySerialRef.current.delete(prevSerial);
+      }
+    }
+    prevOnlineSerialsRef.current = current;
+  }, [onlineDevices, markSerialDisconnected]);
+
+  // Load persisted Phone Hub settings and push poll interval to backend
+  useEffect(() => {
+    void usePhoneHubStore.getState().loadPersistedSettings();
+  }, []);
 
   useEffect(() => {
-    if (!shouldPollNotifications) return;
-    void fetchPhoneNotifications();
-    const id = setInterval(() => {
-      void fetchPhoneNotifications();
-    }, 10_000);
-    return () => clearInterval(id);
-  }, [shouldPollNotifications, fetchPhoneNotifications]);
+    void phoneHubSetSettings(notificationPollSecs).catch(() => {});
+  }, [notificationPollSecs]);
+
+  // Subscribe to backend phone-notifications events (replaces frontend 10s polling)
+  useEffect(() => {
+    const unlistenPromise = onPhoneNotifications(async ({ serial, items }) => {
+      applyNotifications(serial, items);
+
+      const seenMap = seenNotifKeysBySerialRef.current;
+      const existingSeen = seenMap.get(serial);
+      if (!existingSeen) {
+        seenMap.set(serial, new Set(items.map((n) => n.key)));
+        return;
+      }
+
+      const { desktopNotifications: toastsEnabled } = useAppStore.getState().appPrefs;
+      const { mutedPackages } = usePhoneHubStore.getState();
+      const mutedSet = new Set(mutedPackages);
+
+      const fresh = items.filter((n) => !existingSeen.has(n.key));
+      for (const n of fresh) {
+        existingSeen.add(n.key);
+      }
+
+      if (!toastsEnabled) return;
+      const unmutedFresh = fresh.filter((n) => !mutedSet.has(n.package));
+      if (unmutedFresh.length === 0) return;
+
+      let granted = await isPermissionGranted().catch(() => false);
+      if (!granted) {
+        const perm = await requestPermission().catch(() => "denied");
+        granted = perm === "granted";
+      }
+      if (granted) {
+        for (const n of unmutedFresh) {
+          sendNotification({
+            title: n.title || n.appLabel || n.package,
+            body: n.text || undefined,
+          });
+        }
+      }
+    });
+
+    return () => {
+      unlistenPromise.then((un) => un()).catch(() => {});
+    };
+  }, [applyNotifications]);
+
+  // Keep notification polling active in background when desktopNotifications is enabled and Phone tab is closed
+  useEffect(() => {
+    if (!activePhoneSerial || !desktopNotifications || activeTab === "phone") return;
+    void phoneHubWatch(activePhoneSerial, ["notifications"]).catch(() => {});
+    return () => {
+      void phoneHubUnwatch(activePhoneSerial).catch(() => {});
+    };
+  }, [activePhoneSerial, desktopNotifications, activeTab]);
 
   // Event listeners + initial hydrate.
   useEffect(() => {

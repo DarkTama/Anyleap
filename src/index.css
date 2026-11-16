@@ -241,6 +241,17 @@ body {
   }
 }
 
+/* Gallery thumbnail blur privacy mode: sharp only on hover or keyboard focus */
+.gallery-tile-blur .gallery-tile-content {
+  filter: blur(22px) brightness(0.65);
+  transition: filter 160ms var(--ease-out);
+}
+.gallery-tile-blur:hover .gallery-tile-content,
+.gallery-tile-blur .gallery-tile-btn:focus-visible .gallery-tile-content,
+.gallery-tile-blur:has(:focus-visible) .gallery-tile-content {
+  filter: none;
+}
+
 /* Honour reduced motion: keep opacity comprehension, drop movement */
 @media (prefers-reduced-motion: reduce) {
   .btn-tactile,
@@ -254,6 +265,10 @@ body {
   .photo-tile-img {
     transition-property: opacity, background-color, border-color, color;
     transition-duration: 120ms;
+  }
+
+  .gallery-tile-blur .gallery-tile-content {
+    transition: none;
   }
 
   .progress-bar-fill {
