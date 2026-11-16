@@ -49,6 +49,7 @@ Internal code names (`kvm`, `receiver`, `controller`, `hooks`, `KvmStatus`, etc.
   - Suppress edge leaps while the foreground window is a non-AnyLeap topmost window covering the full edge monitor (e.g., a screen-capture overlay) or while any mouse button is physically held (verified outside low-level hook callbacks via cached hook-thread checks, engage-path validation, and async button reconciliation).
   - Own-window focus handoff makes at most one `SetForegroundWindow` attempt to an eligible, non-elevated, non-shell Z-order window (never targeting the desktop shell window or minimizing windows) and debounces re-engages for 300 ms after a handoff.
   - Return/release paths unconditionally clear pending trap/dwell/drag state and serialize HUD open/close transitions; frontend device sync debounces back-to-back calls within a short cooldown window.
+  - Controller trap transitions use an explicit generation-guarded state machine (`Idle` ↔ `EngagePending` ↔ `Trapped` ↔ `Returning`) so `CursorReturn` cancels any pending or mid-flight engage before trap centering/clipping and places the cursor at the seam-entry edge on the hook thread, with short post-return hysteresis (150 ms cooldown or ≥ 16 px move into the Main PC) to prevent edge ping-pong.
 
 **Out of scope:** Per-monitor arrangement (future SPEC-24), multiple simultaneous Linked PCs, app autostart.
 

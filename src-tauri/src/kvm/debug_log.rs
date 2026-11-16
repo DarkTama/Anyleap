@@ -280,6 +280,8 @@ pub enum DebugEvent {
         ts_us: u64,
         relative_y: f32,
         was_trapped: bool,
+        prev_phase: &'static str,
+        target: Option<(i32, i32)>,
         hwnd: isize,
     },
     Release {
@@ -705,11 +707,17 @@ fn format_event_line(
             ts_us,
             relative_y,
             was_trapped,
+            prev_phase,
+            target,
             hwnd,
         } => {
             let w = window_resolver(*hwnd, false);
+            let target_str = match target {
+                Some((x, y)) => format!("{x},{y}"),
+                None => "none".to_string(),
+            };
             format!(
-                "ts_us={ts_us} event=RETURN rel_y={relative_y:.4} was_trapped={} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=RETURN rel_y={relative_y:.4} was_trapped={} prev_phase={prev_phase} target={target_str} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
                 u8::from(*was_trapped),
                 w.proc_name,
                 w.title,
@@ -1255,6 +1263,21 @@ mod tests {
             stub_window,
         );
         assert!(enter_line.contains("event=ENTER edge=left rel_y=0.2500 x=2 y=270 hwnd=0x55"));
+
+        let return_line = format_event_line(
+            &DebugEvent::Return {
+                ts_us: 4500,
+                relative_y: 0.4,
+                was_trapped: true,
+                prev_phase: "trapped",
+                target: Some((2, 432)),
+                hwnd: 0x55,
+            },
+            stub_window,
+        );
+        assert!(return_line.contains(
+            "event=RETURN rel_y=0.4000 was_trapped=1 prev_phase=trapped target=2,432 hwnd=0x55"
+        ));
 
         let return_sent = format_event_line(
             &DebugEvent::ReturnSent {

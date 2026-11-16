@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 #[cfg(windows)]
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 #[cfg(windows)]
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 #[cfg(windows)]
@@ -42,7 +44,11 @@ const WM_KVM_ENGAGE: u32 = WM_APP + 2;
 #[cfg(windows)]
 const WM_KVM_REFRESH_OVERLAY: u32 = WM_APP + 3;
 #[cfg(windows)]
+const WM_KVM_RETURN_CURSOR: u32 = WM_APP + 4;
+#[cfg(windows)]
 const WATCHDOG_INTERVAL_MS: u32 = 250;
+#[cfg(windows)]
+const RETURN_VERIFY_DELAY_MS: u32 = 50;
 #[cfg(any(windows, test))]
 const WATCHDOG_BLIND_THRESHOLD_MS: u32 = 1000;
 const BLOCKED_NOTICE_COOLDOWN_MS: u64 = 1000;
@@ -50,6 +56,12 @@ const BLOCKED_NOTICE_COOLDOWN_MS: u64 = 1000;
 const TIMER_BLOCKED_NOTICE_COOLDOWN_MS: u64 = 5000;
 #[cfg(any(windows, test))]
 const ENGAGE_HANDOFF_DEBOUNCE_MS: u64 = 300;
+/// Short post-return hysteresis: require moving >= 16 px into Main PC or waiting
+/// 150 ms before a new edge dwell/leap can arm on the same seam edge.
+#[cfg(any(windows, test))]
+const RETURN_REARM_COOLDOWN_MS: u64 = 150;
+#[cfg(any(windows, test))]
+const RETURN_REARM_ESCAPE_PX: i32 = 16;
 #[cfg(windows)]
 const SUPPRESSED_NOTE_COOLDOWN_MS: u64 = 1000;
 const SECURITY_MANDATORY_MEDIUM_RID: u32 = 0x2000;
@@ -73,11 +85,291 @@ struct ControllerLayout {
     seams: Vec<Seam>,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrapPhase {
+    Idle = 0,
+    EngagePending = 1,
+    Trapped = 2,
+    Returning = 3,
+}
+
+impl TrapPhase {
+    fn from_u8(raw: u8) -> Self {
+        match raw {
+            1 => Self::EngagePending,
+            2 => Self::Trapped,
+            3 => Self::Returning,
+            _ => Self::Idle,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::EngagePending => "engage_pending",
+            Self::Trapped => "trapped",
+            Self::Returning => "returning",
+        }
+    }
+
+    /// True while input is actively captured or about to be captured.
+    pub(crate) fn is_trapped_like(self) -> bool {
+        matches!(self, Self::EngagePending | Self::Trapped)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TrapState {
+    pub phase: TrapPhase,
+    pub cursor_centered: bool,
+    pub generation: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrapEvent {
+    RequestEngage,
+    BeginEngage { expected_gen: u32 },
+    CommitEngage { expected_gen: u32 },
+    AbortEngage { expected_gen: u32 },
+    MarkCentered { expected_gen: u32 },
+    ReturnRequested,
+    CompleteReturn { expected_gen: u32 },
+    ForceRelease,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrapEffect {
+    Accepted { prev_phase: TrapPhase, new_gen: u32 },
+    Rejected,
+}
+
+impl TrapState {
+    pub(crate) const fn new() -> Self {
+        Self {
+            phase: TrapPhase::Idle,
+            cursor_centered: false,
+            generation: 0,
+        }
+    }
+
+    pub(crate) const fn encode(self) -> u64 {
+        ((self.generation as u64) << 16)
+            | ((self.cursor_centered as u64) << 8)
+            | (self.phase as u64)
+    }
+
+    pub(crate) fn decode(raw: u64) -> Self {
+        Self {
+            phase: TrapPhase::from_u8((raw & 0xFF) as u8),
+            cursor_centered: ((raw >> 8) & 1) != 0,
+            generation: ((raw >> 16) & 0xFFFF_FFFF) as u32,
+        }
+    }
+
+    pub(crate) fn can_emit_trapped_delta(self) -> bool {
+        self.phase == TrapPhase::Trapped && self.cursor_centered
+    }
+
+    #[cfg(test)]
+    pub(crate) fn can_recenter_cursor(self) -> bool {
+        self.phase == TrapPhase::Trapped
+    }
+
+    pub(crate) fn step(self, event: TrapEvent) -> (Self, TrapEffect) {
+        match event {
+            TrapEvent::RequestEngage => {
+                if self.phase != TrapPhase::Idle {
+                    return (self, TrapEffect::Rejected);
+                }
+                let next_gen = self.generation.wrapping_add(1);
+                (
+                    Self {
+                        phase: TrapPhase::EngagePending,
+                        cursor_centered: false,
+                        generation: next_gen,
+                    },
+                    TrapEffect::Accepted {
+                        prev_phase: self.phase,
+                        new_gen: next_gen,
+                    },
+                )
+            }
+            TrapEvent::BeginEngage { expected_gen } => {
+                if self.phase == TrapPhase::EngagePending && self.generation == expected_gen {
+                    (
+                        self,
+                        TrapEffect::Accepted {
+                            prev_phase: self.phase,
+                            new_gen: self.generation,
+                        },
+                    )
+                } else {
+                    (self, TrapEffect::Rejected)
+                }
+            }
+            TrapEvent::CommitEngage { expected_gen } => {
+                if self.phase == TrapPhase::EngagePending && self.generation == expected_gen {
+                    (
+                        Self {
+                            phase: TrapPhase::Trapped,
+                            cursor_centered: false,
+                            generation: self.generation,
+                        },
+                        TrapEffect::Accepted {
+                            prev_phase: self.phase,
+                            new_gen: self.generation,
+                        },
+                    )
+                } else {
+                    (self, TrapEffect::Rejected)
+                }
+            }
+            TrapEvent::AbortEngage { expected_gen } => {
+                if self.phase == TrapPhase::EngagePending && self.generation == expected_gen {
+                    let next_gen = self.generation.wrapping_add(1);
+                    (
+                        Self {
+                            phase: TrapPhase::Idle,
+                            cursor_centered: false,
+                            generation: next_gen,
+                        },
+                        TrapEffect::Accepted {
+                            prev_phase: self.phase,
+                            new_gen: next_gen,
+                        },
+                    )
+                } else {
+                    (self, TrapEffect::Rejected)
+                }
+            }
+            TrapEvent::MarkCentered { expected_gen } => {
+                if self.phase == TrapPhase::Trapped && self.generation == expected_gen {
+                    (
+                        Self {
+                            phase: TrapPhase::Trapped,
+                            cursor_centered: true,
+                            generation: self.generation,
+                        },
+                        TrapEffect::Accepted {
+                            prev_phase: self.phase,
+                            new_gen: self.generation,
+                        },
+                    )
+                } else {
+                    (self, TrapEffect::Rejected)
+                }
+            }
+            TrapEvent::ReturnRequested => {
+                if self.phase == TrapPhase::Idle {
+                    return (self, TrapEffect::Rejected);
+                }
+                let next_gen = self.generation.wrapping_add(1);
+                (
+                    Self {
+                        phase: TrapPhase::Returning,
+                        cursor_centered: false,
+                        generation: next_gen,
+                    },
+                    TrapEffect::Accepted {
+                        prev_phase: self.phase,
+                        new_gen: next_gen,
+                    },
+                )
+            }
+            TrapEvent::CompleteReturn { expected_gen } => {
+                if self.phase == TrapPhase::Returning && self.generation == expected_gen {
+                    let next_gen = self.generation.wrapping_add(1);
+                    (
+                        Self {
+                            phase: TrapPhase::Idle,
+                            cursor_centered: false,
+                            generation: next_gen,
+                        },
+                        TrapEffect::Accepted {
+                            prev_phase: self.phase,
+                            new_gen: next_gen,
+                        },
+                    )
+                } else {
+                    (self, TrapEffect::Rejected)
+                }
+            }
+            TrapEvent::ForceRelease => {
+                let next_gen = if self.phase == TrapPhase::Idle {
+                    self.generation
+                } else {
+                    self.generation.wrapping_add(1)
+                };
+                (
+                    Self {
+                        phase: TrapPhase::Idle,
+                        cursor_centered: false,
+                        generation: next_gen,
+                    },
+                    TrapEffect::Accepted {
+                        prev_phase: self.phase,
+                        new_gen: next_gen,
+                    },
+                )
+            }
+        }
+    }
+}
+
 static HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
-static IS_TRAPPED: AtomicBool = AtomicBool::new(false);
-static ENGAGE_PENDING: AtomicBool = AtomicBool::new(false);
-static CURSOR_CENTERED: AtomicBool = AtomicBool::new(false);
+static TRAP_STATE_WORD: AtomicU64 = AtomicU64::new(TrapState::new().encode());
+static PENDING_RETURN_POS: AtomicU64 = AtomicU64::new(0);
+static RETURN_MAIN_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
+static POST_RETURN_HYSTERESIS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LAST_RETURN_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_RETURN_POS: AtomicU64 = AtomicU64::new(0);
+static LAST_RETURN_LEAP_EDGE: AtomicU8 = AtomicU8::new(Edge::Left as u8);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+fn pack_pos(x: i32, y: i32) -> u64 {
+    ((x as u32 as u64) << 32) | (y as u32 as u64)
+}
+
+fn unpack_pos(raw: u64) -> (i32, i32) {
+    ((raw >> 32) as u32 as i32, (raw & 0xFFFF_FFFF) as u32 as i32)
+}
+
+fn load_trap_state() -> TrapState {
+    TrapState::decode(TRAP_STATE_WORD.load(Ordering::Acquire))
+}
+
+fn apply_trap_event(ev: TrapEvent) -> (TrapState, TrapEffect) {
+    // `fetch_update` is deprecated (renamed `try_update`) on newer stable; keep it until the MSRV has `try_update`.
+    #[allow(deprecated)]
+    match TRAP_STATE_WORD.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |raw| {
+        let cur = TrapState::decode(raw);
+        let (next, eff) = cur.step(ev);
+        if matches!(eff, TrapEffect::Rejected) {
+            None
+        } else {
+            Some(next.encode())
+        }
+    }) {
+        Ok(prev_raw) => TrapState::decode(prev_raw).step(ev),
+        Err(cur_raw) => (TrapState::decode(cur_raw), TrapEffect::Rejected),
+    }
+}
+
+fn try_apply_trap_event(ev: TrapEvent) -> bool {
+    matches!(apply_trap_event(ev).1, TrapEffect::Accepted { .. })
+}
+
+fn arm_post_return_hysteresis(rx: i32, ry: i32, leap_edge: Edge, now_ms: u64) {
+    LAST_RETURN_POS.store(pack_pos(rx, ry), Ordering::Relaxed);
+    LAST_RETURN_LEAP_EDGE.store(leap_edge as u8, Ordering::Relaxed);
+    LAST_RETURN_MS.store(now_ms, Ordering::Relaxed);
+    POST_RETURN_HYSTERESIS_ACTIVE.store(true, Ordering::Release);
+}
+
+fn clear_post_return_hysteresis() {
+    POST_RETURN_HYSTERESIS_ACTIVE.store(false, Ordering::Release);
+}
 
 static CLAMP_CENTER_X: AtomicI32 = AtomicI32::new(960);
 static CLAMP_CENTER_Y: AtomicI32 = AtomicI32::new(540);
@@ -196,13 +488,20 @@ pub fn restore_cursor_visibility() {
 }
 
 #[cfg(windows)]
-fn post_hook_thread_message(msg: u32) {
+fn post_hook_thread_message_with_param(msg: u32, wparam: usize) -> bool {
     unsafe {
         let tid = HOOK_THREAD_ID.load(Ordering::Acquire);
         if tid != 0 {
-            let _ = PostThreadMessageW(tid, msg, WPARAM(0), LPARAM(0));
+            PostThreadMessageW(tid, msg, WPARAM(wparam), LPARAM(0)).is_ok()
+        } else {
+            false
         }
     }
+}
+
+#[cfg(windows)]
+fn post_hook_thread_message(msg: u32) {
+    let _ = post_hook_thread_message_with_param(msg, 0);
 }
 
 fn notify_hook_thread_restore() {
@@ -278,9 +577,162 @@ fn trapped_mouse_delta(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostReturnHysteresis {
+    Inactive,
+    Suppress,
+    ClearedByTimeout,
+    ClearedByEscape,
+    ClearedByEdgeChange,
+}
+
 #[cfg(any(windows, test))]
-fn should_perform_engage(hook_active: bool, is_trapped: bool, engage_pending: bool) -> bool {
-    hook_active && is_trapped && engage_pending
+#[allow(clippy::too_many_arguments)]
+fn evaluate_post_return_hysteresis(
+    active: bool,
+    now_ms: u64,
+    return_ms: u64,
+    return_pos: (i32, i32),
+    return_edge: Edge,
+    cursor_pos: (i32, i32),
+    candidate_edge: Edge,
+    cooldown_ms: u64,
+    escape_px: i32,
+) -> PostReturnHysteresis {
+    if !active {
+        return PostReturnHysteresis::Inactive;
+    }
+    if candidate_edge != return_edge {
+        return PostReturnHysteresis::ClearedByEdgeChange;
+    }
+    if now_ms.saturating_sub(return_ms) >= cooldown_ms {
+        return PostReturnHysteresis::ClearedByTimeout;
+    }
+    let away_px = match return_edge {
+        Edge::Left => cursor_pos.0.saturating_sub(return_pos.0),
+        Edge::Right => return_pos.0.saturating_sub(cursor_pos.0),
+        Edge::Top => cursor_pos.1.saturating_sub(return_pos.1),
+        Edge::Bottom => return_pos.1.saturating_sub(cursor_pos.1),
+    };
+    if away_px >= escape_px {
+        PostReturnHysteresis::ClearedByEscape
+    } else {
+        PostReturnHysteresis::Suppress
+    }
+}
+
+#[cfg(windows)]
+fn maybe_clear_post_return_hysteresis_on_move(cursor_pos: (i32, i32), now_ms: u64) {
+    if !POST_RETURN_HYSTERESIS_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+    let return_edge = Edge::from_u8(LAST_RETURN_LEAP_EDGE.load(Ordering::Relaxed));
+    let decision = evaluate_post_return_hysteresis(
+        true,
+        now_ms,
+        LAST_RETURN_MS.load(Ordering::Relaxed),
+        unpack_pos(LAST_RETURN_POS.load(Ordering::Relaxed)),
+        return_edge,
+        cursor_pos,
+        return_edge,
+        RETURN_REARM_COOLDOWN_MS,
+        RETURN_REARM_ESCAPE_PX,
+    );
+    if matches!(
+        decision,
+        PostReturnHysteresis::ClearedByTimeout | PostReturnHysteresis::ClearedByEscape
+    ) {
+        clear_post_return_hysteresis();
+    }
+}
+
+#[cfg(windows)]
+fn check_post_return_hysteresis(cursor_pos: (i32, i32), candidate_edge: Edge, now_ms: u64) -> bool {
+    let active = POST_RETURN_HYSTERESIS_ACTIVE.load(Ordering::Acquire);
+    if !active {
+        return false;
+    }
+    let decision = evaluate_post_return_hysteresis(
+        true,
+        now_ms,
+        LAST_RETURN_MS.load(Ordering::Relaxed),
+        unpack_pos(LAST_RETURN_POS.load(Ordering::Relaxed)),
+        Edge::from_u8(LAST_RETURN_LEAP_EDGE.load(Ordering::Relaxed)),
+        cursor_pos,
+        candidate_edge,
+        RETURN_REARM_COOLDOWN_MS,
+        RETURN_REARM_ESCAPE_PX,
+    );
+    match decision {
+        PostReturnHysteresis::Suppress => true,
+        PostReturnHysteresis::Inactive => false,
+        PostReturnHysteresis::ClearedByTimeout
+        | PostReturnHysteresis::ClearedByEscape
+        | PostReturnHysteresis::ClearedByEdgeChange => {
+            clear_post_return_hysteresis();
+            false
+        }
+    }
+}
+
+fn compute_return_position(
+    edge: &str,
+    relative_y: f32,
+    target_monitor: Option<&str>,
+    along_px: Option<i32>,
+) -> (Edge, (i32, i32)) {
+    let fallback_mon = MonitorDisplay {
+        id: String::new(),
+        device_name: String::new(),
+        x: TRAP_MON_X.load(Ordering::Relaxed),
+        y: TRAP_MON_Y.load(Ordering::Relaxed),
+        width: TRAP_MON_W.load(Ordering::Relaxed),
+        height: TRAP_MON_H.load(Ordering::Relaxed),
+        is_primary: true,
+    };
+    let peer_union = ScreenRect {
+        x: 0,
+        y: 0,
+        width: PEER_UNION_W.load(Ordering::Relaxed),
+        height: PEER_UNION_H.load(Ordering::Relaxed),
+    };
+    let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
+    let return_edge = Edge::from_str(edge).unwrap_or_else(|| link_edge.opposite());
+    let main_leap_edge = if target_monitor.is_some() && along_px.is_some() {
+        return_edge.opposite()
+    } else {
+        link_edge
+    };
+    let offset_x = LINK_OFFSET_X.load(Ordering::Relaxed);
+    let offset_y = LINK_OFFSET_Y.load(Ordering::Relaxed);
+    let pos = if let Ok(mons) = local_monitors().try_lock() {
+        map_controller_return_pos(
+            &mons,
+            target_monitor,
+            return_edge,
+            along_px,
+            &fallback_mon,
+            &peer_union,
+            link_edge,
+            offset_x,
+            offset_y,
+            relative_y,
+        )
+    } else {
+        map_controller_return_pos(
+            &[],
+            target_monitor,
+            return_edge,
+            along_px,
+            &fallback_mon,
+            &peer_union,
+            link_edge,
+            offset_x,
+            offset_y,
+            relative_y,
+        )
+    };
+    (main_leap_edge, pos)
 }
 
 pub struct HookController {
@@ -318,14 +770,16 @@ impl HookController {
     }
 
     pub fn is_trapped(&self) -> bool {
-        IS_TRAPPED.load(Ordering::Acquire)
+        load_trap_state().phase.is_trapped_like()
     }
 
     pub fn set_trapped(&self, trapped: bool) {
-        IS_TRAPPED.store(trapped, Ordering::SeqCst);
         if !trapped {
-            reset_trapped_runtime_state();
+            apply_trap_event(TrapEvent::ForceRelease);
+            reset_dwell_and_drag_state();
             notify_hook_thread_restore();
+        } else {
+            let _ = apply_trap_event(TrapEvent::RequestEngage);
         }
     }
 
@@ -336,77 +790,60 @@ impl HookController {
         target_monitor: Option<&str>,
         along_px: Option<i32>,
     ) {
-        let was_trapped = IS_TRAPPED.swap(false, Ordering::SeqCst);
+        let (main_leap_edge, (rx, ry)) =
+            compute_return_position(edge, relative_y, target_monitor, along_px);
+        PENDING_RETURN_POS.store(pack_pos(rx, ry), Ordering::Release);
+        RETURN_MAIN_EDGE.store(main_leap_edge as u8, Ordering::Release);
+
+        let (_, effect) = apply_trap_event(TrapEvent::ReturnRequested);
+        let (should_place_cursor, was_trapped, prev_phase, new_gen) = match effect {
+            TrapEffect::Accepted {
+                prev_phase,
+                new_gen,
+            } => (true, prev_phase.is_trapped_like(), prev_phase, new_gen),
+            TrapEffect::Rejected => (false, false, TrapPhase::Idle, 0),
+        };
+
         if debug_log::is_enabled() {
             debug_log::record_event(DebugEvent::Return {
                 ts_us: debug_log::now_us(),
                 relative_y,
                 was_trapped,
+                prev_phase: prev_phase.as_str(),
+                target: should_place_cursor.then_some((rx, ry)),
                 hwnd: debug_log::foreground_hwnd_raw(),
             });
         }
-        // Always clear pending engage/dwell/drag/modifier flags and restore
-        // cursor clip & visibility so return never leaves stale trap state.
-        reset_trapped_runtime_state();
+        // Always clear pending dwell/drag/modifier flags and restore cursor clip
+        // & visibility so return never leaves stale trap state.
+        reset_dwell_and_drag_state();
         KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
         KEY_ALT_DOWN.store(false, Ordering::Relaxed);
-        notify_hook_thread_restore();
-        if !was_trapped {
+        if !should_place_cursor {
+            notify_hook_thread_restore();
             return;
         }
 
-        let fallback_mon = MonitorDisplay {
-            id: String::new(),
-            device_name: String::new(),
-            x: TRAP_MON_X.load(Ordering::Relaxed),
-            y: TRAP_MON_Y.load(Ordering::Relaxed),
-            width: TRAP_MON_W.load(Ordering::Relaxed),
-            height: TRAP_MON_H.load(Ordering::Relaxed),
-            is_primary: true,
-        };
-        let peer_union = ScreenRect {
-            x: 0,
-            y: 0,
-            width: PEER_UNION_W.load(Ordering::Relaxed),
-            height: PEER_UNION_H.load(Ordering::Relaxed),
-        };
-        let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
-        let return_edge = Edge::from_str(edge).unwrap_or_else(|| link_edge.opposite());
-        let offset_x = LINK_OFFSET_X.load(Ordering::Relaxed);
-        let offset_y = LINK_OFFSET_Y.load(Ordering::Relaxed);
-        let (rx, ry) = if let Ok(mons) = local_monitors().try_lock() {
-            map_controller_return_pos(
-                &mons,
-                target_monitor,
-                return_edge,
-                along_px,
-                &fallback_mon,
-                &peer_union,
-                link_edge,
-                offset_x,
-                offset_y,
-                relative_y,
-            )
-        } else {
-            map_controller_return_pos(
-                &[],
-                target_monitor,
-                return_edge,
-                along_px,
-                &fallback_mon,
-                &peer_union,
-                link_edge,
-                offset_x,
-                offset_y,
-                relative_y,
-            )
-        };
+        arm_post_return_hysteresis(rx, ry, main_leap_edge, now_millis());
         #[cfg(windows)]
-        unsafe {
-            let _ = SetCursorPos(rx, ry);
+        {
+            // Release ClipCursor immediately on desktop so cursor isn't clamped to
+            // a single monitor while waiting for the hook thread message.
+            unsafe {
+                let _ = ClipCursor(None);
+            }
+            if !post_hook_thread_message_with_param(WM_KVM_RETURN_CURSOR, new_gen as usize) {
+                unsafe {
+                    place_return_cursor_and_complete(rx, ry, new_gen);
+                }
+            }
         }
         #[cfg(not(windows))]
-        let _ = (rx, ry);
+        {
+            let _ = apply_trap_event(TrapEvent::CompleteReturn {
+                expected_gen: new_gen,
+            });
+        }
     }
 
     pub fn emergency_release(&self) {
@@ -416,8 +853,9 @@ impl HookController {
                 reason: "emergency_release",
             });
         }
-        IS_TRAPPED.store(false, Ordering::SeqCst);
-        reset_trapped_runtime_state();
+        apply_trap_event(TrapEvent::ForceRelease);
+        reset_dwell_and_drag_state();
+        clear_post_return_hysteresis();
         MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
         KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
         KEY_ALT_DOWN.store(false, Ordering::Relaxed);
@@ -460,7 +898,7 @@ impl HookController {
         if !Self::can_engage_drag_leap(
             super::dragdrop::drag_drop_enabled(),
             HOOK_ACTIVE.load(Ordering::Acquire),
-            IS_TRAPPED.load(Ordering::Acquire),
+            load_trap_state().phase != TrapPhase::Idle,
             HAS_ACTIVE_LINK.load(Ordering::Acquire),
             MOUSE_BUTTONS_DOWN.load(Ordering::Acquire),
         ) {
@@ -551,7 +989,7 @@ impl HookController {
 
         DRAG_MODE_BUTTON.store(button, Ordering::Release);
         DRAG_MODE_ENGAGE.store(true, Ordering::Release);
-        request_engage_leap(
+        if !request_engage_leap(
             mx,
             my,
             mw,
@@ -560,7 +998,10 @@ impl HookController {
             entry_edge,
             relative_y,
             seam_target,
-        );
+        ) {
+            DRAG_MODE_ENGAGE.store(false, Ordering::Release);
+            return false;
+        }
         true
     }
 
@@ -707,6 +1148,8 @@ impl HookController {
             return;
         }
 
+        TRAP_STATE_WORD.store(TrapState::new().encode(), Ordering::SeqCst);
+        clear_post_return_hysteresis();
         LAST_HANDOFF_MS.store(0, Ordering::Relaxed);
         #[cfg(windows)]
         {
@@ -722,6 +1165,14 @@ impl HookController {
 
         #[cfg(windows)]
         std::thread::spawn(move || unsafe {
+            struct ReturnVerifyPending {
+                timer_id: usize,
+                target_x: i32,
+                target_y: i32,
+                placed_at: std::time::Instant,
+                generation: u32,
+            }
+
             let mut msg = MSG::default();
             // Force message queue creation before publishing HOOK_THREAD_ID so
             // PostThreadMessageW from a hook callback never races queue init.
@@ -734,6 +1185,7 @@ impl HookController {
             let h_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0);
             let h_kbd = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
             let mut watchdog_timer_id: usize = SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None);
+            let mut return_verify: Option<ReturnVerifyPending> = None;
 
             while HOOK_ACTIVE.load(Ordering::Relaxed) {
                 let res = GetMessageW(&mut msg, None, 0, 0);
@@ -744,50 +1196,110 @@ impl HookController {
                     restore_cursor_visibility();
                     continue;
                 }
+                if msg.message == WM_KVM_RETURN_CURSOR {
+                    if let Some((rx, ry, gen)) = perform_return_cursor() {
+                        if let Some(prev) = return_verify.take() {
+                            if prev.timer_id != 0 {
+                                let _ = KillTimer(None, prev.timer_id);
+                            }
+                        }
+                        if debug_log::is_enabled() {
+                            let timer_id = SetTimer(None, 0, RETURN_VERIFY_DELAY_MS, None);
+                            if timer_id != 0 {
+                                return_verify = Some(ReturnVerifyPending {
+                                    timer_id,
+                                    target_x: rx,
+                                    target_y: ry,
+                                    placed_at: std::time::Instant::now(),
+                                    generation: gen,
+                                });
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if msg.message == WM_KVM_REFRESH_OVERLAY {
                     refresh_cached_overlay_suppression(our_pid);
                     continue;
                 }
                 if msg.message == WM_KVM_ENGAGE {
-                    if perform_engage_leap() && watchdog_timer_id == 0 {
+                    let expected_gen = msg.wParam.0 as u32;
+                    if perform_engage_leap(expected_gen) && watchdog_timer_id == 0 {
                         watchdog_timer_id = SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None);
                     }
                     continue;
                 }
-                if msg.message == WM_TIMER
-                    && watchdog_timer_id != 0
-                    && msg.wParam.0 == watchdog_timer_id
-                {
-                    if IS_TRAPPED.load(Ordering::Acquire) {
-                        if let Some(last_input_tick) = query_last_input_tick() {
-                            let hook_tick = HAS_LAST_HOOK_TICK
-                                .load(Ordering::Acquire)
-                                .then(|| LAST_HOOK_TICK_MS.load(Ordering::Acquire));
-                            if let Some(gap_ms) = evaluate_capture_watchdog(
-                                true,
-                                hook_tick,
-                                last_input_tick,
-                                WATCHDOG_BLIND_THRESHOLD_MS,
-                            ) {
-                                perform_watchdog_release(gap_ms);
+                if msg.message == WM_TIMER {
+                    if let Some(pending) = return_verify.as_ref() {
+                        if pending.timer_id != 0 && msg.wParam.0 == pending.timer_id {
+                            let pending = return_verify.take().unwrap();
+                            let _ = KillTimer(None, pending.timer_id);
+                            if debug_log::is_enabled() {
+                                let mut actual = POINT::default();
+                                let actual_ok = GetCursorPos(&mut actual).is_ok();
+                                let (ax, ay) = if actual_ok {
+                                    (actual.x, actual.y)
+                                } else {
+                                    (i32::MIN, i32::MIN)
+                                };
+                                let snap = load_trap_state();
+                                debug_log::record_event(DebugEvent::Note {
+                                    ts_us: debug_log::now_us(),
+                                    hwnd: debug_log::foreground_hwnd_raw(),
+                                    text: format!(
+                                        "RETURN_VERIFY_50MS target=({},{}) actual=({ax},{ay}) actual_ok={} elapsed_ms={} phase={} state_gen={} return_gen={}",
+                                        pending.target_x,
+                                        pending.target_y,
+                                        u8::from(actual_ok),
+                                        pending.placed_at.elapsed().as_millis(),
+                                        snap.phase.as_str(),
+                                        snap.generation,
+                                        pending.generation,
+                                    ),
+                                });
                             }
+                            continue;
                         }
-                    } else if HAS_ACTIVE_LINK.load(Ordering::Acquire) {
-                        refresh_cached_overlay_suppression(our_pid);
-                        if MOUSE_BUTTONS_DOWN.load(Ordering::Acquire) != 0
-                            && !any_async_mouse_button_down()
-                        {
-                            MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
-                            debug_log::note(|| "MOUSE_BUTTONS_RECONCILED cleared=1".to_string());
-                        }
-                        check_timer_elevated_leap_block(our_pid);
                     }
-                    continue;
+                    if watchdog_timer_id != 0 && msg.wParam.0 == watchdog_timer_id {
+                        if load_trap_state().phase == TrapPhase::Trapped {
+                            if let Some(last_input_tick) = query_last_input_tick() {
+                                let hook_tick = HAS_LAST_HOOK_TICK
+                                    .load(Ordering::Acquire)
+                                    .then(|| LAST_HOOK_TICK_MS.load(Ordering::Acquire));
+                                if let Some(gap_ms) = evaluate_capture_watchdog(
+                                    true,
+                                    hook_tick,
+                                    last_input_tick,
+                                    WATCHDOG_BLIND_THRESHOLD_MS,
+                                ) {
+                                    perform_watchdog_release(gap_ms);
+                                }
+                            }
+                        } else if HAS_ACTIVE_LINK.load(Ordering::Acquire) {
+                            refresh_cached_overlay_suppression(our_pid);
+                            if MOUSE_BUTTONS_DOWN.load(Ordering::Acquire) != 0
+                                && !any_async_mouse_button_down()
+                            {
+                                MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+                                debug_log::note(|| {
+                                    "MOUSE_BUTTONS_RECONCILED cleared=1".to_string()
+                                });
+                            }
+                            check_timer_elevated_leap_block(our_pid);
+                        }
+                        continue;
+                    }
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
 
+            if let Some(pending) = return_verify.take() {
+                if pending.timer_id != 0 {
+                    let _ = KillTimer(None, pending.timer_id);
+                }
+            }
             if watchdog_timer_id != 0 {
                 let _ = KillTimer(None, watchdog_timer_id);
             }
@@ -804,11 +1316,12 @@ impl HookController {
 
     pub fn stop_hooks(&self) {
         let was_active = HOOK_ACTIVE.swap(false, Ordering::SeqCst);
-        if was_active || IS_TRAPPED.load(Ordering::Acquire) {
+        if was_active || load_trap_state().phase != TrapPhase::Idle {
             self.emergency_release();
         }
         HAS_ACTIVE_LINK.store(false, Ordering::Release);
         reset_trapped_runtime_state();
+        clear_post_return_hysteresis();
         LAST_HANDOFF_MS.store(0, Ordering::Relaxed);
         #[cfg(windows)]
         CACHED_OVERLAY_SUPPRESSED.store(false, Ordering::Release);
@@ -829,10 +1342,7 @@ impl HookController {
     }
 }
 
-fn reset_trapped_runtime_state() {
-    IS_TRAPPED.store(false, Ordering::SeqCst);
-    CURSOR_CENTERED.store(false, Ordering::Release);
-    ENGAGE_PENDING.store(false, Ordering::Release);
+fn reset_dwell_and_drag_state() {
     EDGE_DWELL_START.store(0, Ordering::Relaxed);
     EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
     // --- SPEC-25a ---
@@ -841,6 +1351,11 @@ fn reset_trapped_runtime_state() {
     super::dragdrop::set_drag_leap_in_progress(false);
     super::dragdrop::hide_edge_catcher();
     // --- end SPEC-25a ---
+}
+
+fn reset_trapped_runtime_state() {
+    apply_trap_event(TrapEvent::ForceRelease);
+    reset_dwell_and_drag_state();
 }
 
 #[cfg(windows)]
@@ -876,7 +1391,7 @@ fn record_hook_entry(kind: HookKind) -> Option<std::time::Instant> {
         HookKind::Mouse => &LAST_MOUSE_HOOK_US,
     };
     let prev = slot.swap(now, Ordering::Relaxed);
-    if prev != 0 && IS_TRAPPED.load(Ordering::Acquire) {
+    if prev != 0 && load_trap_state().phase == TrapPhase::Trapped {
         let gap_us = now.saturating_sub(prev);
         if gap_us > HOOK_GAP_THRESHOLD_US {
             debug_log::record_event(DebugEvent::HookGap {
@@ -939,7 +1454,8 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     let hook_struct = *(l_param.0 as *const MSLLHOOKSTRUCT);
     let pt = hook_struct.pt;
     let msg = w_param.0 as u32;
-    let is_trapped_now = IS_TRAPPED.load(Ordering::Acquire);
+    let trap_state = load_trap_state();
+    let is_trapped_now = trap_state.phase.is_trapped_like();
     let is_physical = is_physical_mouse_hook_event(hook_struct.flags);
     if should_ignore_injected_mouse_hook_event(
         hook_struct.flags,
@@ -984,7 +1500,28 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
         }
     }
 
-    if IS_TRAPPED.load(Ordering::Acquire) {
+    let trap_state = load_trap_state();
+    if trap_state.phase == TrapPhase::Returning {
+        if msg == WM_MOUSEMOVE {
+            // Suppress local cursor movement until WM_KVM_RETURN_CURSOR finishes
+            // placing the cursor at the seam-entry edge.
+            return Some(LRESULT(1));
+        }
+        if is_physical {
+            if let Some(btn) = button_from_mouse_up_msg(msg) {
+                super::dragdrop::on_target_physical_mouse_up(btn);
+            }
+            if MOUSE_BUTTONS_DOWN.load(Ordering::Relaxed) == 0
+                && (super::dragdrop::is_edge_catcher_visible()
+                    || button_from_mouse_up_msg(msg).is_some())
+            {
+                super::dragdrop::on_hook_mouse_up();
+            }
+        }
+        return None;
+    }
+
+    if trap_state.phase.is_trapped_like() {
         if is_physical
             && button_from_mouse_up_msg(msg).is_some()
             && super::dragdrop::is_local_drag_source_active()
@@ -999,11 +1536,9 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
                 CLAMP_CENTER_X.load(Ordering::Relaxed),
                 CLAMP_CENTER_Y.load(Ordering::Relaxed),
             );
-            if let Some(delta) = trapped_mouse_delta(
-                CURSOR_CENTERED.load(Ordering::Acquire),
-                (pt.x, pt.y),
-                center,
-            ) {
+            if let Some(delta) =
+                trapped_mouse_delta(trap_state.can_emit_trapped_delta(), (pt.x, pt.y), center)
+            {
                 if let Ok(guard) = mouse_delta_sender().try_lock() {
                     if let Some(ref tx) = *guard {
                         let _ = tx.try_send(delta);
@@ -1081,6 +1616,9 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     if super::dragdrop::is_edge_catcher_visible() {
         super::dragdrop::hide_edge_catcher();
     }
+
+    let now_ms = now_millis();
+    maybe_clear_post_return_hysteresis_on_move((pt.x, pt.y), now_ms);
 
     let link_edge = Edge::from_u8(LINK_FROM_EDGE.load(Ordering::Relaxed));
     let deadzone = DEADZONE_PX.load(Ordering::Relaxed);
@@ -1206,7 +1744,7 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     }
 
     if should_debounce_engage_after_handoff(
-        now_millis(),
+        now_ms,
         LAST_HANDOFF_MS.load(Ordering::Relaxed),
         ENGAGE_HANDOFF_DEBOUNCE_MS,
     ) {
@@ -1216,14 +1754,21 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
         return None;
     }
 
+    if check_post_return_hysteresis((pt.x, pt.y), cand.leap_side, now_ms) {
+        EDGE_DWELL_START.store(0, Ordering::Relaxed);
+        EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
+        emit_leap_suppressed_note("return_hysteresis", 0, None);
+        return None;
+    }
+
     let seam_idx = cand.seam_info.as_ref().map(|(i, _, _)| *i).unwrap_or(-1);
     let prev_seam = EDGE_DWELL_SEAM_IDX.swap(seam_idx, Ordering::Relaxed);
     if prev_seam != seam_idx {
         EDGE_DWELL_START.store(0, Ordering::Relaxed);
     }
 
-    if check_dwell_resistance(resistance_ms) {
-        request_engage_leap(
+    if check_dwell_resistance(resistance_ms)
+        && request_engage_leap(
             cand.mx,
             cand.my,
             cand.mw,
@@ -1232,7 +1777,8 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
             cand.entry_edge,
             cand.relative_y,
             cand.seam_info.map(|(_, t, a)| (t, a)),
-        );
+        )
+    {
         return Some(LRESULT(1));
     }
 
@@ -1271,9 +1817,11 @@ fn request_engage_leap(
     entry_edge: Edge,
     relative_y: f32,
     seam_target: Option<(String, i32)>,
-) {
-    IS_TRAPPED.store(true, Ordering::SeqCst);
-    CURSOR_CENTERED.store(false, Ordering::Release);
+) -> bool {
+    let (_, effect) = apply_trap_event(TrapEvent::RequestEngage);
+    let TrapEffect::Accepted { new_gen, .. } = effect else {
+        return false;
+    };
 
     TRAP_MON_X.store(mx, Ordering::Relaxed);
     TRAP_MON_Y.store(my, Ordering::Relaxed);
@@ -1297,7 +1845,6 @@ fn request_engage_leap(
     } else {
         PENDING_ENGAGE_HAS_SEAM.store(false, Ordering::Release);
     }
-    ENGAGE_PENDING.store(true, Ordering::Release);
 
     EDGE_DWELL_START.store(0, Ordering::Relaxed);
     EDGE_DWELL_SEAM_IDX.store(-1, Ordering::Relaxed);
@@ -1314,7 +1861,13 @@ fn request_engage_leap(
         });
     }
 
-    post_hook_thread_message(WM_KVM_ENGAGE);
+    if !post_hook_thread_message_with_param(WM_KVM_ENGAGE, new_gen as usize) {
+        let _ = apply_trap_event(TrapEvent::AbortEngage {
+            expected_gen: new_gen,
+        });
+        return false;
+    }
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1916,10 +2469,25 @@ fn emit_leap_blocked_notice(proc_name: &str) {
 }
 
 #[cfg(windows)]
-unsafe fn block_leap_for_elevated_foreground(fg: HWND, proc_name: &str, log_enabled: bool) {
-    disarm_trapped_in_callback();
-    KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
-    KEY_ALT_DOWN.store(false, Ordering::Relaxed);
+unsafe fn abort_engage_perform(expected_gen: u32) -> bool {
+    let accepted = try_apply_trap_event(TrapEvent::AbortEngage { expected_gen });
+    if accepted {
+        reset_dwell_and_drag_state();
+        MOUSE_BUTTONS_DOWN.store(0, Ordering::Relaxed);
+        KEY_CTRL_DOWN.store(false, Ordering::Relaxed);
+        KEY_ALT_DOWN.store(false, Ordering::Relaxed);
+    }
+    accepted
+}
+
+#[cfg(windows)]
+unsafe fn block_leap_for_elevated_foreground(
+    fg: HWND,
+    proc_name: &str,
+    expected_gen: u32,
+    log_enabled: bool,
+) {
+    let _ = abort_engage_perform(expected_gen);
     if log_enabled {
         debug_log::record_event(DebugEvent::Note {
             ts_us: debug_log::now_us(),
@@ -1992,7 +2560,7 @@ fn is_point_at_active_leap_edge(pt: (i32, i32)) -> bool {
 #[cfg(windows)]
 unsafe fn check_timer_elevated_leap_block(our_pid: u32) {
     let has_active_link = HAS_ACTIVE_LINK.load(Ordering::Acquire);
-    let is_trapped = IS_TRAPPED.load(Ordering::Acquire);
+    let is_trapped = load_trap_state().phase != TrapPhase::Idle;
     if !has_active_link || is_trapped {
         return;
     }
@@ -2128,16 +2696,109 @@ unsafe fn handoff_own_foreground_focus(log_enabled: bool) {
 }
 
 #[cfg(windows)]
-unsafe fn perform_engage_leap() -> bool {
-    if !should_perform_engage(
-        HOOK_ACTIVE.load(Ordering::Relaxed),
-        IS_TRAPPED.load(Ordering::Acquire),
-        ENGAGE_PENDING.swap(false, Ordering::AcqRel),
-    ) {
+unsafe fn set_cursor_to_trap_center(
+    center_x: i32,
+    center_y: i32,
+    reason: &'static str,
+    generation: u32,
+    log_enabled: bool,
+) {
+    let set_res = SetCursorPos(center_x, center_y);
+    let set_ok = set_res.is_ok();
+    let last_err = if set_ok { 0 } else { GetLastError().0 };
+    if log_enabled {
+        let mut actual = POINT::default();
+        let actual_ok = GetCursorPos(&mut actual).is_ok();
+        let (ax, ay) = if actual_ok {
+            (actual.x, actual.y)
+        } else {
+            (i32::MIN, i32::MIN)
+        };
+        debug_log::record_event(DebugEvent::Note {
+            ts_us: debug_log::now_us(),
+            hwnd: debug_log::foreground_hwnd_raw(),
+            text: format!(
+                "TRAP_CENTER_SET reason={reason} center=({center_x},{center_y}) set_ok={} err={last_err} actual=({ax},{ay}) actual_ok={} gen={generation}",
+                u8::from(set_ok),
+                u8::from(actual_ok),
+            ),
+        });
+    }
+}
+
+#[cfg(windows)]
+unsafe fn place_return_cursor_and_complete(rx: i32, ry: i32, expected_gen: u32) -> bool {
+    restore_cursor_visibility();
+    let set_res = SetCursorPos(rx, ry);
+    let set_ok = set_res.is_ok();
+    let last_err = if set_ok { 0 } else { GetLastError().0 };
+    let mut actual = POINT::default();
+    let actual_ok = GetCursorPos(&mut actual).is_ok();
+
+    arm_post_return_hysteresis(
+        rx,
+        ry,
+        Edge::from_u8(RETURN_MAIN_EDGE.load(Ordering::Relaxed)),
+        now_millis(),
+    );
+
+    if debug_log::is_enabled() {
+        let (ax, ay) = if actual_ok {
+            (actual.x, actual.y)
+        } else {
+            (i32::MIN, i32::MIN)
+        };
+        debug_log::record_event(DebugEvent::Note {
+            ts_us: debug_log::now_us(),
+            hwnd: debug_log::foreground_hwnd_raw(),
+            text: format!(
+                "RETURN_PLACED target=({rx},{ry}) set_ok={} err={last_err} actual=({ax},{ay}) actual_ok={} gen={expected_gen}",
+                u8::from(set_ok),
+                u8::from(actual_ok),
+            ),
+        });
+    }
+
+    try_apply_trap_event(TrapEvent::CompleteReturn { expected_gen })
+}
+
+#[cfg(windows)]
+unsafe fn perform_return_cursor() -> Option<(i32, i32, u32)> {
+    loop {
+        let snap = load_trap_state();
+        if snap.phase != TrapPhase::Returning {
+            return None;
+        }
+        let (rx, ry) = unpack_pos(PENDING_RETURN_POS.load(Ordering::Acquire));
+        if place_return_cursor_and_complete(rx, ry, snap.generation) {
+            return Some((rx, ry, snap.generation));
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe fn perform_engage_leap(expected_gen: u32) -> bool {
+    let log_enabled = debug_log::is_enabled();
+    if !HOOK_ACTIVE.load(Ordering::Relaxed) {
+        let _ = abort_engage_perform(expected_gen);
+        return false;
+    }
+    if !try_apply_trap_event(TrapEvent::BeginEngage { expected_gen }) {
+        if log_enabled {
+            let cur = load_trap_state();
+            debug_log::record_event(DebugEvent::Note {
+                ts_us: debug_log::now_us(),
+                hwnd: debug_log::foreground_hwnd_raw(),
+                text: format!(
+                    "ENGAGE_ABORTED reason=stale_before_begin expected_gen={expected_gen} current_phase={} current_gen={}",
+                    cur.phase.as_str(),
+                    cur.generation,
+                ),
+            });
+        }
         return false;
     }
 
-    let log_enabled = debug_log::is_enabled();
     let our_pid = GetCurrentProcessId();
     let is_drag_leap = DRAG_MODE_ENGAGE.load(Ordering::Acquire);
 
@@ -2146,7 +2807,7 @@ unsafe fn perform_engage_leap() -> bool {
         LAST_HANDOFF_MS.load(Ordering::Relaxed),
         ENGAGE_HANDOFF_DEBOUNCE_MS,
     ) {
-        disarm_trapped_in_callback();
+        let _ = abort_engage_perform(expected_gen);
         if log_enabled {
             debug_log::record_event(DebugEvent::Note {
                 ts_us: debug_log::now_us(),
@@ -2160,7 +2821,7 @@ unsafe fn perform_engage_leap() -> bool {
     if !is_drag_leap
         && (MOUSE_BUTTONS_DOWN.load(Ordering::Acquire) != 0 || any_async_mouse_button_down())
     {
-        disarm_trapped_in_callback();
+        let _ = abort_engage_perform(expected_gen);
         if log_enabled {
             debug_log::record_event(DebugEvent::Note {
                 ts_us: debug_log::now_us(),
@@ -2172,8 +2833,7 @@ unsafe fn perform_engage_leap() -> bool {
     }
 
     if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
-        disarm_trapped_in_callback();
-        block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
+        block_leap_for_elevated_foreground(fg, &proc_name, expected_gen, log_enabled);
         return false;
     }
 
@@ -2190,7 +2850,7 @@ unsafe fn perform_engage_leap() -> bool {
 
     if let Some((fg, proc_name)) = check_foreground_overlay_suppresses_leap(our_pid, edge_mon) {
         CACHED_OVERLAY_SUPPRESSED.store(true, Ordering::Release);
-        disarm_trapped_in_callback();
+        let _ = abort_engage_perform(expected_gen);
         if log_enabled {
             LAST_SUPPRESSED_NOTE_MS.store(now_millis(), Ordering::Relaxed);
             debug_log::record_event(DebugEvent::Note {
@@ -2208,13 +2868,12 @@ unsafe fn perform_engage_leap() -> bool {
 
     // Guard again in case handoff changed focus to an elevated window or topmost overlay.
     if let Some((fg, proc_name)) = check_foreground_blocks_leap(our_pid) {
-        disarm_trapped_in_callback();
-        block_leap_for_elevated_foreground(fg, &proc_name, log_enabled);
+        block_leap_for_elevated_foreground(fg, &proc_name, expected_gen, log_enabled);
         return false;
     }
     if let Some((fg, proc_name)) = check_foreground_overlay_suppresses_leap(our_pid, edge_mon) {
         CACHED_OVERLAY_SUPPRESSED.store(true, Ordering::Release);
-        disarm_trapped_in_callback();
+        let _ = abort_engage_perform(expected_gen);
         if log_enabled {
             LAST_SUPPRESSED_NOTE_MS.store(now_millis(), Ordering::Relaxed);
             debug_log::record_event(DebugEvent::Note {
@@ -2228,6 +2887,27 @@ unsafe fn perform_engage_leap() -> bool {
         return false;
     }
     CACHED_OVERLAY_SUPPRESSED.store(false, Ordering::Release);
+
+    // Atomic commit gate: if a RETURN or release raced while we ran Win32 checks
+    // or handoff, abort BEFORE touching ClipCursor/SetCursorPos/ShowCursor/CursorEnter.
+    if !HOOK_ACTIVE.load(Ordering::Relaxed)
+        || !try_apply_trap_event(TrapEvent::CommitEngage { expected_gen })
+    {
+        restore_cursor_visibility();
+        if log_enabled {
+            let cur = load_trap_state();
+            debug_log::record_event(DebugEvent::Note {
+                ts_us: debug_log::now_us(),
+                hwnd: debug_log::foreground_hwnd_raw(),
+                text: format!(
+                    "ENGAGE_ABORTED reason=return_or_release_raced expected_gen={expected_gen} current_phase={} current_gen={}",
+                    cur.phase.as_str(),
+                    cur.generation,
+                ),
+            });
+        }
+        return false;
+    }
 
     let center_x = CLAMP_CENTER_X.load(Ordering::Relaxed);
     let center_y = CLAMP_CENTER_Y.load(Ordering::Relaxed);
@@ -2245,8 +2925,14 @@ unsafe fn perform_engage_leap() -> bool {
         bottom: my + mh,
     };
     let _ = ClipCursor(Some(&clip_rect));
-    let _ = SetCursorPos(center_x, center_y);
-    CURSOR_CENTERED.store(true, Ordering::Release);
+    set_cursor_to_trap_center(
+        center_x,
+        center_y,
+        "engage_perform",
+        expected_gen,
+        log_enabled,
+    );
+    let _ = apply_trap_event(TrapEvent::MarkCentered { expected_gen });
 
     for _ in 0..16 {
         if ShowCursor(false) < 0 {
@@ -2374,7 +3060,7 @@ unsafe fn handle_keyboard_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -
     let extended = (kbd.flags.0 & LLKHF_EXTENDED.0) != 0;
     let injected = (kbd.flags.0 & (LLKHF_INJECTED.0 | 0x02)) != 0;
     let hook_active = HOOK_ACTIVE.load(Ordering::Relaxed);
-    let trapped = IS_TRAPPED.load(Ordering::Acquire);
+    let trapped = load_trap_state().phase.is_trapped_like();
     let log_enabled = debug_log::is_enabled();
     let ts_us = if log_enabled { debug_log::now_us() } else { 0 };
     let hwnd = if log_enabled {
@@ -2557,11 +3243,215 @@ mod tests {
     }
 
     #[test]
-    fn should_perform_engage_requires_active_trapped_and_pending() {
-        assert!(should_perform_engage(true, true, true));
-        assert!(!should_perform_engage(false, true, true));
-        assert!(!should_perform_engage(true, false, true));
-        assert!(!should_perform_engage(true, true, false));
+    fn trap_state_machine_return_wins_over_pending_engage_and_blocks_late_center() {
+        let s0 = TrapState::new();
+        assert_eq!(s0.phase, TrapPhase::Idle);
+        assert!(!s0.can_emit_trapped_delta());
+        assert!(!s0.can_recenter_cursor());
+
+        // RequestEngage: Idle -> EngagePending(gen=1)
+        let (s1, eff1) = s0.step(TrapEvent::RequestEngage);
+        assert_eq!(
+            eff1,
+            TrapEffect::Accepted {
+                prev_phase: TrapPhase::Idle,
+                new_gen: 1,
+            }
+        );
+        assert_eq!(s1.phase, TrapPhase::EngagePending);
+        assert!(!s1.can_emit_trapped_delta());
+        assert!(!s1.can_recenter_cursor());
+
+        // Case A: Return arrives while WM_KVM_ENGAGE is still queued (before BeginEngage).
+        let (s2, eff2) = s1.step(TrapEvent::ReturnRequested);
+        assert_eq!(
+            eff2,
+            TrapEffect::Accepted {
+                prev_phase: TrapPhase::EngagePending,
+                new_gen: 2,
+            }
+        );
+        assert_eq!(s2.phase, TrapPhase::Returning);
+        assert!(!s2.can_recenter_cursor());
+
+        // Stale WM_KVM_ENGAGE(gen=1) is rejected; cannot commit trap or center cursor.
+        let (s2b, eff_begin) = s2.step(TrapEvent::BeginEngage { expected_gen: 1 });
+        assert_eq!(eff_begin, TrapEffect::Rejected);
+        assert_eq!(s2b, s2);
+        let (s2c, eff_commit) = s2.step(TrapEvent::CommitEngage { expected_gen: 1 });
+        assert_eq!(eff_commit, TrapEffect::Rejected);
+        assert_eq!(s2c, s2);
+
+        // CompleteReturn(gen=2) finishes placing cursor at seam edge -> Idle(gen=3).
+        let (s3, eff3) = s2.step(TrapEvent::CompleteReturn { expected_gen: 2 });
+        assert_eq!(
+            eff3,
+            TrapEffect::Accepted {
+                prev_phase: TrapPhase::Returning,
+                new_gen: 3,
+            }
+        );
+        assert_eq!(s3.phase, TrapPhase::Idle);
+        assert!(!s3.can_recenter_cursor());
+    }
+
+    #[test]
+    fn trap_state_machine_return_during_inflight_engage_prevents_center_and_abort_clobber() {
+        let (s1, _) = TrapState::new().step(TrapEvent::RequestEngage);
+        // Hook thread enters perform_engage_leap(gen=1) and starts slow focus handoff.
+        let (s2, eff_begin) = s1.step(TrapEvent::BeginEngage { expected_gen: 1 });
+        assert!(matches!(eff_begin, TrapEffect::Accepted { .. }));
+
+        // Concurrent CursorReturn arrives on Tokio thread during focus handoff.
+        let (s3, eff_ret) = s2.step(TrapEvent::ReturnRequested);
+        assert_eq!(s3.phase, TrapPhase::Returning);
+        assert_eq!(
+            eff_ret,
+            TrapEffect::Accepted {
+                prev_phase: TrapPhase::EngagePending,
+                new_gen: 2,
+            }
+        );
+
+        // Hook thread reaches CommitEngage(gen=1) OR AbortEngage(gen=1): BOTH must be rejected!
+        let (s3a, eff_commit) = s3.step(TrapEvent::CommitEngage { expected_gen: 1 });
+        assert_eq!(eff_commit, TrapEffect::Rejected);
+        assert_eq!(s3a.phase, TrapPhase::Returning);
+        let (s3b, eff_abort) = s3.step(TrapEvent::AbortEngage { expected_gen: 1 });
+        assert_eq!(eff_abort, TrapEffect::Rejected);
+        assert_eq!(s3b.phase, TrapPhase::Returning);
+
+        // Late MarkCentered(gen=1) is also rejected when not Trapped(gen=1).
+        let (s3c, eff_center) = s3.step(TrapEvent::MarkCentered { expected_gen: 1 });
+        assert_eq!(eff_center, TrapEffect::Rejected);
+        assert!(!s3c.cursor_centered);
+    }
+
+    #[test]
+    fn trap_state_machine_full_engage_then_return_ordering() {
+        let (s1, _) = TrapState::new().step(TrapEvent::RequestEngage);
+        let (s2, _) = s1.step(TrapEvent::BeginEngage { expected_gen: 1 });
+        let (s3, eff_commit) = s2.step(TrapEvent::CommitEngage { expected_gen: 1 });
+        assert!(matches!(eff_commit, TrapEffect::Accepted { .. }));
+        assert_eq!(s3.phase, TrapPhase::Trapped);
+        assert!(!s3.can_emit_trapped_delta());
+        assert!(s3.can_recenter_cursor());
+
+        let (s4, eff_center) = s3.step(TrapEvent::MarkCentered { expected_gen: 1 });
+        assert!(matches!(eff_center, TrapEffect::Accepted { .. }));
+        assert!(s4.can_emit_trapped_delta());
+
+        // Second RequestEngage while Trapped is rejected.
+        let (_, eff_dup) = s4.step(TrapEvent::RequestEngage);
+        assert_eq!(eff_dup, TrapEffect::Rejected);
+
+        // ReturnRequested transitions Trapped -> Returning (clears cursor_centered).
+        let (s5, eff_ret) = s4.step(TrapEvent::ReturnRequested);
+        assert_eq!(
+            eff_ret,
+            TrapEffect::Accepted {
+                prev_phase: TrapPhase::Trapped,
+                new_gen: 2,
+            }
+        );
+        assert_eq!(s5.phase, TrapPhase::Returning);
+        assert!(!s5.cursor_centered);
+        assert!(!s5.can_emit_trapped_delta());
+        assert!(!s5.can_recenter_cursor());
+
+        // New RequestEngage while Returning is rejected until CompleteReturn runs.
+        let (_, eff_reengage) = s5.step(TrapEvent::RequestEngage);
+        assert_eq!(eff_reengage, TrapEffect::Rejected);
+
+        // CompleteReturn(gen=2) -> Idle(gen=3).
+        let (s6, eff_done) = s5.step(TrapEvent::CompleteReturn { expected_gen: 2 });
+        assert!(matches!(eff_done, TrapEffect::Accepted { .. }));
+        assert_eq!(s6.phase, TrapPhase::Idle);
+
+        // Idle + ReturnRequested (late/duplicate after watchdog) is rejected (!was_trapped).
+        let (s7, eff_idle_ret) = s6.step(TrapEvent::ReturnRequested);
+        assert_eq!(eff_idle_ret, TrapEffect::Rejected);
+        assert_eq!(s7.phase, TrapPhase::Idle);
+    }
+
+    #[test]
+    fn post_return_hysteresis_blocks_bounce_and_clears_on_escape_or_timeout() {
+        let ret_pos = (2, 400);
+        // Immediate bounce at same edge (e.g. 2 px away, 80 ms later) is suppressed.
+        assert_eq!(
+            evaluate_post_return_hysteresis(
+                true,
+                1080,
+                1000,
+                ret_pos,
+                Edge::Left,
+                (4, 410),
+                Edge::Left,
+                RETURN_REARM_COOLDOWN_MS,
+                RETURN_REARM_ESCAPE_PX,
+            ),
+            PostReturnHysteresis::Suppress
+        );
+        // Sliding vertically along the edge without moving into Main PC stays suppressed.
+        assert_eq!(
+            evaluate_post_return_hysteresis(
+                true,
+                1100,
+                1000,
+                ret_pos,
+                Edge::Left,
+                (2, 500),
+                Edge::Left,
+                RETURN_REARM_COOLDOWN_MS,
+                RETURN_REARM_ESCAPE_PX,
+            ),
+            PostReturnHysteresis::Suppress
+        );
+        // Moving >= 16 px into Main PC clears hysteresis early.
+        assert_eq!(
+            evaluate_post_return_hysteresis(
+                true,
+                1040,
+                1000,
+                ret_pos,
+                Edge::Left,
+                (18, 400),
+                Edge::Left,
+                RETURN_REARM_COOLDOWN_MS,
+                RETURN_REARM_ESCAPE_PX,
+            ),
+            PostReturnHysteresis::ClearedByEscape
+        );
+        // Waiting >= 150 ms clears hysteresis by timeout.
+        assert_eq!(
+            evaluate_post_return_hysteresis(
+                true,
+                1150,
+                1000,
+                ret_pos,
+                Edge::Left,
+                (2, 400),
+                Edge::Left,
+                RETURN_REARM_COOLDOWN_MS,
+                RETURN_REARM_ESCAPE_PX,
+            ),
+            PostReturnHysteresis::ClearedByTimeout
+        );
+        // Different edge clears hysteresis immediately.
+        assert_eq!(
+            evaluate_post_return_hysteresis(
+                true,
+                1010,
+                1000,
+                ret_pos,
+                Edge::Left,
+                (1918, 400),
+                Edge::Right,
+                RETURN_REARM_COOLDOWN_MS,
+                RETURN_REARM_ESCAPE_PX,
+            ),
+            PostReturnHysteresis::ClearedByEdgeChange
+        );
     }
 
     fn candidate(hwnd: isize, pid: u32, elevation: ProcessElevation) -> WindowCandidateInfo {
