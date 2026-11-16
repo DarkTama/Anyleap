@@ -338,6 +338,8 @@ mod imp {
     ) -> Option<String> {
         use std::os::windows::process::CommandExt;
         let out = std::process::Command::new(adb)
+            .env("ADB_MDNS_OPENSCREEN", "0")
+            .env("ADB_MDNS_AUTO_CONNECT", "0")
             .args(["-s", serial, "shell"])
             .args(shell_args)
             .creation_flags(CREATE_NO_WINDOW)
@@ -435,6 +437,8 @@ mod imp {
         };
 
         let mut cmd = std::process::Command::new(adb);
+        cmd.env("ADB_MDNS_OPENSCREEN", "0")
+            .env("ADB_MDNS_AUTO_CONNECT", "0");
         cmd.args(["-s", serial, "shell", "input"]);
         if let Some(did) = display_id {
             cmd.args(["-d", &did.to_string()]);

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DeviceRow, SavedDeviceRow } from "./DeviceRow";
 import { useAppStore } from "@/store/useAppStore";
+import { adbErrorDeduper, surfaceAdbError } from "@/lib/adbError";
 import { refreshAndReconnectDevices } from "@/lib/deviceSync";
 import { buildRows } from "@/lib/deviceStatus";
 
@@ -17,10 +18,11 @@ export function DevicesTab() {
   async function refresh() {
     setRefreshing(true);
     setError(null);
+    adbErrorDeduper.reset();
     try {
       await refreshAndReconnectDevices({ silentRepair: true });
     } catch (e) {
-      setError(String(e));
+      surfaceAdbError(e, setError);
     } finally {
       setRefreshing(false);
     }

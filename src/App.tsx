@@ -24,7 +24,8 @@ import {
   setPhoneToggle,
 } from "@/lib/tauri";
 import { MSG_NEEDS_REPAIR, resolveDeviceNickname, resolveDeviceTarget } from "@/lib/deviceStatus";
-import { refreshAndReconnectDevices, syncDevicesAndMigrate } from "@/lib/deviceSync";
+import { surfaceAdbError } from "@/lib/adbError";
+import { refreshAndReconnectDevices } from "@/lib/deviceSync";
 import type { PhoneNotification } from "@/lib/types";
 import {
   isPermissionGranted,
@@ -231,8 +232,6 @@ function App() {
         }, 4000);
       }),
     ];
-    syncDevicesAndMigrate()
-      .catch((e) => setError(String(e)));
     listSessions()
       .then(setSessions)
       .catch(() => {});
@@ -250,12 +249,14 @@ function App() {
       const saved = await listSaved().catch(() => []);
       if (cancelled) return;
       setSavedDevices(saved);
-      await refreshAndReconnectDevices({ silentRepair: true }).catch(() => {});
+      await refreshAndReconnectDevices({ silentRepair: true }).catch((e) => {
+        if (!cancelled) surfaceAdbError(e, setError);
+      });
     })();
     return () => {
       cancelled = true;
     };
-  }, [setSavedDevices]);
+  }, [setSavedDevices, setError]);
 
   // Load the persisted control-bar config on launch.
   useEffect(() => {

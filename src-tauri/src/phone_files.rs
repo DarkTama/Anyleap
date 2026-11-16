@@ -609,7 +609,8 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
 }
 
 async fn run_adb_shell(app: &AppHandle, serial: &str, shell_cmd: &str) -> Result<String, String> {
-    let out = adb_cmd(app)?
+    let out = adb_cmd(app)
+        .await?
         .args(["-s", serial, "shell", shell_cmd])
         .output()
         .await
@@ -647,7 +648,8 @@ pub async fn pull_device_file(
     let final_path = unique_dest_path(dest_dir_path, &filename);
     let final_str = final_path.to_string_lossy().to_string();
 
-    let out = adb_cmd(&app)?
+    let out = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "pull", &norm, &final_str])
         .output()
         .await
@@ -677,7 +679,8 @@ pub async fn push_to_device(
             return Err(format!("Local path does not exist: {local}"));
         }
         let target = format!("{norm_dir}/");
-        let out = adb_cmd(&app)?
+        let out = adb_cmd(&app)
+            .await?
             .args(["-s", &serial, "push", &local, &target])
             .output()
             .await
@@ -705,7 +708,8 @@ pub async fn delete_device_path(
         return Err("Cannot delete internal storage root".to_string());
     }
     let cmd = format!("rm -r {}", sh_quote(&norm));
-    let out = adb_cmd(&app)?
+    let out = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "shell", &cmd])
         .output()
         .await
@@ -800,7 +804,8 @@ pub async fn cache_device_photo(
     }
 
     let target_str = target.to_string_lossy().to_string();
-    let out = adb_cmd(&app)?
+    let out = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "pull", &norm, &target_str])
         .output()
         .await
@@ -822,7 +827,8 @@ pub async fn get_device_notifications(
     serial: String,
 ) -> Result<Vec<PhoneNotification>, String> {
     validate_serial(&serial)?;
-    let out = adb_cmd(&app)?
+    let out = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
