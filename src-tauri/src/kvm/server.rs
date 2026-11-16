@@ -2,8 +2,8 @@ use super::files::send_image;
 use super::identity::{ct_eq, peer_fingerprint, server_config, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
 use super::protocol::{
-    decode_delta, read_frame, read_frame_capped, write_frame, KvmPacket, Outbound, TransferEvent,
-    UdpMouseDelta,
+    decode_delta, read_frame_capped, read_frame_skip_unknown, write_frame, KvmPacket, Outbound,
+    TransferEvent, UdpMouseDelta,
 };
 use rand::{rngs::OsRng, Rng};
 use std::net::SocketAddr;
@@ -503,7 +503,7 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
         let mut disconnected_by_server = false;
         loop {
             tokio::select! {
-                res = read_frame::<_, KvmPacket>(&mut recv) => match res {
+                res = read_frame_skip_unknown::<_, KvmPacket>(&mut recv) => match res {
                     Ok(Some(packet)) => {
                         if matches!(packet, KvmPacket::SessionDisconnect) {
                             break;
