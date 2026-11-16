@@ -80,3 +80,11 @@ Internal code names (`kvm`, `receiver`, `controller`, `hooks`, `KvmStatus`, etc.
   - Turning `allow_control` OFF preserves active controller hooks and outgoing client link.
   - `kvm_forget_peer` and role-aware `kvm_disconnect_peer` close active sessions in both Main PC and Linked PC roles.
 - **Quality gates:** `cargo test --manifest-path src-tauri/Cargo.toml`, `cargo check --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`.
+
+## 7. Test-Only Hook: Tagged Injected Mouse Input
+
+The two-PC soak tooling (`scripts/e2e/kvm-soak.ps1`) drives the Main PC cursor with `SendInput`, which the low-level mouse hook normally ignores (`LLMHF_INJECTED` / `LLMHF_LOWER_IL_INJECTED`) while not trapped. To let the soak engage leaps without hardware, the hook accepts *tagged* injected moves as physical, only when explicitly opted in:
+
+- **Flag file:** `%LOCALAPPDATA%id.co.dak.anyleape2e-accept-injected` must exist. It is checked on the hook thread at hook start and on every watchdog tick (`WATCHDOG_INTERVAL_MS`) into a cached `AtomicBool`, never inside the hook callback. Changes are logged as `E2E_INJECTED_INPUT enabled=<0|1>`. Without the file the hook is unchanged; there is no env var or settings UI.
+- **Tag:** an event qualifies only if `LLMHF_INJECTED` is set and `dwExtraInfo == ANYLEAP_E2E_INPUT_TAG` (`0x414E_5945_3245_4531`). AnyLeap's own injections use `dwExtraInfo: 0` and are never accepted. Lower-IL injected events qualify only when `LLMHF_INJECTED` is also set.
+- Logic lives in `counts_as_physical` (`src-tauri/src/kvm/hooks.rs`) and is covered by unit tests.
