@@ -282,13 +282,14 @@ pub(crate) async fn adb_cmd(
 
 /// Locate the scrcpy-server jar across production (bundled resource) and dev layouts.
 fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    // Production: bundled as a resource under scrcpy/.
-    if let Ok(p) = app
-        .path()
-        .resolve("scrcpy/scrcpy-server", BaseDirectory::Resource)
-    {
-        if p.exists() {
-            return Some(p);
+    // Production: bundled as a resource under scrcpy-res/ (kept out of scrcpy/ so
+    // it does not collide with the scrcpy sidecar binary on Linux/macOS).
+    // Keep scrcpy/scrcpy-server as a fallback for older installs.
+    for rel in ["scrcpy-res/scrcpy-server", "scrcpy/scrcpy-server"] {
+        if let Ok(p) = app.path().resolve(rel, BaseDirectory::Resource) {
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
     // Dev / fallback: relative to the executable.
@@ -296,6 +297,8 @@ fn resolve_server_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         if let Some(dir) = exe.parent() {
             let candidates = [
                 dir.join("scrcpy-server"),
+                dir.join("scrcpy-res").join("scrcpy-server"),
+                // Fallback for older installs that placed the jar under scrcpy/.
                 dir.join("scrcpy").join("scrcpy-server"),
                 // dev: src-tauri/target/debug -> src-tauri/binaries/scrcpy-server
                 dir.join("..")

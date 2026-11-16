@@ -49,6 +49,8 @@ fn bundled_paths() -> (PathBuf, PathBuf, PathBuf) {
         let dir = PathBuf::from(local).join("AnyLeap");
         adb_candidates.push(dir.join("adb.exe"));
         scrcpy_candidates.push(dir.join("scrcpy.exe"));
+        server_candidates.push(dir.join("scrcpy-res").join("scrcpy-server"));
+        // Fallback for older installs that placed the jar under scrcpy/.
         server_candidates.push(dir.join("scrcpy").join("scrcpy-server"));
         server_candidates.push(dir.join("scrcpy-server"));
     }
