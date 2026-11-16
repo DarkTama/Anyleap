@@ -1,7 +1,8 @@
 use super::identity::{client_config, peer_fingerprint, Identity, TrustStore, TrustedPeer};
 use super::monitors::MonitorDisplay;
 use super::protocol::{
-    encode_delta, read_frame, write_frame, KvmPacket, TransferEvent, UdpMouseDelta,
+    encode_delta, read_frame, read_frame_skip_unknown, write_frame, KvmPacket, TransferEvent,
+    UdpMouseDelta,
 };
 // --- SPEC-25b ---
 use super::protocol::{decode_audio_datagram, AudioDatagram};
@@ -194,7 +195,7 @@ impl KvmClientHandle {
             conn.stable_id(),
         );
         tokio::spawn(async move {
-            while let Ok(Some(packet)) = read_frame::<_, KvmPacket>(&mut recv).await {
+            while let Ok(Some(packet)) = read_frame_skip_unknown::<_, KvmPacket>(&mut recv).await {
                 if let KvmPacket::TransferCancel { ref id } = packet {
                     super::debug_log::note(|| format!("TRANSFER_CANCEL_RECV id={id}"));
                     if let Some(meta) =

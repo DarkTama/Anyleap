@@ -289,6 +289,14 @@ function App() {
           setHudNotice(null);
         }, 4000);
       }),
+      listen<{ proc?: string }>("kvm-input-blocked", (e) => {
+        const proc = e.payload?.proc || "unknown";
+        setToast(
+          `Linked PC: input blocked by an administrator window (${proc}). Run AnyLeap as administrator on the Linked PC to control admin apps. UAC prompts can't be controlled remotely.`,
+        );
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast(null), 7000);
+      }),
     ];
     listSessions()
       .then(setSessions)

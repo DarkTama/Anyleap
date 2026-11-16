@@ -2179,6 +2179,20 @@ unsafe fn query_own_elevation() -> ProcessElevation {
     elev
 }
 
+/// Executable name of the current foreground window's process (`unknown` if unavailable).
+#[cfg(windows)]
+pub fn foreground_process_name() -> String {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return "unknown".to_string();
+        }
+        let mut fg_pid = 0u32;
+        let _ = GetWindowThreadProcessId(fg, Some(&mut fg_pid));
+        query_process_info(fg_pid).1
+    }
+}
+
 #[cfg(windows)]
 unsafe fn query_process_info(pid: u32) -> (ProcessElevation, String) {
     if pid == 0 {

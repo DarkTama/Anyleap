@@ -1882,6 +1882,14 @@ async fn start_server_inner(
     let rx_state = Arc::new(Mutex::new(ReceiverSessionState::new(monitors.clone())));
     let rx_state_pkt = Arc::clone(&rx_state);
     let pkt_out_tx = outgoing_tx.clone();
+    {
+        let blocked_tx = outgoing_tx.clone();
+        injector::set_input_blocked_sink(move |proc_name| {
+            let _ = blocked_tx.send(Outbound::Packet(KvmPacket::InputBlocked {
+                foreground_process: proc_name,
+            }));
+        });
+    }
 
     let app_h = app_handle.clone();
     tokio::spawn(async move {
@@ -2624,7 +2632,10 @@ async fn start_server_inner(
                             emit_pos,
                             buttons_mask,
                         } => {
-                            injector::set_cursor_position(pos.0, pos.1);
+                            if !injector::inject_mouse_move_absolute(pos.0, pos.1) {
+                                // Never freeze the cursor: fall back to a plain warp.
+                                injector::set_cursor_position(pos.0, pos.1);
+                            }
                             injector::maybe_nudge_first_delta_after_unlock();
                             // --- SPEC-25a ---
                             if buttons_mask != 0 {
@@ -3072,6 +3083,15 @@ pub async fn kvm_connect_peer(
                     super::open_on_linked::handle_open_file_packet(&app_h, &transfer_id);
                 }
                 // --- end SPEC-25c ---
+                KvmPacket::InputBlocked { foreground_process } => {
+                    super::debug_log::note(|| {
+                        format!("INPUT_BLOCKED_RECV side=main fg_process={foreground_process}")
+                    });
+                    let _ = app_h.emit(
+                        "kvm-input-blocked",
+                        serde_json::json!({ "proc": foreground_process }),
+                    );
+                }
                 // --- SPEC-25b ---
                 KvmPacket::AudioActivity { active } => {
                     super::media_keys::record_linked_audio_activity(active);

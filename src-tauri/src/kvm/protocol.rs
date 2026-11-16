@@ -158,6 +158,10 @@ pub enum KvmPacket {
     AudioActivity {
         active: bool,
     },
+    /// Linked -> Main: receiver `SendInput` was rejected (UIPI, elevated foreground window).
+    InputBlocked {
+        foreground_process: String,
+    },
     MediaKey {
         vk: u16,
         is_down: bool,
@@ -439,6 +443,18 @@ where
     R: tokio::io::AsyncRead + Unpin,
     T: serde::de::DeserializeOwned,
 {
+    let Some(body) = read_frame_body(r, max).await? else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(std::io::Error::other)
+}
+
+async fn read_frame_body<R>(r: &mut R, max: usize) -> std::io::Result<Option<Vec<u8>>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     use tokio::io::AsyncReadExt;
     let mut len = [0u8; 4];
     match r.read_exact(&mut len).await {
@@ -452,9 +468,28 @@ where
     }
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).await?;
-    serde_json::from_slice(&body)
-        .map(Some)
-        .map_err(std::io::Error::other)
+    Ok(Some(body))
+}
+
+/// Like `read_frame` but a well-framed body that fails to deserialize (for example a
+/// packet variant from a newer peer) is logged and skipped instead of ending the session.
+pub async fn read_frame_skip_unknown<R, T>(r: &mut R) -> std::io::Result<Option<T>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: serde::de::DeserializeOwned,
+{
+    loop {
+        let Some(body) = read_frame_body(r, MAX_FRAME).await? else {
+            return Ok(None);
+        };
+        match serde_json::from_slice(&body) {
+            Ok(v) => return Ok(Some(v)),
+            Err(e) => {
+                super::debug_log::note(|| format!("PACKET_UNKNOWN_SKIPPED err={e}"));
+                eprintln!("[KVM] skipping unrecognized packet: {e}");
+            }
+        }
+    }
 }
 
 /// Mouse delta datagram: `dx: i32, dy: i32, seq: u32`, little-endian.
@@ -800,4 +835,36 @@ mod tests {
         }
     }
     // --- end SPEC-25a ---
+
+    #[test]
+    fn input_blocked_round_trips() {
+        let p = KvmPacket::InputBlocked {
+            foreground_process: "taskmgr.exe".into(),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<KvmPacket>(&json).unwrap(), p);
+    }
+
+    #[tokio::test]
+    async fn unknown_packet_variant_is_skipped() {
+        use tokio::io::AsyncWriteExt;
+        let (mut a, mut b) = tokio::io::duplex(4096);
+        let unknown = br#"{"type":"FutureThing","payload":{"x":1}}"#;
+        a.write_all(&(unknown.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        a.write_all(unknown).await.unwrap();
+        write_frame(&mut a, &KvmPacket::SessionDisconnect)
+            .await
+            .unwrap();
+        drop(a);
+        let first = read_frame_skip_unknown::<_, KvmPacket>(&mut b)
+            .await
+            .unwrap();
+        assert_eq!(first, Some(KvmPacket::SessionDisconnect));
+        let end = read_frame_skip_unknown::<_, KvmPacket>(&mut b)
+            .await
+            .unwrap();
+        assert_eq!(end, None);
+    }
 }

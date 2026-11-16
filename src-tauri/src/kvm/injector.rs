@@ -196,6 +196,120 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
     None
 }
 
+/// Minimum spacing between blocked-input reports.
+const INPUT_BLOCKED_REPORT_INTERVAL_MS: u64 = 2000;
+
+/// Pure rate limiter: returns true (and records `now_ms`) when a report is due.
+fn rate_limit_allows(last_ms: &mut Option<u64>, now_ms: u64, interval_ms: u64) -> bool {
+    match *last_ms {
+        Some(prev) if now_ms.saturating_sub(prev) < interval_ms => false,
+        _ => {
+            *last_ms = Some(now_ms);
+            true
+        }
+    }
+}
+
+type InputBlockedSink = Box<dyn Fn(String) + Send + Sync>;
+
+static INPUT_BLOCKED_SINK: Mutex<Option<InputBlockedSink>> = Mutex::new(None);
+static INPUT_BLOCKED_LAST_MS: Mutex<Option<u64>> = Mutex::new(None);
+
+/// Registers where blocked-input reports go (the receiver's link to the Main PC).
+pub fn set_input_blocked_sink(sink: impl Fn(String) + Send + Sync + 'static) {
+    if let Ok(mut g) = INPUT_BLOCKED_SINK.lock() {
+        *g = Some(Box::new(sink));
+    }
+}
+
+#[cfg(windows)]
+fn foreground_process_name() -> String {
+    super::hooks::foreground_process_name()
+}
+
+#[cfg(not(windows))]
+fn foreground_process_name() -> String {
+    "unknown".to_string()
+}
+
+/// Called when a receiver `SendInput` returned 0 (typically UIPI: elevated foreground
+/// window). Rate-limited to one report per 2 s: logs and notifies the Main PC.
+pub fn note_input_blocked(kind: &str) {
+    let now_ms = super::debug_log::now_us() / 1000;
+    let due = INPUT_BLOCKED_LAST_MS
+        .lock()
+        .map(|mut last| rate_limit_allows(&mut last, now_ms, INPUT_BLOCKED_REPORT_INTERVAL_MS))
+        .unwrap_or(false);
+    if !due {
+        return;
+    }
+    let proc_name = foreground_process_name();
+    super::debug_log::note(|| format!("INPUT_BLOCKED_UIPI kind={kind} fg_process={proc_name}"));
+    if let Ok(g) = INPUT_BLOCKED_SINK.lock() {
+        if let Some(sink) = g.as_ref() {
+            sink(proc_name);
+        }
+    }
+}
+
+/// Normalizes a virtual-desktop pixel to the 0..=65535 absolute range expected by
+/// `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`, rounded so the round-trip lands
+/// on the exact pixel. Out-of-range input is clamped to the virtual screen.
+pub fn normalize_virtual_desk(x: i32, y: i32, vx: i32, vy: i32, vw: i32, vh: i32) -> (i32, i32) {
+    fn axis(v: i32, origin: i32, size: i32) -> i32 {
+        if size <= 1 {
+            return 0;
+        }
+        let span = (size - 1) as i64;
+        let rel = (v as i64 - origin as i64).clamp(0, span);
+        ((rel * 65535 + span / 2) / span) as i32
+    }
+    (axis(x, vx, vw), axis(y, vy, vh))
+}
+
+/// Moves the cursor via a real absolute `SendInput` move so shell surfaces see hover.
+/// Returns false when the input was rejected (blocked by UIPI or no input desktop).
+pub fn inject_mouse_move_absolute(x: i32, y: i32) -> bool {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+            SM_YVIRTUALSCREEN,
+        };
+        let (nx, ny) = normalize_virtual_desk(
+            x,
+            y,
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        );
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: nx,
+                    dy: ny,
+                    mouseData: 0,
+                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        if SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 0 {
+            note_input_blocked("move");
+            return false;
+        }
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (x, y);
+        false
+    }
+}
+
 pub fn inject_mouse_delta(dx: i32, dy: i32) {
     #[cfg(windows)]
     unsafe {
@@ -212,7 +326,9 @@ pub fn inject_mouse_delta(dx: i32, dy: i32) {
                 },
             },
         };
-        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        if SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 0 {
+            note_input_blocked("move_rel");
+        }
     }
 }
 
@@ -250,6 +366,9 @@ pub fn inject_mouse_button(button: u8, is_down: bool) -> (u32, u32) {
             },
         };
         let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        if sent == 0 {
+            note_input_blocked("button");
+        }
         let err = if sent == 0 {
             windows::Win32::Foundation::GetLastError().0
         } else {
@@ -280,7 +399,9 @@ pub fn inject_mouse_wheel(delta: i32) {
                 },
             },
         };
-        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        if SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 0 {
+            note_input_blocked("wheel");
+        }
     }
 }
 
@@ -311,6 +432,9 @@ pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) 
             },
         };
         let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        if sent == 0 {
+            note_input_blocked("key");
+        }
         let err = if sent == 0 {
             windows::Win32::Foundation::GetLastError().0
         } else {
@@ -328,6 +452,58 @@ pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_primary_monitor_edges_and_round_trip() {
+        let (vx, vy, vw, vh) = (0, 0, 1920, 1080);
+        assert_eq!(normalize_virtual_desk(0, 0, vx, vy, vw, vh), (0, 0));
+        assert_eq!(
+            normalize_virtual_desk(1919, 1079, vx, vy, vw, vh),
+            (65535, 65535)
+        );
+        for x in [0, 1, 500, 959, 1918, 1919] {
+            let (nx, _) = normalize_virtual_desk(x, 0, vx, vy, vw, vh);
+            let back = (nx as i64 * (vw as i64 - 1) + 32767) / 65535;
+            assert_eq!(back, x as i64);
+        }
+    }
+
+    #[test]
+    fn normalize_negative_origin_virtual_desktop() {
+        let (vx, vy, vw, vh) = (-1920, -200, 3840, 1280);
+        assert_eq!(normalize_virtual_desk(-1920, -200, vx, vy, vw, vh), (0, 0));
+        assert_eq!(
+            normalize_virtual_desk(1919, 1079, vx, vy, vw, vh),
+            (65535, 65535)
+        );
+        let (nx, ny) = normalize_virtual_desk(0, 0, vx, vy, vw, vh);
+        assert_eq!(nx, ((1920i64 * 65535 + 1919) / 3839) as i32);
+        assert_eq!(ny, ((200i64 * 65535 + 639) / 1279) as i32);
+        for x in [-1920, -1919, -1, 0, 1, 1919] {
+            let (nx, _) = normalize_virtual_desk(x, 0, vx, vy, vw, vh);
+            let back = (nx as i64 * (vw as i64 - 1) + 32767) / 65535 + vx as i64;
+            assert_eq!(back, x as i64);
+        }
+    }
+
+    #[test]
+    fn normalize_clamps_and_handles_degenerate_size() {
+        assert_eq!(
+            normalize_virtual_desk(-5000, 9999, 0, 0, 100, 100),
+            (0, 65535)
+        );
+        assert_eq!(normalize_virtual_desk(5, 5, 0, 0, 1, 1), (0, 0));
+    }
+
+    #[test]
+    fn rate_limiter_allows_one_report_per_interval() {
+        let mut last = None;
+        assert!(rate_limit_allows(&mut last, 10_000, 2000));
+        assert!(!rate_limit_allows(&mut last, 10_001, 2000));
+        assert!(!rate_limit_allows(&mut last, 11_999, 2000));
+        assert!(rate_limit_allows(&mut last, 12_000, 2000));
+        assert!(!rate_limit_allows(&mut last, 12_500, 2000));
+    }
 
     #[test]
     fn cursor_visibility_nudge_triggers_only_when_hidden_suppressed_or_unknown() {
