@@ -1,4 +1,4 @@
-scrcpy 4.0 <https://github.com/Genymobile/scrcpy>
+scrcpy 5.0.1 <https://github.com/Genymobile/scrcpy>
 [server] INFO: List of apps:
  * Settings                       com.android.settings
  * System UI                      com.android.systemui

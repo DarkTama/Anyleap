@@ -32,7 +32,7 @@ AnyLeap is a local-first desktop workstation built with **Tauri 2**, **Rust**, a
 npm ci
 ```
 
-`npm ci` installs frontend dependencies and automatically runs the `postinstall` hook (`npm run fetch-binaries` -> `node scripts/fetch-binaries.js`). That script downloads and SHA-256-verifies the pinned `scrcpy` v4.0 release (including `adb`, DLLs, and `scrcpy-server`) into `src-tauri/binaries/`, which is gitignored.
+`npm ci` installs frontend dependencies and automatically runs the `postinstall` hook (`npm run fetch-binaries` -> `node scripts/fetch-binaries.js`). That script downloads and SHA-256-verifies the pinned `scrcpy` v5.0.1 release (including `adb`, DLLs, and `scrcpy-server`) into `src-tauri/binaries/`, which is gitignored.
 
 If you ever need to re-fetch or refresh the sidecars manually:
 

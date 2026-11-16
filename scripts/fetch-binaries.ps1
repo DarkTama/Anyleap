@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Download a pinned scrcpy Windows release and lay its files out as Tauri
   sidecars + resources under src-tauri/binaries/.
@@ -14,7 +14,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = "4.0",
+    [string]$Version = "5.0.1",
     [string]$ExpectedSha256 = "",   # optional; if empty, tries the release SHA256SUMS.txt
     [switch]$Force
 )
@@ -23,7 +23,7 @@ $ErrorActionPreference = "Stop"
 
 # Known-good SHA-256 hashes for pinned releases (verified at authoring time).
 $KnownSha256 = @{
-    "4.0" = "75DBEB5B00E6F64292F26F70900AE55CA397786BDFB0B9BBEB481A0549047457"
+    "5.0.1" = "B12A2C4EE8BE317422451FC7DCF8EE20A71B5EA7EF9AD73DDD825A25316227A5"
 }
 if (-not $ExpectedSha256 -and $KnownSha256.ContainsKey($Version)) {
     $ExpectedSha256 = $KnownSha256[$Version]
@@ -104,6 +104,7 @@ $srcDir = if ($inner) { $inner.FullName } else { $ext }
 
 # --- Lay out ---
 New-Item -ItemType Directory -Force -Path $binDir, $dllDir | Out-Null
+Get-ChildItem -Path $dllDir -Filter *.dll -ErrorAction SilentlyContinue | Remove-Item -Force
 Copy-Item (Join-Path $srcDir "scrcpy.exe")    $scrcpyExe -Force
 Copy-Item (Join-Path $srcDir "adb.exe")       $adbExe    -Force
 Copy-Item (Join-Path $srcDir "scrcpy-server") $serverDst -Force

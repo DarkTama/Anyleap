@@ -93,7 +93,7 @@ Download the latest build from [**GitHub Releases**](https://github.com/DarkTama
 
 ### Run locally
 ```bash
-npm install          # installs dependencies and fetches pinned adb + scrcpy binaries
+npm install          # installs dependencies and fetches pinned adb + scrcpy v5.0.1 binaries
 npm run tauri dev    # starts Vite + Tauri in development mode
 ```
 

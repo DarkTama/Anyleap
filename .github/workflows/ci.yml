@@ -39,7 +39,7 @@ jobs:
           cache: npm
 
       # postinstall runs scripts/fetch-binaries.js (downloads + SHA-256-verifies
-      # scrcpy v4.0 into src-tauri/binaries/) — the gitignored sidecars/resources.
+      # scrcpy v5.0.1 into src-tauri/binaries/) — the gitignored sidecars/resources.
       - name: Install deps (runs fetch-binaries via postinstall)
         run: npm ci
 
