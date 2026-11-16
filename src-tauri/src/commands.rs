@@ -130,13 +130,79 @@ pub(crate) fn adb_path() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|c| c.exists())
 }
 
+/// Shared mutex serializing `adb start-server` across concurrent callers.
+///
+/// Android platform-tools `adb.exe` spawns a detached `fork-server` whenever no
+/// daemon is listening on port 5037. If two or more `adb` clients race on cold
+/// launch, losing `fork-server` processes fail to bind `127.0.0.1:5037` and
+/// `abort()` in `ucrtbase.dll` (`0xc0000409`). Serializing server startup here
+/// guarantees at most one `adb start-server` runs before any other `adb` call.
+static ADB_SERVER_START_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+const DEFAULT_ADB_SERVER_PORT: u16 = 5037;
+
+pub(crate) fn parse_adb_server_port(raw: Option<&str>) -> u16 {
+    raw.and_then(|s| s.trim().parse::<u16>().ok())
+        .filter(|&p| p > 0)
+        .unwrap_or(DEFAULT_ADB_SERVER_PORT)
+}
+
+fn adb_server_port() -> u16 {
+    let raw = std::env::var("ANDROID_ADB_SERVER_PORT").ok();
+    parse_adb_server_port(raw.as_deref())
+}
+
+async fn adb_server_listening(port: u16) -> bool {
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
+pub(crate) fn format_adb_start_error(
+    port: u16,
+    exit_code: Option<i32>,
+    stderr: &str,
+    stdout: &str,
+    timed_out: bool,
+) -> String {
+    if timed_out {
+        return format!(
+            "ADB server did not start in time on port {port}. Close any conflicting ADB tool using port {port} and click Refresh."
+        );
+    }
+    let detail = [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !detail.is_empty() {
+        format!(
+            "Could not start ADB server: {detail}. Check that port {port} is not blocked by another ADB tool and click Refresh."
+        )
+    } else if let Some(code) = exit_code {
+        format!(
+            "Could not start ADB server (exit code {code}). Check that port {port} is not blocked by another ADB tool and click Refresh."
+        )
+    } else {
+        format!(
+            "Could not start ADB server on port {port}. Check that port {port} is not blocked by another ADB tool and click Refresh."
+        )
+    }
+}
+
 /// Build an `adb` sidecar command with the working mDNS backend forced on.
 ///
 /// platform-tools r37 defaults to the Openscreen mDNS backend, which discovers
 /// nothing on Windows; the legacy backend (`ADB_MDNS_OPENSCREEN=0`) works. The
 /// backend is fixed when the adb *server* starts, so we set it on every adb call
 /// — whichever invocation starts the server configures it correctly.
-pub(crate) fn adb_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+pub(crate) fn adb_cmd_raw(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
     app.shell()
         .sidecar("adb")
         .map(|cmd| {
@@ -147,6 +213,71 @@ pub(crate) fn adb_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Co
                 .env("ADB_MDNS_AUTO_CONNECT", "0")
         })
         .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn ensure_adb_server_with<P, PFut, S, SFut>(
+    lock: &tokio::sync::Mutex<()>,
+    is_listening: P,
+    start_server: S,
+) -> Result<(), String>
+where
+    P: FnOnce() -> PFut,
+    PFut: std::future::Future<Output = bool>,
+    S: FnOnce() -> SFut,
+    SFut: std::future::Future<Output = Result<(), String>>,
+{
+    let _guard = lock.lock().await;
+    if is_listening().await {
+        return Ok(());
+    }
+    start_server().await
+}
+
+/// Ensure the bundled ADB server is running (serialized across all callers)
+/// before issuing any client `adb` or `scrcpy` invocation.
+pub(crate) async fn ensure_adb_server(app: &AppHandle) -> Result<(), String> {
+    let lock = ADB_SERVER_START_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let port = adb_server_port();
+    ensure_adb_server_with(
+        lock,
+        || adb_server_listening(port),
+        || async {
+            let cmd = adb_cmd_raw(app)?;
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                cmd.args(["start-server"]).output(),
+            )
+            .await
+            {
+                Ok(Ok(out)) if out.status.success() => Ok(()),
+                Ok(Ok(out)) => Err(format_adb_start_error(
+                    port,
+                    out.status.code(),
+                    &String::from_utf8_lossy(&out.stderr),
+                    &String::from_utf8_lossy(&out.stdout),
+                    false,
+                )),
+                Ok(Err(e)) => Err(format_adb_start_error(
+                    port,
+                    None,
+                    &e.to_string(),
+                    "",
+                    false,
+                )),
+                Err(_) => Err(format_adb_start_error(port, None, "", "", true)),
+            }
+        },
+    )
+    .await
+}
+
+/// Shared spawn path for all `adb` invocations: ensures the daemon is running
+/// once before returning a configured sidecar command.
+pub(crate) async fn adb_cmd(
+    app: &AppHandle,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    ensure_adb_server(app).await?;
+    adb_cmd_raw(app)
 }
 
 /// Locate the scrcpy-server jar across production (bundled resource) and dev layouts.
@@ -398,7 +529,7 @@ pub fn parse_list_cameras_output(stdout: &str) -> Vec<CameraDeviceOption> {
 }
 
 async fn query_hw_serial_for_device(app: &AppHandle, serial: &str) -> Option<String> {
-    let cmd = adb_cmd(app).ok()?;
+    let cmd = adb_cmd(app).await.ok()?;
     let script = format!(
         "getprop ro.serialno; echo {}; getprop ro.boot.serialno",
         HW_SERIAL_PROP_SEP
@@ -419,7 +550,8 @@ async fn query_hw_serial_for_device(app: &AppHandle, serial: &str) -> Option<Str
 async fn list_devices_with_mdns(
     app: &AppHandle,
 ) -> Result<(Vec<DeviceInfo>, Vec<MdnsService>), String> {
-    let output = adb_cmd(app)?
+    let output = adb_cmd(app)
+        .await?
         .args(["devices", "-l"])
         .output()
         .await
@@ -429,7 +561,7 @@ async fn list_devices_with_mdns(
         return Err(format!("adb devices failed: {}", err.trim()));
     }
     let raw = parse_adb_devices(&String::from_utf8_lossy(&output.stdout));
-    let mdns = match adb_cmd(app) {
+    let mdns = match adb_cmd(app).await {
         Ok(cmd) => match tokio::time::timeout(
             std::time::Duration::from_secs(2),
             cmd.args(["mdns", "services"]).output(),
@@ -467,7 +599,7 @@ async fn list_devices_with_mdns(
 
     let merged = merge_devices(raw, &hw_serials, &mdns);
     for dead in &merged.dead_serials {
-        if let Ok(cmd) = adb_cmd(app) {
+        if let Ok(cmd) = adb_cmd(app).await {
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(1),
                 cmd.args(["disconnect", dead]).output(),
@@ -624,18 +756,25 @@ fn note_virtual_display(
 /// On an early encoder/connection failure, retries once with conservative flags
 /// (`retried` guards against an infinite retry loop).
 /// Build a base scrcpy sidecar command with pinned environment.
-fn scrcpy_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+fn scrcpy_cmd_raw(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
     let server = resolve_server_path(app)
         .ok_or_else(|| "scrcpy-server not found (run scripts/fetch-binaries.ps1)".to_string())?;
     let mut cmd = app
         .shell()
         .sidecar("scrcpy")
         .map_err(|e| e.to_string())?
-        .env("SCRCPY_SERVER_PATH", server.to_string_lossy().to_string());
+        .env("SCRCPY_SERVER_PATH", server.to_string_lossy().to_string())
+        .env("ADB_MDNS_OPENSCREEN", "0")
+        .env("ADB_MDNS_AUTO_CONNECT", "0");
     if let Some(adb) = adb_path() {
         cmd = cmd.env("ADB", adb.to_string_lossy().to_string());
     }
     Ok(cmd)
+}
+
+async fn scrcpy_cmd(app: &AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+    ensure_adb_server(app).await?;
+    scrcpy_cmd_raw(app)
 }
 
 async fn stop_stale_sessions_for_serial(app: &AppHandle, serial: &str) -> bool {
@@ -676,7 +815,7 @@ async fn spawn_session(
     if stop_stale_sessions_for_serial(app, &serial).await {
         args = toggle_record_args(&args, None);
     }
-    spawn_session_inner(app, serial, args, retried, mode, true)
+    spawn_session_inner(app, serial, args, retried, mode, true).await
 }
 
 fn recording_path_from_args(args: &[String]) -> Option<String> {
@@ -684,174 +823,205 @@ fn recording_path_from_args(args: &[String]) -> Option<String> {
         .find_map(|a| a.strip_prefix("--record=").map(|s| s.to_string()))
 }
 
-fn spawn_session_inner(
-    app: &AppHandle,
+fn spawn_session_inner<'a>(
+    app: &'a AppHandle,
     serial: String,
     args: Vec<String>,
     retried: bool,
-    mode: &str,
+    mode: &'a str,
     replace_existing: bool,
-) -> Result<SessionInfo, String> {
-    if replace_existing {
-        crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-        crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-        let mirror_label = format!(
-            "mirror-{}",
-            serial
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                    c
-                } else {
-                    '_'
-                })
-                .collect::<String>()
-        );
-        if let Some(w) = app.get_webview_window(&mirror_label) {
-            let _ = w.destroy();
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SessionInfo, String>> + Send + 'a>> {
+    Box::pin(async move {
+        if replace_existing {
+            crate::embed::remove_embedded_scrcpy_hwnd(&serial);
+            crate::embed::remove_embedded_scrcpy_hwnd(&serial);
+            let mirror_label = format!(
+                "mirror-{}",
+                serial
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    })
+                    .collect::<String>()
+            );
+            if let Some(w) = app.get_webview_window(&mirror_label) {
+                let _ = w.destroy();
+            }
         }
-    }
-    let (mut rx, child) = scrcpy_cmd(app)?
-        .args(args.clone())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        let (mut rx, child) = scrcpy_cmd(app)
+            .await?
+            .args(args.clone())
+            .spawn()
+            .map_err(|e| e.to_string())?;
 
-    let id = uuid::Uuid::new_v4().to_string();
-    let pid = child.pid();
-    let started_at = now_ms();
-    let info = SessionInfo {
-        id: id.clone(),
-        serial: serial.clone(),
-        pid,
-        started_at,
-        mode: mode.to_string(),
-        recording_path: recording_path_from_args(&args),
-    };
+        let id = uuid::Uuid::new_v4().to_string();
+        let pid = child.pid();
+        let started_at = now_ms();
+        let info = SessionInfo {
+            id: id.clone(),
+            serial: serial.clone(),
+            pid,
+            started_at,
+            mode: mode.to_string(),
+            recording_path: recording_path_from_args(&args),
+        };
 
-    app.state::<AppState>()
-        .sessions
-        .lock()
-        .map_err(poison_error)?
-        .insert(
-            id.clone(),
-            Session {
-                id: id.clone(),
-                serial: serial.clone(),
-                pid,
-                started_at,
-                child,
-                args: args.clone(),
-                display_id: None,
-                virtual_size: None,
-                mode: mode.to_string(),
-            },
-        );
+        app.state::<AppState>()
+            .sessions
+            .lock()
+            .map_err(poison_error)?
+            .insert(
+                id.clone(),
+                Session {
+                    id: id.clone(),
+                    serial: serial.clone(),
+                    pid,
+                    started_at,
+                    child,
+                    args: args.clone(),
+                    display_id: None,
+                    virtual_size: None,
+                    mode: mode.to_string(),
+                },
+            );
 
-    let _ = app.emit("session-started", info.clone());
+        let _ = app.emit("session-started", info.clone());
 
-    // Drain the child's event stream; accumulate stderr, clean up + notify on exit.
-    let app2 = app.clone();
-    let id2 = id.clone();
-    let serial2 = serial.clone();
-    let args2 = args.clone();
-    let mode2 = mode.to_string();
-    tauri::async_runtime::spawn(async move {
-        let mut stderr_buf = String::new();
-        let mut command_error: Option<String> = None;
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                CommandEvent::Stdout(bytes) => {
-                    // Flex mode: scrcpy announces its virtual display here.
-                    let text = String::from_utf8_lossy(&bytes);
-                    if let Some((did, size)) = parse_new_display_line(&text) {
-                        let _ = note_virtual_display(&app2, &id2, did, size);
-                    }
-                }
-                CommandEvent::Stderr(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    // scrcpy logs may land on either stream depending on build.
-                    if let Some((did, size)) = parse_new_display_line(&text) {
-                        let _ = note_virtual_display(&app2, &id2, did, size);
-                    }
-                    stderr_buf.push_str(&text);
-                    // Keep the tail; scrcpy's useful ERROR line is near the end.
-                    if stderr_buf.len() > 16_384 {
-                        let cut = stderr_buf.len() - 16_384;
-                        stderr_buf.drain(..cut);
-                    }
-                }
-                CommandEvent::Error(e) => command_error = Some(e),
-                CommandEvent::Terminated(payload) => {
-                    if let Some(st) = app2.try_state::<AppState>() {
-                        match st.sessions.lock() {
-                            Ok(mut s) => {
-                                s.remove(&id2);
-                            }
-                            Err(e) => eprintln!("Sessions mutex poisoned on session exit: {}", e),
+        // Drain the child's event stream; accumulate stderr, clean up + notify on exit.
+        let app2 = app.clone();
+        let id2 = id.clone();
+        let serial2 = serial.clone();
+        let args2 = args.clone();
+        let mode2 = mode.to_string();
+        tauri::async_runtime::spawn(async move {
+            let mut stderr_buf = String::new();
+            let mut command_error: Option<String> = None;
+            while let Some(ev) = rx.recv().await {
+                match ev {
+                    CommandEvent::Stdout(bytes) => {
+                        // Flex mode: scrcpy announces its virtual display here.
+                        let text = String::from_utf8_lossy(&bytes);
+                        if let Some((did, size)) = parse_new_display_line(&text) {
+                            let _ = note_virtual_display(&app2, &id2, did, size);
                         }
                     }
-                    crate::embed::remove_embedded_scrcpy_hwnd(&serial2);
-                    let mirror_label = format!(
-                        "mirror-{}",
-                        serial2
-                            .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                                c
-                            } else {
-                                '_'
-                            })
-                            .collect::<String>()
-                    );
-                    if let Some(w) = app2.get_webview_window(&mirror_label) {
-                        let _ = w.destroy();
+                    CommandEvent::Stderr(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        // scrcpy logs may land on either stream depending on build.
+                        if let Some((did, size)) = parse_new_display_line(&text) {
+                            let _ = note_virtual_display(&app2, &id2, did, size);
+                        }
+                        stderr_buf.push_str(&text);
+                        // Keep the tail; scrcpy's useful ERROR line is near the end.
+                        if stderr_buf.len() > 16_384 {
+                            let cut = stderr_buf.len() - 16_384;
+                            stderr_buf.drain(..cut);
+                        }
                     }
-                    let app_clean = app2.clone();
-                    let mirror_label_clean = mirror_label.clone();
-                    tauri::async_runtime::spawn(async move {
-                        for _ in 0..12 {
-                            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                            if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
-                                let _ = w.destroy();
-                                break;
+                    CommandEvent::Error(e) => command_error = Some(e),
+                    CommandEvent::Terminated(payload) => {
+                        if let Some(st) = app2.try_state::<AppState>() {
+                            match st.sessions.lock() {
+                                Ok(mut s) => {
+                                    s.remove(&id2);
+                                }
+                                Err(e) => {
+                                    eprintln!("Sessions mutex poisoned on session exit: {}", e)
+                                }
                             }
                         }
-                    });
-                    let is_flex = args2.iter().any(|a| {
-                        a == "--flex-display"
-                            || a == "--new-display"
-                            || a.starts_with("--new-display=")
-                    });
-                    if is_flex {
-                        let has_other_vd = if let Some(st) = app2.try_state::<AppState>() {
-                            st.sessions
-                                .lock()
-                                .ok()
-                                .map(|map| {
-                                    map.values().any(|s| {
-                                        s.serial == serial2
-                                            && (s.display_id.is_some()
-                                                || s.args.iter().any(|a| {
-                                                    a == "--flex-display"
-                                                        || a == "--new-display"
-                                                        || a.starts_with("--new-display=")
-                                                }))
-                                    })
+                        crate::embed::remove_embedded_scrcpy_hwnd(&serial2);
+                        let mirror_label = format!(
+                            "mirror-{}",
+                            serial2
+                                .chars()
+                                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                    c
+                                } else {
+                                    '_'
                                 })
-                                .unwrap_or(false)
-                        } else {
-                            false
-                        };
-                        if !has_other_vd {
-                            let app_flex = app2.clone();
-                            let serial_flex = serial2.clone();
-                            tauri::async_runtime::spawn(async move {
-                                cleanup_flex_display(&app_flex, &serial_flex).await;
-                            });
+                                .collect::<String>()
+                        );
+                        if let Some(w) = app2.get_webview_window(&mirror_label) {
+                            let _ = w.destroy();
                         }
-                    }
-                    let failed = payload.code.map(|c| c != 0).unwrap_or(true);
-                    let early = now_ms() - started_at < 3000;
-                    if !retried && failed && early && stderr_suggests_encoder_failure(&stderr_buf) {
-                        // Clear the old session in the UI (no error), then retry on safe flags.
+                        let app_clean = app2.clone();
+                        let mirror_label_clean = mirror_label.clone();
+                        tauri::async_runtime::spawn(async move {
+                            for _ in 0..12 {
+                                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                                if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
+                                    let _ = w.destroy();
+                                    break;
+                                }
+                            }
+                        });
+                        let is_flex = args2.iter().any(|a| {
+                            a == "--flex-display"
+                                || a == "--new-display"
+                                || a.starts_with("--new-display=")
+                        });
+                        if is_flex {
+                            let has_other_vd = if let Some(st) = app2.try_state::<AppState>() {
+                                st.sessions
+                                    .lock()
+                                    .ok()
+                                    .map(|map| {
+                                        map.values().any(|s| {
+                                            s.serial == serial2
+                                                && (s.display_id.is_some()
+                                                    || s.args.iter().any(|a| {
+                                                        a == "--flex-display"
+                                                            || a == "--new-display"
+                                                            || a.starts_with("--new-display=")
+                                                    }))
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            } else {
+                                false
+                            };
+                            if !has_other_vd {
+                                let app_flex = app2.clone();
+                                let serial_flex = serial2.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    cleanup_flex_display(&app_flex, &serial_flex).await;
+                                });
+                            }
+                        }
+                        let failed = payload.code.map(|c| c != 0).unwrap_or(true);
+                        let early = now_ms() - started_at < 3000;
+                        if !retried
+                            && failed
+                            && early
+                            && stderr_suggests_encoder_failure(&stderr_buf)
+                        {
+                            // Clear the old session in the UI (no error), then retry on safe flags.
+                            let _ = app2.emit(
+                                "session-exited",
+                                SessionExited {
+                                    id: id2.clone(),
+                                    serial: serial2.clone(),
+                                    code: payload.code,
+                                    signal: payload.signal,
+                                    last_error: String::new(),
+                                    stderr: stderr_buf.clone(),
+                                },
+                            );
+                            let _ = spawn_session_inner(
+                                &app2,
+                                serial2.clone(),
+                                toggle_record_args(&degrade_args(&args2), None),
+                                true,
+                                &mode2,
+                                true,
+                            )
+                            .await;
+                            break;
+                        }
+                        let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
                         let _ = app2.emit(
                             "session-exited",
                             SessionExited {
@@ -859,40 +1029,19 @@ fn spawn_session_inner(
                                 serial: serial2.clone(),
                                 code: payload.code,
                                 signal: payload.signal,
-                                last_error: String::new(),
+                                last_error: summary,
                                 stderr: stderr_buf.clone(),
                             },
                         );
-                        let _ = spawn_session_inner(
-                            &app2,
-                            serial2.clone(),
-                            toggle_record_args(&degrade_args(&args2), None),
-                            true,
-                            &mode2,
-                            true,
-                        );
                         break;
                     }
-                    let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
-                    let _ = app2.emit(
-                        "session-exited",
-                        SessionExited {
-                            id: id2.clone(),
-                            serial: serial2.clone(),
-                            code: payload.code,
-                            signal: payload.signal,
-                            last_error: summary,
-                            stderr: stderr_buf.clone(),
-                        },
-                    );
-                    break;
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-    });
+        });
 
-    Ok(info)
+        Ok(info)
+    })
 }
 
 /// Launch scrcpy for a device and track the session.
@@ -912,7 +1061,8 @@ pub async fn list_device_cameras(
     app: AppHandle,
     serial: String,
 ) -> Result<Vec<CameraDeviceOption>, String> {
-    let output = scrcpy_cmd(&app)?
+    let output = scrcpy_cmd(&app)
+        .await?
         .args(["--serial", &serial, "--list-cameras"])
         .output()
         .await
@@ -1379,20 +1529,20 @@ pub async fn stop_mirror(
 /// Clean up virtual display remnants on Android: reset density & size, and restart the home launcher
 /// so physical phone display icons and grid layout are restored to native metrics.
 pub async fn cleanup_flex_display(app: &AppHandle, serial: &str) {
-    if let Ok(cmd) = adb_cmd(app) {
+    if let Ok(cmd) = adb_cmd(app).await {
         let _ = cmd
             .args(["-s", serial, "shell", "wm", "density", "reset"])
             .output()
             .await;
     }
-    if let Ok(cmd) = adb_cmd(app) {
+    if let Ok(cmd) = adb_cmd(app).await {
         let _ = cmd
             .args(["-s", serial, "shell", "wm", "size", "reset"])
             .output()
             .await;
     }
     let mut launcher_pkg: Option<String> = None;
-    if let Ok(cmd) = adb_cmd(app) {
+    if let Ok(cmd) = adb_cmd(app).await {
         if let Ok(out) = cmd
             .args([
                 "-s",
@@ -1423,14 +1573,14 @@ pub async fn cleanup_flex_display(app: &AppHandle, serial: &str) {
         }
     }
     if let Some(pkg) = launcher_pkg {
-        if let Ok(cmd) = adb_cmd(app) {
+        if let Ok(cmd) = adb_cmd(app).await {
             let _ = cmd
                 .args(["-s", serial, "shell", "am", "force-stop", &pkg])
                 .output()
                 .await;
         }
     }
-    if let Ok(cmd) = adb_cmd(app) {
+    if let Ok(cmd) = adb_cmd(app).await {
         let _ = cmd
             .args(["-s", serial, "shell", "input", "keyevent", "3"])
             .output()
@@ -1467,7 +1617,8 @@ pub fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo>, Str
 /// Discover wireless adb services on the LAN via `adb mdns services`.
 #[tauri::command]
 pub async fn discover_wireless(app: AppHandle) -> Result<Vec<MdnsService>, String> {
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["mdns", "services"])
         .output()
         .await
@@ -1494,7 +1645,8 @@ pub async fn pair_device(
     code: String,
 ) -> Result<String, String> {
     let target = format!("{host}:{port}");
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["pair", &target, &code])
         .output()
         .await
@@ -1517,7 +1669,7 @@ async fn try_adb_connect(app: &AppHandle, host: &str, port: u16) -> Result<Strin
     let target = format!("{host}:{port}");
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(4),
-        adb_cmd(app)?.args(["connect", &target]).output(),
+        adb_cmd(app).await?.args(["connect", &target]).output(),
     )
     .await
     .map_err(|_| format!("adb connect {target} timed out"))?
@@ -1574,7 +1726,7 @@ pub async fn reconnect_wireless(
             stale_serial,
         } => {
             if let Some(stale) = stale_serial {
-                if let Ok(cmd) = adb_cmd(&app) {
+                if let Ok(cmd) = adb_cmd(&app).await {
                     let _ = tokio::time::timeout(
                         std::time::Duration::from_secs(1),
                         cmd.args(["disconnect", &stale]).output(),
@@ -1624,7 +1776,7 @@ pub async fn reconnect_wireless(
                             if let Some(svc) = find_mdns_connect_match(&target, &fresh_mdns) {
                                 if svc.host != host || svc.port != port {
                                     let stale = format!("{host}:{port}");
-                                    if let Ok(cmd) = adb_cmd(&app) {
+                                    if let Ok(cmd) = adb_cmd(&app).await {
                                         let _ = tokio::time::timeout(
                                             std::time::Duration::from_secs(1),
                                             cmd.args(["disconnect", &stale]).output(),
@@ -1688,7 +1840,7 @@ pub async fn reconnect_wireless(
 }
 
 async fn is_endpoint_unauthorized(app: &AppHandle, endpoint: &str) -> bool {
-    let Ok(cmd) = adb_cmd(app) else {
+    let Ok(cmd) = adb_cmd(app).await else {
         return false;
     };
     let Ok(Ok(out)) = tokio::time::timeout(
@@ -1711,7 +1863,8 @@ async fn is_endpoint_unauthorized(app: &AppHandle, endpoint: &str) -> bool {
 #[tauri::command]
 pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Result<(), String> {
     let target = format!("{host}:{port}");
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["disconnect", &target])
         .output()
         .await
@@ -1771,7 +1924,8 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
     args.push("keyevent".into());
     args.push(kc);
 
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(args)
         .output()
         .await
@@ -1786,7 +1940,8 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
 /// Expand the notification shade on a device.
 #[tauri::command]
 pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), String> {
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -1810,7 +1965,8 @@ pub async fn open_notifications(app: AppHandle, serial: String) -> Result<(), St
 /// disabled first. Has no effect on a virtual display (flex display mode).
 #[tauri::command]
 pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result<String, String> {
-    let auto = adb_cmd(&app)?
+    let auto = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -1828,7 +1984,8 @@ pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result
         return Err(String::from_utf8_lossy(&auto.stderr).trim().to_string());
     }
 
-    let get = adb_cmd(&app)?
+    let get = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -1848,7 +2005,8 @@ pub async fn toggle_device_orientation(app: AppHandle, serial: String) -> Result
 
     // 1/3 = landscape / reverse landscape; anything else (0/2/unset) = portrait.
     let next = if raw == "1" || raw == "3" { "0" } else { "1" };
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -1976,7 +2134,8 @@ pub async fn handle_dropped_files(
     let mut pushed = 0;
     for path in &paths {
         if path.to_lowercase().ends_with(".apk") {
-            let out = adb_cmd(&app)?
+            let out = adb_cmd(&app)
+                .await?
                 .args(["-s", &serial, "install", "-r", path])
                 .output()
                 .await
@@ -1992,7 +2151,8 @@ pub async fn handle_dropped_files(
             }
             installed += 1;
         } else {
-            let out = adb_cmd(&app)?
+            let out = adb_cmd(&app)
+                .await?
                 .args(["-s", &serial, "push", path, "/sdcard/Download/"])
                 .output()
                 .await
@@ -2035,7 +2195,8 @@ fn parse_installed_packages(text: &str) -> Vec<String> {
 /// List third-party installed packages on the device.
 #[tauri::command]
 pub async fn list_installed_apps(app: AppHandle, serial: String) -> Result<Vec<String>, String> {
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "shell", "pm", "list", "packages", "-3"])
         .output()
         .await
@@ -2058,7 +2219,8 @@ pub async fn launch_app(
     serial: String,
     package_name: String,
 ) -> Result<(), String> {
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -2096,7 +2258,8 @@ pub async fn launch_app(
 /// Direct capture of device screen into PNG bytes.
 #[tauri::command]
 pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, String> {
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "exec-out", "screencap", "-p"])
         .output()
         .await
@@ -2468,7 +2631,8 @@ pub async fn push_clipboard_image(
         .map_err(|e| format!("Failed to write temp file: {e}"))?;
 
     let device_dest = format!("/sdcard/Download/{}", fname);
-    let push_res = adb_cmd(&app)?
+    let push_res = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -2490,7 +2654,8 @@ pub async fn push_clipboard_image(
     }
 
     // Trigger media scanner so Android Gallery picks it up immediately
-    let _ = adb_cmd(&app)?
+    let _ = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -2534,7 +2699,8 @@ pub(crate) fn parse_battery_info(output: &str) -> BatteryInfo {
 
 #[tauri::command]
 pub async fn get_battery_info(app: AppHandle, serial: String) -> Result<BatteryInfo, String> {
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "shell", "dumpsys", "battery"])
         .output()
         .await
@@ -2608,7 +2774,8 @@ fn validate_serial(serial: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_device_details(app: AppHandle, serial: String) -> Result<DeviceDetails, String> {
     validate_serial(&serial)?;
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args(["-s", &serial, "shell", "getprop"])
         .output()
         .await
@@ -3024,7 +3191,7 @@ pub async fn run_connection_doctor(
     // 1. adb binary + version
     let adb_version = match adb_path() {
         None => Err("Bundled adb binary not found".to_string()),
-        Some(_) => match adb_cmd(&app) {
+        Some(_) => match adb_cmd_raw(&app) {
             Err(e) => Err(e),
             Ok(cmd) => match cmd.args(["version"]).output().await {
                 Ok(out) if out.status.success() => {
@@ -3047,7 +3214,7 @@ pub async fn run_connection_doctor(
 
     // 2. adb server responds
     let adb_devices = if adb_version.is_ok() {
-        Some(match adb_cmd(&app) {
+        Some(match adb_cmd(&app).await {
             Err(e) => Err(e),
             Ok(cmd) => match cmd.args(["devices", "-l"]).output().await {
                 Ok(out) if out.status.success() => {
@@ -3067,7 +3234,7 @@ pub async fn run_connection_doctor(
     // 3. scrcpy binary + scrcpy-server
     let scrcpy_version = match resolve_server_path(&app) {
         None => Err("scrcpy-server resource not found".to_string()),
-        Some(_) => match scrcpy_cmd(&app) {
+        Some(_) => match scrcpy_cmd_raw(&app) {
             Err(e) => Err(e),
             Ok(cmd) => match cmd.args(["--version"]).output().await {
                 Ok(out) if out.status.success() => {
@@ -3121,7 +3288,7 @@ pub async fn run_connection_doctor(
     // 6. Device shell responds
     let shell_echo = if device_ready {
         let s = target_serial.unwrap();
-        Some(match adb_cmd(&app) {
+        Some(match adb_cmd(&app).await {
             Err(e) => Err(e),
             Ok(cmd) => match cmd.args(["-s", s, "shell", "echo", "ok"]).output().await {
                 Ok(out) if out.status.success() => {
@@ -3319,7 +3486,8 @@ pub(crate) fn validate_device_url(raw: &str) -> Result<String, String> {
 pub async fn open_url_on_device(app: AppHandle, serial: String, url: String) -> Result<(), String> {
     let valid_url = validate_device_url(&url)?;
     let quoted = sh_quote(&valid_url);
-    let output = adb_cmd(&app)?
+    let output = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -3417,7 +3585,7 @@ pub(crate) fn build_app_window_args(
 }
 
 async fn query_device_model(app: &AppHandle, serial: &str) -> String {
-    if let Ok(cmd) = adb_cmd(app) {
+    if let Ok(cmd) = adb_cmd(app).await {
         if let Ok(out) = cmd
             .args(["-s", serial, "shell", "getprop", "ro.product.model"])
             .output()
@@ -3444,7 +3612,7 @@ pub async fn launch_app_window(
     let device_label = query_device_model(&app, &serial).await;
     let settings = default_app_window_settings();
     let args = build_app_window_args(&serial, &settings, &package, &device_label);
-    spawn_session_inner(&app, serial, args, false, "display", false)
+    spawn_session_inner(&app, serial, args, false, "display", false).await
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -3463,7 +3631,8 @@ pub(crate) fn parse_setting_bool(output: &str) -> bool {
 }
 
 async fn adb_settings_get_global(app: &AppHandle, serial: &str, key: &str) -> Result<bool, String> {
-    let out = adb_cmd(app)?
+    let out = adb_cmd(app)
+        .await?
         .args(["-s", serial, "shell", "settings", "get", "global", key])
         .output()
         .await
@@ -3526,7 +3695,8 @@ pub async fn set_phone_toggle(
         ],
         other => return Err(format!("Unknown toggle: {}", other)),
     };
-    let out = adb_cmd(&app)?
+    let out = adb_cmd(&app)
+        .await?
         .args(args)
         .output()
         .await
@@ -3650,7 +3820,7 @@ pub async fn start_recording(
     let old_mode = old.mode.clone();
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
-    spawn_session_inner(&app, serial, new_args, false, &old_mode, true)
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
 }
 
 #[tauri::command]
@@ -3679,7 +3849,7 @@ pub async fn stop_recording(
     let old_mode = old.mode.clone();
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
-    spawn_session_inner(&app, serial, new_args, false, &old_mode, true)
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
 }
 
 pub(crate) fn validate_phone_number(raw: &str) -> Result<String, String> {
@@ -3706,7 +3876,8 @@ pub(crate) fn validate_phone_number(raw: &str) -> Result<String, String> {
 pub async fn place_call(app: AppHandle, serial: String, number: String) -> Result<String, String> {
     let clean = validate_phone_number(&number)?;
     let tel_uri = format!("tel:{}", sh_quote(&clean));
-    let out = adb_cmd(&app)?
+    let out = adb_cmd(&app)
+        .await?
         .args([
             "-s",
             &serial,
@@ -3731,7 +3902,8 @@ pub async fn place_call(app: AppHandle, serial: String, number: String) -> Resul
         || lower.contains("permission");
 
     if is_perm_err {
-        let dial_out = adb_cmd(&app)?
+        let dial_out = adb_cmd(&app)
+            .await?
             .args([
                 "-s",
                 &serial,
@@ -3861,5 +4033,113 @@ mod spec20_tests {
         let restarted_args = restart_screen_off_args(&rec_args, true);
         assert!(restarted_args.contains(&"--turn-screen-off".to_string()));
         assert!(!restarted_args.iter().any(|a| a.starts_with("--record=")));
+    }
+
+    #[test]
+    fn adb_server_port_parsing() {
+        assert_eq!(parse_adb_server_port(None), 5037);
+        assert_eq!(parse_adb_server_port(Some("")), 5037);
+        assert_eq!(parse_adb_server_port(Some("0")), 5037);
+        assert_eq!(parse_adb_server_port(Some("notaport")), 5037);
+        assert_eq!(parse_adb_server_port(Some(" 5038 ")), 5038);
+    }
+
+    #[test]
+    fn adb_start_error_formatting_is_helpful() {
+        let timeout_msg = format_adb_start_error(5037, None, "", "", true);
+        assert!(timeout_msg.contains("5037"));
+        assert!(timeout_msg.contains("Refresh"));
+
+        let detail_msg = format_adb_start_error(5037, Some(1), "cannot bind", "", false);
+        assert!(detail_msg.contains("cannot bind"));
+        assert!(detail_msg.contains("5037"));
+
+        let code_msg = format_adb_start_error(5039, Some(42), "", "", false);
+        assert!(code_msg.contains("42"));
+        assert!(code_msg.contains("5039"));
+    }
+
+    #[tokio::test]
+    async fn ensure_adb_server_serializes_concurrent_starters() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let listening = Arc::new(AtomicBool::new(false));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let l = Arc::clone(&lock);
+            let lis = Arc::clone(&listening);
+            let sc = Arc::clone(&start_calls);
+            set.spawn(async move {
+                ensure_adb_server_with(
+                    &l,
+                    || {
+                        let lis = Arc::clone(&lis);
+                        async move { lis.load(Ordering::SeqCst) }
+                    },
+                    || {
+                        let lis = Arc::clone(&lis);
+                        let sc = Arc::clone(&sc);
+                        async move {
+                            sc.fetch_add(1, Ordering::SeqCst);
+                            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                            lis.store(true, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    },
+                )
+                .await
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            assert!(res.unwrap().is_ok());
+        }
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_adb_server_allows_retry_after_failure() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let lock = tokio::sync::Mutex::new(());
+        let listening = AtomicBool::new(false);
+        let attempts = AtomicUsize::new(0);
+
+        let first = ensure_adb_server_with(
+            &lock,
+            || async { listening.load(Ordering::SeqCst) },
+            || async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err("start failed".to_string())
+            },
+        )
+        .await;
+        assert_eq!(first.unwrap_err(), "start failed");
+
+        let second = ensure_adb_server_with(
+            &lock,
+            || async { listening.load(Ordering::SeqCst) },
+            || async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                listening.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(second.is_ok());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn adb_server_listening_probes_tcp_port() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(adb_server_listening(port).await);
+        drop(listener);
+        assert!(!adb_server_listening(port).await);
     }
 }

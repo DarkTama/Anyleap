@@ -23,6 +23,7 @@ import {
   resolveDeviceNickname,
   resolveDeviceTarget,
 } from "@/lib/deviceStatus";
+import { adbErrorDeduper, surfaceAdbError } from "@/lib/adbError";
 import {
   reconnectSavedDevice,
   refreshAndReconnectDevices,
@@ -124,10 +125,11 @@ export function StudioDeck({ onOpenPair }: StudioDeckProps) {
   const handleRefresh = async () => {
     setRefreshing(true);
     setError(null);
+    adbErrorDeduper.reset();
     try {
       await refreshAndReconnectDevices({ silentRepair: true });
     } catch (e) {
-      setError(String(e));
+      surfaceAdbError(e, setError);
     } finally {
       setRefreshing(false);
     }

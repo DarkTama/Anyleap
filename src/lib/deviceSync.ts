@@ -1,4 +1,5 @@
 import { useAppStore } from "../store/useAppStore";
+import { surfaceAdbError } from "./adbError";
 import {
   dedupeDevices,
   deviceHardwareKey,
@@ -13,6 +14,19 @@ import {
 import { replaceNicknames, replaceSavedDevices } from "./settingsStore";
 import { discoverWireless, listDevices, reconnectWireless } from "./tauri";
 import type { DeviceInfo, MdnsService, ReconnectResult, SavedDevice } from "./types";
+
+type SyncResult = {
+  devices: DeviceInfo[];
+  savedDevices: SavedDevice[];
+  mdns: MdnsService[];
+};
+
+type RefreshResult = SyncResult & {
+  results: ReconnectResult[];
+};
+
+let inFlightSync: Promise<SyncResult> | null = null;
+let inFlightRefresh: Promise<RefreshResult> | null = null;
 
 export function repairKeyFor(target: {
   saved?: SavedDevice | null;
@@ -56,23 +70,14 @@ function clearLiveRepairFlags(
   }
 }
 
-/**
- * Fetch current adb devices + mDNS connect services, deduplicate live transports by
- * hardware serial, migrate any legacy IP:port saved entries/nicknames, and keep
- * `selectedSerial` pointing at the active transport for the selected phone.
- */
-export async function syncDevicesAndMigrate(
+async function runSyncDevicesAndMigrate(
   preloadedDevices?: DeviceInfo[],
   preloadedMdns?: MdnsService[],
-): Promise<{
-  devices: DeviceInfo[];
-  savedDevices: SavedDevice[];
-  mdns: MdnsService[];
-}> {
-  const [rawDevices, mdns] = await Promise.all([
-    preloadedDevices ? Promise.resolve(preloadedDevices) : listDevices(),
-    preloadedMdns ? Promise.resolve(preloadedMdns) : discoverWireless().catch(() => []),
-  ]);
+): Promise<SyncResult> {
+  // Run sequentially rather than in parallel so startup ADB commands never
+  // race on a cold server or double-spawn discovery unnecessarily.
+  const rawDevices = preloadedDevices ?? (await listDevices());
+  const mdns = preloadedMdns ?? (await discoverWireless().catch(() => []));
 
   const devices = dedupeDevices(rawDevices);
   const store = useAppStore.getState();
@@ -102,6 +107,28 @@ export async function syncDevicesAndMigrate(
   }
 
   return { devices, savedDevices: nextSaved, mdns };
+}
+
+/**
+ * Fetch current adb devices + mDNS connect services, deduplicate live transports by
+ * hardware serial, migrate any legacy IP:port saved entries/nicknames, and keep
+ * `selectedSerial` pointing at the active transport for the selected phone.
+ * Concurrent calls without preloaded snapshots coalesce onto the in-flight sync.
+ */
+export function syncDevicesAndMigrate(
+  preloadedDevices?: DeviceInfo[],
+  preloadedMdns?: MdnsService[],
+): Promise<SyncResult> {
+  if (preloadedDevices || preloadedMdns) {
+    return runSyncDevicesAndMigrate(preloadedDevices, preloadedMdns);
+  }
+  if (inFlightSync) {
+    return inFlightSync;
+  }
+  inFlightSync = runSyncDevicesAndMigrate().finally(() => {
+    inFlightSync = null;
+  });
+  return inFlightSync;
 }
 
 function applyReconnectedTransport(
@@ -211,7 +238,7 @@ export async function reconnectSavedDevice(
       };
     }
     if (!silent) {
-      store.setError(rawMsg);
+      surfaceAdbError(rawMsg, store.setError);
     }
     return {
       status: "needs_repair",
@@ -224,18 +251,9 @@ export async function reconnectSavedDevice(
   }
 }
 
-/**
- * Refresh adb devices + migrate saved devices, auto-reconnect any offline saved
- * wireless devices via mDNS / stored endpoint, and re-sync the merged device list.
- */
-export async function refreshAndReconnectDevices(opts?: {
+async function runRefreshAndReconnectDevices(opts?: {
   silentRepair?: boolean;
-}): Promise<{
-  devices: DeviceInfo[];
-  savedDevices: SavedDevice[];
-  mdns: MdnsService[];
-  results: ReconnectResult[];
-}> {
+}): Promise<RefreshResult> {
   const initial = await syncDevicesAndMigrate();
   const offlineSaved = initial.savedDevices.filter((s) => {
     if (!s.host) return false;
@@ -257,4 +275,21 @@ export async function refreshAndReconnectDevices(opts?: {
 
   const finalSync = await syncDevicesAndMigrate();
   return { ...finalSync, results };
+}
+
+/**
+ * Refresh adb devices + migrate saved devices, auto-reconnect any offline saved
+ * wireless devices via mDNS / stored endpoint, and re-sync the merged device list.
+ * Concurrent calls coalesce onto the active refresh promise.
+ */
+export function refreshAndReconnectDevices(opts?: {
+  silentRepair?: boolean;
+}): Promise<RefreshResult> {
+  if (inFlightRefresh) {
+    return inFlightRefresh;
+  }
+  inFlightRefresh = runRefreshAndReconnectDevices(opts).finally(() => {
+    inFlightRefresh = null;
+  });
+  return inFlightRefresh;
 }
