@@ -1,0 +1,22 @@
+Current Notification Manager state:
+  Notification List:
+    NotificationRecord(0x0555eeee: pkg=com.example.shop user=UserHandle{0} id=50 tag=null importance=4 key=0|com.example.shop|50|null|10400: Notification(channel=promo shortcut=null contentView=null flags=AUTO_CANCEL category=msg vis=PRIVATE))
+      key=0|com.example.shop|50|null|10400
+      notification=
+            when=1787287400000/1787287400000
+            extras={
+                android.title=String (Flash Sale: 50% Discount!)
+                android.template=String (android.app.Notification$BigTextStyle)
+                android.text=String (Use voucher SAVE50 before midnight)
+                android.bigText=String (Use voucher SAVE50 before midnight on eligible items in Example Shop.)
+            }
+      shortcut=null found valid? false
+    NotificationRecord(0x0666ffff: pkg=com.example.shop user=UserHandle{0} id=51 tag=null importance=3 key=0|com.example.shop|51|null|10400: Notification(channel=deals shortcut=null contentView=null flags=AUTO_CANCEL vis=PRIVATE))
+      key=0|com.example.shop|51|null|10400
+      notification=
+            when=1787287300000/1787287300000
+            extras={
+                android.title=String (Weekend Voucher Unlocked)
+                android.text=String (Claim your discount voucher in-app now)
+            }
+      shortcut=null found valid? false

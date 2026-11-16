@@ -29,7 +29,7 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | — | OSS readiness — Dependency policy & Tauri version guard | — | shipped | No version bump needed (#43, #48). Dependabot grouping/policy, `scripts/check-tauri-versions.mjs`, crate/npm alignment. |
 | — | Security & dependency patches (`undici`, `rustls`, `zip`, Tauri alignment, npm advisories) | — | shipped | Released in v1.1.1 (#42, #48, #54). |
 | — | **Release v1.1.1 (security & dependency patch: zip 9.5 in updater, rustls 0.23.46, Tauri plugins aligned, npm toolchain advisories)** | — | shipped | Version bump + security & dependency patch release (#56). |
-| 11 | Phone hub | SPEC-27 | queued | **Next.** Queued after SPEC-25 continuity work. |
+| 11 | Phone hub | SPEC-27 | in-progress | In progress (27a backend data service; 27b/27c UI). |
 | 5 | Native virtual webcam (Media Foundation) | SPEC-15 | queued | Windows 11 only; phone camera AND Linked PC webcam. Existing spec. |
 | 6 | PC display streaming | SPEC-13 | queued | Reuse the QUIC connection from #1 (SPEC-19). |
 | 13 | Cross-platform Linux/macOS input adapters | — | blocked | Blocked on contributors/testers; Windows first. |

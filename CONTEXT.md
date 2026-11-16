@@ -64,6 +64,13 @@ The capture, encoding, and transmission pipeline:
 - **Command Palette**: Keyboard-driven (`Ctrl+K`) action launcher across tabs, streaming profiles, diagnostics, and KVM controls.
 - **Connection Doctor**: Sequenced diagnostic pipeline (`adb_binary` → `adb_server` → `scrcpy_binary` → `device_present` → `wireless_tcp` → `device_shell` → `android_version`) with actionable fix hints and plain-text report export.
 
+### Phone Hub (`src-tauri/src/phone_hub/`, `SPEC-27`)
+The tiered backend phone-data service and Phone tab dashboard for a connected `AdbDevice` (ADB + bundled `scrcpy` only, no phone companion app):
+- **Poll Tiers (`poller`)**: Per-serial polling scheduled at **static** (once per connection: model, brand, Android version, security patch), **fast** (30 s while watched: battery, Wi-Fi, cellular, screen state), **slow** (5 min while watched or manual refresh: `/data` storage, RAM, uptime), and **notifications** (default 10 s, min 5 s via `notificationPollSecs`), all paused on unwatch and cleaned up on disconnect.
+- **App Label Cache (`AppLabelCache`)**: Disk-cached (`phone_hub_apps.json`) mapping of package IDs to human-readable app labels from `scrcpy --list-apps`, keyed by stable device identity (`hw_serial`) and applied to notifications, messages, and app lists.
+- **Conversation (`MessageStore`)**: Memory-only chat history aggregated from `MessagingStyle` / `category=msg` notification dumps, keyed by `<package>::<conversationKey>`, deduplicated by `(sender, text, timestampMs)`, capped at 200 messages per conversation, never logged or written to disk, and cleared on device disconnect or app exit.
+- **Audio-Only (`audio_only`)**: Headless PC audio playback via `scrcpy --no-video --no-window` (refused if a mirror session with audio is already active on the same device).
+
 ### Phone Workspace (`PhoneView`)
 The ADB-only companion view for a selected `AdbDevice` (requiring no companion app on the phone):
 - **Device Storage Browser (`FilesView`)**: Sandboxed file operations scoped to `/storage/emulated/0` via `stat`, `adb pull`, `adb push`, and `rm -r`.

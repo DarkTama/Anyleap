@@ -1,0 +1,3 @@
+Wi-Fi is enabled
+Connected to "Home-5G"
+mWifiInfo SSID: "Home-5G", BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.1.42, Security type: 2, Supplicant state: COMPLETED, Wi-Fi standard: 6, RSSI: -54, Link speed: 866Mbps, Tx Link speed: 866Mbps, Rx Link speed: 780Mbps, Frequency: 5180MHz

@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 use crate::commands::adb_cmd;
+use crate::phone_hub::apps::{ensure_labels_for_packages, resolve_app_label_for_identity};
+use crate::phone_hub::{resolve_device_identity, PhoneHubState};
 
 pub(crate) const DEVICE_ROOT: &str = "/storage/emulated/0";
 const PHOTO_CACHE_CAP_BYTES: u64 = 500 * 1024 * 1024;
@@ -264,12 +266,30 @@ fn collect_cache_files(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
 }
 
 fn evict_photo_cache_if_needed(cache_root: &Path) {
+    evict_dir_to_cap(cache_root, PHOTO_CACHE_CAP_BYTES);
+}
+
+// --- SPEC-27a ---
+pub(crate) fn evict_dir_to_cap(cache_root: &Path, cap_bytes: u64) {
     let mut entries = Vec::new();
     collect_cache_files(cache_root, &mut entries);
-    for path in select_evictions(&entries, PHOTO_CACHE_CAP_BYTES) {
+    for path in select_evictions(&entries, cap_bytes) {
         let _ = std::fs::remove_file(path);
     }
 }
+
+pub(crate) fn cache_key_hash(norm_path: &str, stamp: i64) -> String {
+    fnv1a_hex(&format!("{norm_path}:{stamp}"))
+}
+
+pub(crate) fn safe_serial_subdir(serial: &str) -> String {
+    sanitize_serial_dir(serial)
+}
+
+pub(crate) fn serial_cache_hash(serial: &str) -> String {
+    fnv1a_hex(serial)
+}
+// --- end SPEC-27a ---
 
 fn parse_flags_value(s: &str) -> Option<u32> {
     const FLAG_ONGOING_EVENT: u32 = 0x2;
@@ -396,6 +416,136 @@ fn is_extras_key_line(trimmed: &str) -> Option<(&str, &str)> {
 /// Parse `adb shell dumpsys notification --noredact` output into read-only notifications.
 /// Unknown formats return an empty list, never an error.
 pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification> {
+    parse_dumpsys_notifications_rich(output)
+        .into_iter()
+        .map(|r| r.base)
+        .collect()
+}
+
+// --- SPEC-27a ---
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ParsedChatEntry {
+    pub sender: String,
+    pub text: String,
+    pub timestamp_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParsedNotificationRecord {
+    pub base: PhoneNotification,
+    pub shortcut: Option<String>,
+    pub conversation_title: Option<String>,
+    pub is_group: bool,
+    pub is_messaging: bool,
+    pub messages: Vec<ParsedChatEntry>,
+}
+
+fn parse_message_bundle(
+    bundle: &str,
+    fallback_sender: &str,
+    fallback_ts_ms: i64,
+) -> Option<ParsedChatEntry> {
+    let trimmed = bundle.trim();
+    let inner = trimmed
+        .strip_prefix("Bundle[{")
+        .or_else(|| trimmed.strip_prefix("[{"))
+        .unwrap_or(trimmed);
+    let inner = inner.strip_suffix("}]").unwrap_or(inner);
+
+    // Locate `, time=<digits>` at the tail of the bundle (or `time=<digits>`).
+    let mut timestamp_ms = fallback_ts_ms;
+    let mut before_time = inner;
+    if let Some(t_idx) = inner.rfind(", time=") {
+        let after = &inner[t_idx + 7..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(val) = digits.parse::<i64>() {
+            if val > 0 {
+                timestamp_ms = if val > 1_000_000_000_000 {
+                    val
+                } else {
+                    val * 1000
+                };
+                before_time = &inner[..t_idx];
+            }
+        }
+    }
+
+    let sender = if let Some(s_idx) = before_time
+        .find(", sender=")
+        .map(|i| i + 9)
+        .or_else(|| before_time.strip_prefix("sender=").map(|_| 7))
+    {
+        let rest = &before_time[s_idx..];
+        let end = rest.find(", text=").unwrap_or(rest.len());
+        let s = rest[..end].trim();
+        if s.is_empty() || s == "null" {
+            fallback_sender.to_string()
+        } else {
+            s.to_string()
+        }
+    } else {
+        fallback_sender.to_string()
+    };
+
+    let text = if let Some(txt_idx) = before_time
+        .find(", text=")
+        .map(|i| i + 7)
+        .or_else(|| before_time.strip_prefix("text=").map(|_| 5))
+    {
+        before_time[txt_idx..].trim().to_string()
+    } else {
+        String::new()
+    };
+
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(ParsedChatEntry {
+        sender,
+        text,
+        timestamp_ms,
+    })
+}
+
+fn parse_messages_bundle_array(
+    raw: &str,
+    fallback_sender: &str,
+    fallback_ts_ms: i64,
+) -> Vec<ParsedChatEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<String> = None;
+
+    for raw_line in raw.lines() {
+        let trimmed = raw_line.trim_start();
+        let is_item_start = trimmed.starts_with('[')
+            && trimmed.split_once("] Bundle[{").is_some_and(|(idx, _)| {
+                !idx[1..].is_empty() && idx[1..].chars().all(|c| c.is_ascii_digit())
+            });
+
+        if is_item_start {
+            if let Some(prev) = current.take() {
+                if let Some(entry) = parse_message_bundle(&prev, fallback_sender, fallback_ts_ms) {
+                    entries.push(entry);
+                }
+            }
+            if let Some((_, rest)) = trimmed.split_once("] ") {
+                current = Some(rest.to_string());
+            }
+        } else if let Some(ref mut buf) = current {
+            buf.push('\n');
+            buf.push_str(raw_line.trim_end_matches('\r'));
+        }
+    }
+    if let Some(last) = current.take() {
+        if let Some(entry) = parse_message_bundle(&last, fallback_sender, fallback_ts_ms) {
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+pub(crate) fn parse_dumpsys_notifications_rich(output: &str) -> Vec<ParsedNotificationRecord> {
     const FLAG_ONGOING_EVENT: u32 = 0x2;
     const FLAG_GROUP_SUMMARY: u32 = 0x200;
 
@@ -405,6 +555,9 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
         Text,
         BigText,
         SubText,
+        ConversationTitle,
+        Template,
+        MessagingUser,
     }
 
     #[derive(Default)]
@@ -422,6 +575,14 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
         in_extras: bool,
         extras_indent: usize,
         multiline: Option<(ExtraField, String)>,
+        in_messages: Option<(usize, String)>,
+        shortcut: Option<String>,
+        conversation_title: Option<String>,
+        is_group: bool,
+        has_category_msg: bool,
+        has_messaging_template: bool,
+        has_non_messaging_template: bool,
+        has_messaging_user: bool,
     }
 
     let apply_extra = |rec: &mut RecordBuilder, field: ExtraField, raw: &str| {
@@ -431,6 +592,23 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
             ExtraField::Text => rec.text = val,
             ExtraField::BigText => rec.big_text = val,
             ExtraField::SubText => rec.sub_text = val,
+            ExtraField::ConversationTitle => {
+                if !val.is_empty() && rec.conversation_title.is_none() {
+                    rec.conversation_title = Some(val);
+                }
+            }
+            ExtraField::Template => {
+                if val.contains("MessagingStyle") {
+                    rec.has_messaging_template = true;
+                } else if !val.is_empty() && !val.eq_ignore_ascii_case("null") {
+                    rec.has_non_messaging_template = true;
+                }
+            }
+            ExtraField::MessagingUser => {
+                if !val.is_empty() && !val.eq_ignore_ascii_case("null") {
+                    rec.has_messaging_user = true;
+                }
+            }
         }
     };
 
@@ -438,38 +616,71 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
     let mut seen_keys = HashSet::new();
     let mut current: Option<RecordBuilder> = None;
 
-    let flush =
-        |mut rec: RecordBuilder, out: &mut Vec<PhoneNotification>, seen: &mut HashSet<String>| {
-            if let Some((field, buf)) = rec.multiline.take() {
-                apply_extra(&mut rec, field, &buf);
-            }
-            if (rec.flags & FLAG_ONGOING_EVENT) != 0 || (rec.flags & FLAG_GROUP_SUMMARY) != 0 {
-                return;
-            }
-            if rec.key.is_empty() || rec.package.is_empty() {
-                return;
-            }
-            let body = if !rec.big_text.is_empty() {
-                rec.big_text
-            } else if !rec.text.is_empty() {
-                rec.text
-            } else {
-                rec.sub_text
-            };
-            if rec.title.is_empty() && body.is_empty() {
-                return;
-            }
-            if seen.insert(rec.key.clone()) {
-                out.push(PhoneNotification {
+    let flush = |mut rec: RecordBuilder,
+                 out: &mut Vec<ParsedNotificationRecord>,
+                 seen: &mut HashSet<String>| {
+        if let Some((field, buf)) = rec.multiline.take() {
+            apply_extra(&mut rec, field, &buf);
+        }
+        let messages_raw = rec.in_messages.take().map(|(_, buf)| buf);
+        if (rec.flags & FLAG_ONGOING_EVENT) != 0 || (rec.flags & FLAG_GROUP_SUMMARY) != 0 {
+            return;
+        }
+        if rec.key.is_empty() || rec.package.is_empty() {
+            return;
+        }
+        let body = if !rec.big_text.is_empty() {
+            rec.big_text
+        } else if !rec.text.is_empty() {
+            rec.text
+        } else {
+            rec.sub_text
+        };
+        if rec.title.is_empty() && body.is_empty() && messages_raw.is_none() {
+            return;
+        }
+        if seen.insert(rec.key.clone()) {
+            let fallback_sender = rec
+                .conversation_title
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&rec.title);
+            let messages = messages_raw
+                .map(|raw| {
+                    parse_messages_bundle_array(
+                        &raw,
+                        fallback_sender,
+                        rec.posted_unix.saturating_mul(1000),
+                    )
+                })
+                .unwrap_or_default();
+            // Plain title/text or non-messaging templates (e.g. promo BigTextStyle)
+            // must not create chat conversations even if an app tags category=msg.
+            let has_conversation_meta = rec.conversation_title.is_some()
+                || (rec.has_category_msg
+                    && rec.shortcut.is_some()
+                    && !rec.has_non_messaging_template);
+            let is_messaging = rec.has_messaging_template
+                || !messages.is_empty()
+                || rec.has_messaging_user
+                || has_conversation_meta;
+            out.push(ParsedNotificationRecord {
+                base: PhoneNotification {
                     key: rec.key,
                     package: rec.package,
                     app_label: rec.app_label,
                     title: rec.title,
                     text: body,
                     posted_unix: rec.posted_unix,
-                });
-            }
-        };
+                },
+                shortcut: rec.shortcut,
+                conversation_title: rec.conversation_title,
+                is_group: rec.is_group,
+                is_messaging,
+                messages,
+            });
+        }
+    };
 
     for raw_line in output.lines() {
         let line = raw_line.trim_end_matches('\r');
@@ -495,6 +706,16 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
                     rec.flags |= f;
                 }
             }
+            if let Some(cat) = extract_token_value(trimmed, "category=") {
+                if cat == "msg" {
+                    rec.has_category_msg = true;
+                }
+            }
+            if let Some(sc) = extract_token_value(trimmed, "shortcut=") {
+                if !sc.is_empty() && sc != "null" {
+                    rec.shortcut = Some(sc.to_string());
+                }
+            }
             current = Some(rec);
             continue;
         }
@@ -502,6 +723,31 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
         let Some(rec) = current.as_mut() else {
             continue;
         };
+
+        if let Some((msg_indent, mut buf)) = rec.in_messages.take() {
+            let closes_extras = rec.in_extras && trimmed == "}" && indent <= rec.extras_indent;
+            let next_extra_key = rec.in_extras
+                && indent <= msg_indent
+                && indent > rec.extras_indent
+                && is_extras_key_line(trimmed).is_some()
+                && buf.trim_end().ends_with("}]");
+
+            if closes_extras || next_extra_key {
+                rec.in_messages = Some((msg_indent, buf));
+                if closes_extras {
+                    rec.in_extras = false;
+                    continue;
+                }
+                // Keep in_messages preserved, fall through to next extras key.
+            } else {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(line);
+                rec.in_messages = Some((msg_indent, buf));
+                continue;
+            }
+        }
 
         if let Some((field, mut buf)) = rec.multiline.take() {
             let closes_extras = rec.in_extras && trimmed == "}" && indent <= rec.extras_indent;
@@ -531,11 +777,30 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
                 continue;
             }
             if let Some((key, val)) = is_extras_key_line(trimmed) {
+                if key == "android.messages" && val.trim().starts_with("Bundle[]") {
+                    rec.in_messages = Some((indent, String::new()));
+                    continue;
+                }
+                if key == "android.isGroupConversation" {
+                    if val.contains("true") {
+                        rec.is_group = true;
+                    }
+                    continue;
+                }
                 let target = match key {
                     "android.title" => Some(ExtraField::Title),
                     "android.text" => Some(ExtraField::Text),
                     "android.bigText" => Some(ExtraField::BigText),
                     "android.subText" => Some(ExtraField::SubText),
+                    "android.conversationTitle" | "android.hiddenConversationTitle" => {
+                        Some(ExtraField::ConversationTitle)
+                    }
+                    "android.template" | "androidx.core.app.extra.COMPAT_TEMPLATE" => {
+                        Some(ExtraField::Template)
+                    }
+                    "android.messagingStyleUser" | "android.messagingUser" => {
+                        Some(ExtraField::MessagingUser)
+                    }
                     _ => None,
                 };
                 if let Some(field) = target {
@@ -571,6 +836,13 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
             if !label.is_empty() && label != "null" {
                 rec.app_label = Some(label.to_string());
             }
+        } else if let Some(val) = trimmed.strip_prefix("shortcut=") {
+            if rec.shortcut.is_none() {
+                let sc = val.split_whitespace().next().unwrap_or("");
+                if !sc.is_empty() && sc != "null" {
+                    rec.shortcut = Some(sc.to_string());
+                }
+            }
         } else if let Some(val) = trimmed.strip_prefix("flags=") {
             if let Some(f) = parse_flags_value(val) {
                 rec.flags |= f;
@@ -579,6 +851,11 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
             if let Some(f_tok) = extract_token_value(trimmed, "flags=") {
                 if let Some(f) = parse_flags_value(f_tok) {
                     rec.flags |= f;
+                }
+            }
+            if let Some(cat) = extract_token_value(trimmed, "category=") {
+                if cat == "msg" {
+                    rec.has_category_msg = true;
                 }
             }
         } else if let Some(val) = trimmed.strip_prefix("postTime=") {
@@ -604,9 +881,10 @@ pub(crate) fn parse_dumpsys_notifications(output: &str) -> Vec<PhoneNotification
         flush(last, &mut out, &mut seen_keys);
     }
 
-    out.sort_by_key(|b| std::cmp::Reverse(b.posted_unix));
+    out.sort_by_key(|b| std::cmp::Reverse(b.base.posted_unix));
     out
 }
+// --- end SPEC-27a ---
 
 async fn run_adb_shell(app: &AppHandle, serial: &str, shell_cmd: &str) -> Result<String, String> {
     let out = adb_cmd(app)
@@ -824,6 +1102,7 @@ pub async fn cache_device_photo(
 #[tauri::command]
 pub async fn get_device_notifications(
     app: AppHandle,
+    state: State<'_, PhoneHubState>,
     serial: String,
 ) -> Result<Vec<PhoneNotification>, String> {
     validate_serial(&serial)?;
@@ -847,7 +1126,30 @@ pub async fn get_device_notifications(
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    Ok(parse_dumpsys_notifications(&stdout))
+    let mut items = parse_dumpsys_notifications(&stdout);
+    if !items.is_empty() {
+        let identity = resolve_device_identity(&app, &state, &serial).await;
+        let unique_pkgs: Vec<String> = {
+            let mut seen = HashSet::new();
+            items
+                .iter()
+                .filter_map(|n| seen.insert(n.package.clone()).then_some(n.package.clone()))
+                .collect()
+        };
+        let pkg_refs: Vec<&str> = unique_pkgs.iter().map(String::as_str).collect();
+        ensure_labels_for_packages(&app, &state, &serial, &identity, &pkg_refs).await;
+        for item in &mut items {
+            let resolved = resolve_app_label_for_identity(
+                &app,
+                &state,
+                &identity,
+                &item.package,
+                item.app_label.as_deref(),
+            );
+            item.app_label = Some(resolved);
+        }
+    }
+    Ok(items)
 }
 
 #[cfg(test)]

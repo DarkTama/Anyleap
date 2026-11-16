@@ -1,0 +1,4 @@
+Phone Id=0
+  mServiceState={mVoiceRegState=0(IN_SERVICE), mDataRegState=0(IN_SERVICE), mChannelNumber=1850, mVoiceRoamingType=home, mDataRoamingType=home, mVoiceOperatorAlphaLong=ExampleTel, mVoiceOperatorAlphaShort=ExTel, mDataOperatorAlphaLong=ExampleTel, mDataOperatorAlphaShort=ExTel, mOperatorAlphaLong=ExampleTel, mOperatorNumeric=00101}
+  mSignalStrength=SignalStrength:{mCdma=CellSignalStrengthCdma: cdmaDbm=2147483647 level=0,mLte=CellSignalStrengthLte: rssi=-61 rsrp=-93 rsrq=-9 rssnr=120 level=3,primary=CellSignalStrengthLte}
+  mCallState=0

@@ -1,0 +1,11 @@
+Current Notification Manager state:
+  Notification List:
+    NotificationRecord(0x0444dddd: pkg=com.example.oemmsg user=UserHandle{0} id=40 tag=null importance=4 key=0|com.example.oemmsg|40|null|10300: Notification(channel=sms shortcut=null contentView=null flags=AUTO_CANCEL category=msg vis=PRIVATE))
+      key=0|com.example.oemmsg|40|null|10300
+      notification=
+            when=1700000300/1700000300
+            extras={
+                android.title=String (Pat)
+                androidx.core.app.extra.COMPAT_TEMPLATE=String (androidx.core.app.NotificationCompat$MessagingStyle)
+                android.text=String (Package arrived at lobby)
+            }
