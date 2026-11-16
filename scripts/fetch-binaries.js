@@ -11,16 +11,17 @@ const root = path.resolve(__dirname, '..');
 const binDir = path.join(root, 'src-tauri', 'binaries');
 const dllDir = path.join(binDir, 'dll');
 
-const VERSION = process.env.SCRCPY_VERSION || '4.0';
+const VERSION = process.env.SCRCPY_VERSION || '5.0.1';
 const FORCE = process.argv.includes('--force') || process.argv.includes('-f');
 
 const KNOWN_SHA256 = {
-  '4.0': {
-    'scrcpy-win64-v4.0.zip': '75dbeb5b00e6f64292f26f70900ae55ca397786bdfb0b9bbeb481a0549047457',
-    'scrcpy-win32-v4.0.zip': '5f860ad2fc66042bd490e31b983d5e40fd749314f28f0dcb9fec697fa89861be',
-    'scrcpy-macos-aarch64-v4.0.tar.gz': 'f5167fe047fe4a2ae2c2ea8634c7145a4d64d0b6005f24bb45639a965b8c60d4',
-    'scrcpy-macos-x86_64-v4.0.tar.gz': 'b83169f856d7022ed0e4428d98acea18dde2d63f49611b52ea137577ce4efe6b',
-    'scrcpy-linux-x86_64-v4.0.tar.gz': '7daf05af5d575862e62b068cf6852d6068faf7ef3178f3735e3953e778fbf0ab',
+  '5.0.1': {
+    'scrcpy-win64-v5.0.1.zip': 'b12a2c4ee8be317422451fc7dcf8ee20a71b5ea7ef9ad73ddd825a25316227a5',
+    'scrcpy-win32-v5.0.1.zip': '0cb65ebf1bce892fa4d1502d699af0c7a1a7f24d7febcb9ef72894e3f23fc2ad',
+    'scrcpy-winarm64-v5.0.1.zip': '16c3fc2068df64946f670e3504b4752073ebae47a416a45b46e79a5ab19c689b',
+    'scrcpy-macos-aarch64-v5.0.1.tar.gz': '33611e51977a8289e2e124b220f727895181ef2eb9060e0987a4dc2db9cf0d6b',
+    'scrcpy-macos-x86_64-v5.0.1.tar.gz': '31a5467a9e907f162b093267cbbab1276b15c6e709c2ea8159566a8d165beb50',
+    'scrcpy-linux-x86_64-v5.0.1.tar.gz': '9f969d30cc574816077edecda65719c1c70b0aee1df1ba5fa00779ac07b8fd6e',
   },
 };
 
@@ -54,7 +55,12 @@ function getHostTargetTriple() {
 
 function resolveAssetInfo(platform, arch) {
   if (platform === 'win32') {
-    const asset = arch === 'ia32' ? `scrcpy-win32-v${VERSION}.zip` : `scrcpy-win64-v${VERSION}.zip`;
+    let asset = `scrcpy-win64-v${VERSION}.zip`;
+    if (arch === 'ia32') {
+      asset = `scrcpy-win32-v${VERSION}.zip`;
+    } else if (arch === 'arm64') {
+      asset = `scrcpy-winarm64-v${VERSION}.zip`;
+    }
     return { asset, ext: 'zip', exeExt: '.exe' };
   } else if (platform === 'darwin') {
     const asset = arch === 'arm64'
@@ -123,9 +129,11 @@ async function main() {
   const scrcpySidecar = path.join(binDir, `scrcpy-${triple}${exeExt}`);
   const adbSidecar = path.join(binDir, `adb-${triple}${exeExt}`);
   const serverDst = path.join(binDir, 'scrcpy-server');
+  const versionFile = path.join(binDir, '.scrcpy-version');
+  const currentVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : '';
 
-  if (!FORCE && fs.existsSync(scrcpySidecar) && fs.existsSync(adbSidecar) && fs.existsSync(serverDst)) {
-    console.log('Binaries already present (use --force to re-download). Skipping.');
+  if (!FORCE && currentVersion === VERSION && fs.existsSync(scrcpySidecar) && fs.existsSync(adbSidecar) && fs.existsSync(serverDst)) {
+    console.log(`Binaries already present for v${VERSION} (use --force to re-download). Skipping.`);
     return;
   }
 
@@ -187,6 +195,15 @@ async function main() {
     fs.copyFileSync(rawServer, serverDst);
   }
 
+  // Remove stale DLLs from previous versions (e.g. FFmpeg ABI bumps) before copying
+  if (process.platform === 'win32' && fs.existsSync(dllDir)) {
+    for (const file of fs.readdirSync(dllDir)) {
+      if (file.endsWith('.dll')) {
+        fs.unlinkSync(path.join(dllDir, file));
+      }
+    }
+  }
+
   // Copy DLLs on Windows
   if (fs.existsSync(srcDir)) {
     for (const file of fs.readdirSync(srcDir)) {
@@ -197,6 +214,8 @@ async function main() {
       }
     }
   }
+
+  fs.writeFileSync(versionFile, `${VERSION}\n`);
 
   // Cleanup tmp dir
   try {

@@ -90,7 +90,7 @@ pub fn parse_scrcpy_app_list(output: &str) -> Vec<PhoneApp> {
             continue;
         }
 
-        // scrcpy 4.0 wraps package names onto an indented continuation line when label length >= 30.
+        // scrcpy 4.0+ (verified on 5.0.1) wraps package names onto an indented continuation line when label length >= 30.
         if let Some((system, ref label_buf)) = pending {
             let cont = trimmed.trim();
             if raw.starts_with(char::is_whitespace) && is_package_token(cont) {
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(chat.label, "Example Chat");
         assert!(!chat.system);
 
-        // Long app name (>= 30 chars) wraps package onto indented next line in scrcpy 4.0.
+        // Long app name (>= 30 chars) wraps package onto indented next line in scrcpy 4.0+ / 5.0.1.
         let shop = apps
             .iter()
             .find(|a| a.package == "com.example.shop")

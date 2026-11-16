@@ -37,6 +37,14 @@ fn bundled_paths() -> (PathBuf, PathBuf, PathBuf) {
     let mut scrcpy_candidates = Vec::new();
     let mut server_candidates = Vec::new();
 
+    // Prefer the workspace's staged binaries so e2e tests always exercise the
+    // version currently under test rather than an older installed release.
+    let manifest_bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    let triple = env!("TARGET");
+    adb_candidates.push(manifest_bin.join(format!("adb-{triple}.exe")));
+    scrcpy_candidates.push(manifest_bin.join(format!("scrcpy-{triple}.exe")));
+    server_candidates.push(manifest_bin.join("scrcpy-server"));
+
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         let dir = PathBuf::from(local).join("AnyLeap");
         adb_candidates.push(dir.join("adb.exe"));
@@ -44,12 +52,6 @@ fn bundled_paths() -> (PathBuf, PathBuf, PathBuf) {
         server_candidates.push(dir.join("scrcpy").join("scrcpy-server"));
         server_candidates.push(dir.join("scrcpy-server"));
     }
-
-    let manifest_bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
-    let triple = env!("TARGET");
-    adb_candidates.push(manifest_bin.join(format!("adb-{triple}.exe")));
-    scrcpy_candidates.push(manifest_bin.join(format!("scrcpy-{triple}.exe")));
-    server_candidates.push(manifest_bin.join("scrcpy-server"));
 
     let adb = adb_candidates
         .into_iter()
@@ -67,9 +69,24 @@ fn bundled_paths() -> (PathBuf, PathBuf, PathBuf) {
     (adb, scrcpy, server)
 }
 
+fn prepend_dll_dir(cmd: &mut Command) {
+    let dll_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join("dll");
+    if dll_dir.exists() {
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![dll_dir];
+        paths.extend(std::env::split_paths(&existing));
+        if let Ok(joined) = std::env::join_paths(paths) {
+            cmd.env("PATH", joined);
+        }
+    }
+}
+
 fn new_adb_cmd() -> Command {
     let (adb, _, _) = bundled_paths();
     let mut cmd = Command::new(adb);
+    prepend_dll_dir(&mut cmd);
     cmd.env("ADB_MDNS_OPENSCREEN", "0")
         .env("ADB_MDNS_AUTO_CONNECT", "0");
     cmd
@@ -78,6 +95,7 @@ fn new_adb_cmd() -> Command {
 fn new_scrcpy_cmd() -> Command {
     let (adb, scrcpy, server) = bundled_paths();
     let mut cmd = Command::new(scrcpy);
+    prepend_dll_dir(&mut cmd);
     cmd.env("SCRCPY_SERVER_PATH", server)
         .env("ADB", adb)
         .env("ADB_MDNS_OPENSCREEN", "0")
