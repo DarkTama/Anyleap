@@ -3992,6 +3992,52 @@ pub async fn end_call(app: AppHandle, serial: String) -> Result<(), String> {
     send_keyevent(app, serial, 6).await
 }
 
+/// True when any telephony call-state field in a `dumpsys telephony.registry`
+/// dump is non-zero (1 = ringing, 2 = off-hook).
+pub(crate) fn parse_call_active(dump: &str) -> bool {
+    dump.lines().any(|line| {
+        line.trim()
+            .strip_prefix("mCallState=")
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .is_some_and(|v| v != 0)
+    })
+}
+
+#[tauri::command]
+pub async fn get_call_active(app: AppHandle, serial: String) -> Result<bool, String> {
+    let out = adb_cmd(&app)
+        .await?
+        .args(["-s", &serial, "shell", "dumpsys", "telephony.registry"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(parse_call_active(&String::from_utf8_lossy(&out.stdout)))
+}
+
+#[cfg(test)]
+mod call_state_tests {
+    use super::parse_call_active;
+
+    #[test]
+    fn detects_active_call_state() {
+        assert!(!parse_call_active(
+            "  mCallState=0
+  mCallState=0
+"
+        ));
+        assert!(parse_call_active(
+            "  mCallState=0
+  mCallState=2
+"
+        ));
+        assert!(parse_call_active("mCallState=1"));
+        assert!(!parse_call_active("garbage"));
+    }
+}
+
 // --- SPEC-27a ---
 pub(crate) async fn spec27_adb_cmd(
     app: &AppHandle,

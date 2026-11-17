@@ -1,13 +1,13 @@
 import { emit } from "@tauri-apps/api/event";
 import { useAppStore } from "@/store/useAppStore";
 import {
-  BUTTON_IDS,
   BUTTON_LABELS,
   CONTROL_SIZES,
   DOCK_SIDES,
   saveControlConfig,
   type ControlConfig,
 } from "@/lib/controlConfig";
+import { CONTROL_SETTINGS_GROUPS } from "@/lib/controlBarModel";
 import { entry } from "./registry";
 import { Panel } from "./Panel";
 import { SelectField } from "./FieldRows";
@@ -19,7 +19,7 @@ const SIZE_LABELS: Record<ControlConfig["size"], string> = {
   lg: "Large",
 };
 
-/** Control bar (C-01..C-03): moved unchanged; Phase 3 regroups the buttons. */
+/** Control bar (C-01..C-03): buttons are listed by the mirror bar groups (SPEC-28 phase 3). */
 export function ControlBarSection({ show }: { show: ShowFn }) {
   const controlConfig = useAppStore((s) => s.controlConfig);
   const setControlConfig = useAppStore((s) => s.setControlConfig);
@@ -62,25 +62,34 @@ export function ControlBarSection({ show }: { show: ShowFn }) {
           <p id="control-buttons-hint" className="text-[11px] text-text-muted">
             {entry("C-03").helper}
           </p>
-          <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
-            {BUTTON_IDS.map((id) => (
-              <label
-                key={id}
-                className="flex min-h-8 cursor-pointer items-center gap-2 text-sm text-text"
-              >
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-gold-400"
-                  checked={controlConfig.buttons[id]}
-                  onChange={(e) =>
-                    updateControl({
-                      ...controlConfig,
-                      buttons: { ...controlConfig.buttons, [id]: e.target.checked },
-                    })
-                  }
-                />
-                {BUTTON_LABELS[id]}
-              </label>
+          <div className="space-y-2">
+            {CONTROL_SETTINGS_GROUPS.map((group) => (
+              <div key={group.id} role="group" aria-label={group.label} className="space-y-0.5">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                  {group.label}
+                </div>
+                <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+                  {group.buttons.map((id) => (
+                    <label
+                      key={id}
+                      className="flex min-h-8 cursor-pointer items-center gap-2 text-sm text-text"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-gold-400"
+                        checked={controlConfig.buttons[id]}
+                        onChange={(e) =>
+                          updateControl({
+                            ...controlConfig,
+                            buttons: { ...controlConfig.buttons, [id]: e.target.checked },
+                          })
+                        }
+                      />
+                      {BUTTON_LABELS[id]}
+                    </label>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </fieldset>

@@ -1,6 +1,6 @@
 # SPEC-28: Settings Redesign and Per-Mode Mirroring Defaults
 
-> **Status:** Approved (2026-11-17). Phases 1–2 implemented (per-mode defaults, migration, Phone mirroring section; sectioned Settings with rail, filter, relabels, Advanced); phase 3 pending.
+> **Status:** Approved (2026-11-17). Phases 1–3 implemented (per-mode defaults, migration, Phone mirroring section; sectioned Settings with rail, filter, relabels, Advanced; grouped accessible mirror control bar).
 > **Scope:** `(deck)` Settings tab (`src/components/SettingsPanel.tsx`), persisted mirroring settings (`src/lib/settingsStore.ts`, `src/store/useAppStore.ts`), and every launch path that reads them (Devices tab, command palette, control window).
 > **Related:** ADR-0005 (per-mode mirroring settings), SPEC-26 (Ink & Gold tokens), SPEC-25 (Continuity), SPEC-24 (Edge Leap).
 > **Plan:** `docs/superpowers/plans/2026-11-17-spec28-settings-redesign.md`
@@ -303,7 +303,7 @@ Each phase merges and ships alone.
   - "Open recording folder" moves into the toast shown when a recording stops.
   - Generic copy without third-party product names (AGENTS.md §1.3), for example "Mouse wheel swipes like a finger (for short-video feeds)" and "Use AnyLeap Camera in any video-call or streaming app".
   - Title-bar minimize, maximize, and close get 36 x 28 px hit areas, and Close gets a red hover.
-  - The Settings → Control bar card lists the buttons by these groups. Collapsed mode shows Navigate and More only.
+  - The Settings → Control bar card lists the buttons by these groups. Collapsed mode applies to the floating control window only and shows Navigate and More only; the embedded mirror sidebar always shows every enabled group.
 
 ## 13. Risks and open questions
 

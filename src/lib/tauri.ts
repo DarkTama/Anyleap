@@ -201,3 +201,6 @@ export const placeCall = (serial: string, number: string) =>
 
 export const endCall = (serial: string) =>
   invoke<void>("end_call", { serial });
+
+export const getCallActive = (serial: string) =>
+  invoke<boolean>("get_call_active", { serial });

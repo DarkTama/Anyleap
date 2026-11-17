@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   Bell,
@@ -7,19 +7,17 @@ import {
   Camera,
   Circle,
   Disc,
-  FolderOpen,
   HelpCircle,
   Monitor,
   MonitorOff,
-  Moon,
   Mouse,
   PhoneOff,
   Power,
   RotateCw,
   Square,
-  Sun,
+  Video,
+  Volume1,
   Volume2,
-  VolumeX,
   Wifi,
   X,
   Zap,
@@ -27,7 +25,6 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import {
@@ -44,19 +41,55 @@ import {
   startRecording,
   stopRecording,
   endCall,
+  getCallActive,
 } from "@/lib/tauri";
 import type { PhoneToggleKey, PhoneToggles, SessionMode } from "@/lib/types";
 import { KEYCODE } from "@/lib/keycodes";
-import type { ControlConfig, ControlSize } from "@/lib/controlConfig";
+import type { ControlConfig } from "@/lib/controlConfig";
+import { controlBarGroups, type ControlItem, type ControlSurface, type ControlItemId } from "@/lib/controlBarModel";
+import { cn } from "@/lib/utils";
+import { Tooltip, type TooltipSide } from "./Tooltip";
+import { MorePopover, ICON_BTN, ICON_BTN_DANGER, ICON_BTN_PRESSED } from "./MorePopover";
 
-const SIZE: Record<ControlSize, { btn: string; icon: string }> = {
-  sm: { btn: "h-8 w-8 flex-col gap-0.5 p-0 text-[9px] hover:bg-ink-800 hover:text-text-strong text-text border-ink-700", icon: "h-3.5 w-3.5" },
-  md: { btn: "h-9 w-9 flex-col gap-0.5 p-0 text-[10px] hover:bg-ink-800 hover:text-text-strong text-text border-ink-700", icon: "h-4 w-4" },
-  lg: { btn: "h-11 w-11 flex-col gap-1 p-0 text-xs hover:bg-ink-800 hover:text-text-strong text-text border-ink-700", icon: "h-5 w-5" },
-};
+const ICON = "h-5 w-5";
+const MORE_ICON = "h-4 w-4";
 
-/** Android nav + media/power keys for a device (via adb input). Buttons shown,
- *  size, and orientation are driven by the user's control-bar config. */
+export interface ControlBarNotice {
+  text: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}
+
+function iconFor(id: ControlItemId, screenOff: boolean, cls: string): ReactNode {
+  switch (id) {
+    case "back": return <ArrowLeft className={cls} />;
+    case "home": return <Circle className={cls} />;
+    case "recents": return <Square className={cls} />;
+    case "volUp": return <Volume2 className={cls} />;
+    case "volDown": return <Volume1 className={cls} />;
+    case "power": return <Power className={cls} />;
+    case "screenOff": return screenOff ? <Monitor className={cls} /> : <MonitorOff className={cls} />;
+    case "orientToggle": return <RotateCw className={cls} />;
+    case "screenshot": return <Camera className={cls} />;
+    case "record": return <Disc className={cls} />;
+    case "endCall": return <PhoneOff className={cls} />;
+    case "notifications": return <Bell className={cls} />;
+    case "wifi": return <Wifi className={cls} />;
+    case "bluetooth": return <Bluetooth className={cls} />;
+    case "dnd": return <BellOff className={cls} />;
+    case "swipeScroll": return <Mouse className={cls} />;
+    case "torch": return <Zap className={cls} />;
+    case "zoomIn": return <ZoomIn className={cls} />;
+    case "zoomOut": return <ZoomOut className={cls} />;
+    case "cameraHelp": return <HelpCircle className={cls} />;
+    case "stopCamera": return <Power className={cls} />;
+    default: return null;
+  }
+}
+
+/** Android nav + media/power keys for a device (via adb input), grouped
+ *  Navigate / Sound / Screen / Capture with a More popover (SPEC-28 phase 3).
+ *  Which buttons show is driven by the user's control-bar config. */
 export function ControlBar({
   serial,
   config,
@@ -64,15 +97,21 @@ export function ControlBar({
   showOrientToggle = false,
   showSwipeScroll = false,
   sessionMode = "display",
+  surface = "embedded",
+  onNotice,
 }: {
   serial: string;
   config: ControlConfig;
   orientation: "horizontal" | "vertical";
   /** Rotate acts on the physical display only — hidden in flex display mode. */
   showOrientToggle?: boolean;
-  /** Wheel→swipe needs a mirror window; only the floating control strip shows it. */
+  /** Wheel→swipe needs a mirror window; only the mirror/floating strips show it. */
   showSwipeScroll?: boolean;
   sessionMode?: SessionMode;
+  /** `collapsed` only applies on the floating control window. */
+  surface?: ControlSurface;
+  /** Receives transient notices (e.g. recording saved). Falls back to a local toast. */
+  onNotice?: (notice: ControlBarNotice) => void;
 }) {
   const setError = useAppStore((s) => s.setError);
   const sessions = useAppStore((s) => s.sessions);
@@ -80,18 +119,19 @@ export function ControlBar({
   const deviceToggles = useAppStore((s) => s.deviceToggles);
   const setDeviceToggle = useAppStore((s) => s.setDeviceToggle);
   const toggles = deviceToggles[serial];
-  const asleep = !!toggles?.asleep;
   const screenOff = !!toggles?.screenOff;
   const swipeScroll = !!toggles?.swipeScroll;
-  const sz = SIZE[config.size];
   const [torchOn, setTorchOn] = useState(false);
-  const [showObsGuide, setShowObsGuide] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [phoneToggles, setPhoneToggles] = useState<PhoneToggles | null>(null);
   const [recBusy, setRecBusy] = useState(false);
+  const [inCall, setInCall] = useState(false);
+  const [localNotice, setLocalNotice] = useState<ControlBarNotice | null>(null);
 
   const recordingSession = sessions.find((s) => s.serial === serial && !!s.recording_path);
   const isRecording = !!recordingSession;
   const recordingPath = recordingSession?.recording_path ?? null;
+  const camera = sessionMode === "camera";
 
   useEffect(() => {
     let cancelled = false;
@@ -107,365 +147,276 @@ export function ControlBar({
     };
   }, [serial]);
 
+  // End call is only offered during a call: poll the call state while enabled.
+  useEffect(() => {
+    if (camera || !config.buttons.endCall) {
+      setInCall(false);
+      return;
+    }
+    let cancelled = false;
+    const poll = () => {
+      if (document.hidden) return;
+      getCallActive(serial)
+        .then((active) => {
+          if (!cancelled) setInCall(active);
+        })
+        .catch(() => {
+          if (!cancelled) setInCall(false);
+        });
+    };
+    poll();
+    const id = setInterval(poll, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [serial, camera, config.buttons.endCall]);
+
+  useEffect(() => {
+    if (!localNotice) return;
+    const id = setTimeout(() => setLocalNotice(null), 8000);
+    return () => clearTimeout(id);
+  }, [localNotice]);
+
+  const notify = (n: ControlBarNotice) => (onNotice ? onNotice(n) : setLocalNotice(n));
+  const err = (e: unknown) => setError(String(e));
+  const key = (code: number) => sendKeyevent(serial, code).catch(err);
+
   const toggleRecord = () => {
     if (recBusy) return;
     setRecBusy(true);
-    const op = isRecording ? stopRecording(serial) : startRecording(serial);
-    op.then((next) => upsertSession(next))
-      .catch((e) => setError(String(e)))
+    const wasRecording = isRecording;
+    const savedPath = recordingPath;
+    const op = wasRecording ? stopRecording(serial) : startRecording(serial);
+    op.then((next) => {
+      upsertSession(next);
+      if (wasRecording) {
+        notify({
+          text: "Recording saved",
+          actionLabel: savedPath ? "Open recording folder" : undefined,
+          onAction: savedPath ? () => revealItemInDir(savedPath).catch(err) : undefined,
+        });
+      }
+    })
+      .catch(err)
       .finally(() => setRecBusy(false));
   };
 
-  const openRecordingFolder = () => {
-    if (!recordingPath) return;
-    revealItemInDir(recordingPath).catch((e) => setError(String(e)));
-  };
-
-  const handlePhoneToggle = (key: PhoneToggleKey) => () => {
-    const next = !(phoneToggles?.[key] ?? false);
-    setPhoneToggle(serial, key, next)
+  const handlePhoneToggle = (k: PhoneToggleKey) => {
+    const next = !(phoneToggles?.[k] ?? false);
+    setPhoneToggle(serial, k, next)
       .then(() =>
         setPhoneToggles((prev) => ({
           wifi: prev?.wifi ?? false,
           bluetooth: prev?.bluetooth ?? false,
           dnd: prev?.dnd ?? false,
-          [key]: next,
+          [k]: next,
         })),
       )
-      .catch((e) => setError(String(e)));
+      .catch(err);
   };
 
-  const handleEndCall = () => {
-    endCall(serial).catch((e) => setError(String(e)));
-  };
-  const toggleTorch = () => {
-    const next = !torchOn;
-    sendCameraShortcut(serial, next ? "torch_on" : "torch_off")
-      .then(() => setTorchOn(next))
-      .catch((e) => setError(String(e)));
-  };
-  const zoomIn = () => sendCameraShortcut(serial, "zoom_in").catch((e) => setError(String(e)));
-  const zoomOut = () => sendCameraShortcut(serial, "zoom_out").catch((e) => setError(String(e)));
-
-  const b = config.buttons;
-
-  const key = (code: number) => () =>
-    sendKeyevent(serial, code).catch((e) => setError(String(e)));
-  const notif = () => openNotifications(serial).catch((e) => setError(String(e)));
-  const toggleSleep = () => {
-    const next = !asleep;
-    sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
-      .then(() => setDeviceToggle(serial, "asleep", next))
-      .catch((e) => setError(String(e)));
-  };
   const toggleScreenOff = () => {
     const next = !screenOff;
-    if (sessionMode === "camera") {
+    if (camera) {
       sendKeyevent(serial, KEYCODE.POWER)
         .then(() => setDeviceToggle(serial, "screenOff", next))
-        .catch((e) => setError(String(e)));
+        .catch(err);
     } else {
       restartWithScreenOff(serial, next)
         .then(() => setDeviceToggle(serial, "screenOff", next))
         .catch(() => {
           sendKeyevent(serial, next ? KEYCODE.SLEEP : KEYCODE.WAKEUP)
             .then(() => setDeviceToggle(serial, "screenOff", next))
-            .catch((e) => setError(String(e)));
+            .catch(err);
         });
     }
   };
   const rotate = () => {
-    if (sessionMode === "camera") {
-      sendCameraShortcut(serial, "rotate_cw").catch((e) => setError(String(e)));
-    } else {
-      toggleDeviceOrientation(serial).catch((e) => setError(String(e)));
-    }
+    if (camera) sendCameraShortcut(serial, "rotate_cw").catch(err);
+    else toggleDeviceOrientation(serial).catch(err);
   };
   const toggleSwipeScroll = () => {
     const next = !swipeScroll;
     setWheelSwipe(serial, next)
       .then(() => setDeviceToggle(serial, "swipeScroll", next))
-      .catch((e) => setError(String(e)));
+      .catch(err);
+  };
+  const toggleTorch = () => {
+    const next = !torchOn;
+    sendCameraShortcut(serial, next ? "torch_on" : "torch_off")
+      .then(() => setTorchOn(next))
+      .catch(err);
+  };
+  const stopCameraStream = async () => {
+    const list = await listSessions().catch(() => []);
+    const current = list.find((s) => s.serial === serial);
+    if (current) stopMirror(current.id).catch(err);
   };
 
-  const container =
-    orientation === "vertical"
-      ? "p-1.5"
-      : "border-t border-ink-700 px-3 py-3";
-  const wrap =
-    orientation === "vertical"
-      ? "flex flex-col items-center gap-1.5"
-      : "flex flex-wrap gap-2";
+  const activate = (item: ControlItem) => {
+    switch (item.id) {
+      case "back": void key(KEYCODE.BACK); break;
+      case "home": void key(KEYCODE.HOME); break;
+      case "recents": void key(KEYCODE.RECENTS); break;
+      case "volUp": void key(KEYCODE.VOLUME_UP); break;
+      case "volDown": void key(KEYCODE.VOLUME_DOWN); break;
+      case "power": void key(KEYCODE.POWER); break;
+      case "screenOff": toggleScreenOff(); break;
+      case "orientToggle": rotate(); break;
+      case "screenshot":
+        void key(KEYCODE.SCREENSHOT);
+        logActivity({ kind: "screenshot", title: "Screenshot taken", detail: serial });
+        break;
+      case "record": toggleRecord(); break;
+      case "endCall": endCall(serial).catch(err); break;
+      case "notifications": openNotifications(serial).catch(err); break;
+      case "wifi": handlePhoneToggle("wifi"); break;
+      case "bluetooth": handlePhoneToggle("bluetooth"); break;
+      case "dnd": handlePhoneToggle("dnd"); break;
+      case "swipeScroll": toggleSwipeScroll(); break;
+      case "torch": toggleTorch(); break;
+      case "zoomIn": sendCameraShortcut(serial, "zoom_in").catch(err); break;
+      case "zoomOut": sendCameraShortcut(serial, "zoom_out").catch(err); break;
+      case "cameraHelp": setShowGuide((v) => !v); break;
+      case "stopCamera": void stopCameraStream(); break;
+    }
+  };
+
+  const model = useMemo(
+    () =>
+      controlBarGroups(config, sessionMode, {
+        inCall,
+        isRecording,
+        screenOff,
+        swipeScroll,
+        torchOn,
+        wifi: !!phoneToggles?.wifi,
+        bluetooth: !!phoneToggles?.bluetooth,
+        dnd: !!phoneToggles?.dnd,
+        showOrient: showOrientToggle,
+        showSwipe: showSwipeScroll,
+      }, surface),
+    [config, sessionMode, surface, inCall, isRecording, screenOff, swipeScroll, torchOn, phoneToggles, showOrientToggle, showSwipeScroll],
+  );
+
+  const vertical = orientation === "vertical";
+  const tipSide: TooltipSide = vertical ? "left" : "bottom";
+
+  const moreIcons: Partial<Record<string, ReactNode>> = {};
+  for (const item of model.more) moreIcons[item.id] = iconFor(item.id, screenOff, MORE_ICON);
+
+  const renderItem = (item: ControlItem) => {
+    const toggle = item.kind === "toggle";
+    return (
+      <Tooltip key={item.id} label={item.label} hint={item.hint} side={tipSide}>
+        <button
+          type="button"
+          aria-label={item.label}
+          aria-pressed={toggle ? !!item.pressed : undefined}
+          disabled={item.id === "record" && recBusy}
+          className={cn(
+            ICON_BTN,
+            item.danger && ICON_BTN_DANGER,
+            item.pressed && !item.danger && ICON_BTN_PRESSED,
+          )}
+          onClick={() => activate(item)}
+        >
+          <span className="relative inline-flex items-center justify-center">
+            {iconFor(item.id, screenOff, ICON)}
+            {item.id === "record" && item.pressed && (
+              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-status-danger" />
+            )}
+          </span>
+        </button>
+      </Tooltip>
+    );
+  };
+
+  const container = vertical ? "flex h-full min-h-min flex-col items-center p-2.5" : "border-t border-ink-700 px-3 py-3";
+  const wrap = vertical ? "flex w-full flex-1 flex-col items-center gap-1.5" : "flex flex-wrap items-center gap-2";
+  const divider = vertical ? (
+    <div role="separator" className="my-0.5 h-px w-8 bg-ink-700" />
+  ) : (
+    <div role="separator" aria-orientation="vertical" className="mx-1 h-6 w-px bg-ink-700" />
+  );
+
   return (
-    <div className={container}>
+    <div className={container} role="toolbar" aria-label="Phone controls" aria-orientation={orientation}>
       <div className={wrap}>
-        {sessionMode === "camera" ? (
-          <>
-            <Button
-              variant={torchOn ? "default" : "outline"}
-              className={`${sz.btn} ${torchOn ? "bg-status-warning text-ink-950 border-status-warning hover:opacity-90" : ""}`}
-              onClick={toggleTorch}
-              title="Toggle Camera Flash / Torch"
-            >
-              <Zap className={sz.icon} />
-              Torch
-            </Button>
-            <Button
-              variant="outline"
-              className={sz.btn}
-              onClick={zoomIn}
-              title="Zoom In (Alt+Up)"
-            >
-              <ZoomIn className={sz.icon} />
-              Zoom+
-            </Button>
-            <Button
-              variant="outline"
-              className={sz.btn}
-              onClick={zoomOut}
-              title="Zoom Out (Alt+Down)"
-            >
-              <ZoomOut className={sz.icon} />
-              Zoom−
-            </Button>
-            {b.screenOff && (
-              <Button variant="outline" className={sz.btn} onClick={toggleScreenOff}>
-                {screenOff ? <Monitor className={sz.icon} /> : <MonitorOff className={sz.icon} />}
-                {screenOff ? "Scr on" : "Scr off"}
-              </Button>
-            )}
-            {b.orientToggle && showOrientToggle && (
-              <Button variant="outline" className={sz.btn} onClick={rotate}>
-                <RotateCw className={sz.icon} />
-                Rotate
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              className={`${sz.btn} text-mist-300 hover:bg-ink-800 hover:text-mist-300 border-mist-300/40`}
-              onClick={() => setShowObsGuide((v) => !v)}
-              title="How to use with Google Meet, Zoom, or OBS"
-            >
-              <HelpCircle className={sz.icon} />
-              Guide
-            </Button>
-            <Button
-              variant="outline"
-              onClick={async () => {
-                const sessions = await listSessions().catch(() => []);
-                const current = sessions.find((s) => s.serial === serial);
-                if (current) {
-                  stopMirror(current.id).catch((e) => setError(String(e)));
-                }
-              }}
-              title="Stop Camera Stream"
-            >
-              <Power className={sz.icon} />
-              Stop
-            </Button>
-          </>
-        ) : (
-          <>
-        {b.back && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.BACK)}>
-            <ArrowLeft className={sz.icon} />
-            Back
-          </Button>
-        )}
-        {b.home && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.HOME)}>
-            <Circle className={sz.icon} />
-            Home
-          </Button>
-        )}
-        {b.recents && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.RECENTS)}>
-            <Square className={sz.icon} />
-            Recents
-          </Button>
-        )}
-        {b.volUp && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.VOLUME_UP)}>
-            <Volume2 className={sz.icon} />
-            Vol +
-          </Button>
-        )}
-        {b.volDown && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.VOLUME_DOWN)}>
-            <VolumeX className={sz.icon} />
-            Vol −
-          </Button>
-        )}
-        {b.power && (
-          <Button variant="outline" className={sz.btn} onClick={key(KEYCODE.POWER)}>
-            <Power className={sz.icon} />
-            Power
-          </Button>
-        )}
-        {b.screenshot && (
-          <Button
-            variant="outline"
-            className={sz.btn}
-            onClick={() => {
-              key(KEYCODE.SCREENSHOT)();
-              logActivity({
-                kind: "screenshot",
-                title: "Screenshot taken",
-                detail: serial,
-              });
-            }}
+        {model.groups.map((g, i) => (
+          <div
+            key={g.id}
+            role="group"
+            aria-label={g.label}
+            className={vertical ? "flex flex-col items-center gap-1.5" : "flex items-center gap-2"}
           >
-            <Camera className={sz.icon} />
-            Shot
-          </Button>
-        )}
-        {b.notifications && (
-          <Button variant="outline" className={sz.btn} onClick={notif}>
-            <Bell className={sz.icon} />
-            Notif
-          </Button>
-        )}
-        {b.sleep && (
-          <Button variant="outline" className={sz.btn} onClick={toggleSleep}>
-            {asleep ? <Sun className={sz.icon} /> : <Moon className={sz.icon} />}
-            {asleep ? "Wake" : "Sleep"}
-          </Button>
-        )}
-        {b.screenOff && (
-          <Button variant="outline" className={sz.btn} onClick={toggleScreenOff}>
-            {screenOff ? <Monitor className={sz.icon} /> : <MonitorOff className={sz.icon} />}
-            {screenOff ? "Scr on" : "Scr off"}
-          </Button>
-        )}
-        {b.orientToggle && showOrientToggle && (
-          <Button variant="outline" className={sz.btn} onClick={rotate}>
-            <RotateCw className={sz.icon} />
-            Rotate
-          </Button>
-        )}
-        {b.swipeScroll && showSwipeScroll && (
-          <Button
-            variant={swipeScroll ? "default" : "outline"}
-            className={sz.btn}
-            onClick={toggleSwipeScroll}
-            title="Wheel scrolls as touch flings — for Reels/Shorts"
-          >
-            <Mouse className={sz.icon} />
-            {swipeScroll ? "Swipe on" : "Swipe off"}
-          </Button>
-        )}
-        {b.record && (
-          <Button
-            variant={isRecording ? "default" : "outline"}
-            className={`${sz.btn} ${isRecording ? "bg-status-danger-bg text-status-danger border-status-danger/50 hover:opacity-90" : ""}`}
-            onClick={toggleRecord}
-            disabled={recBusy}
-            title={isRecording ? "Stop recording" : "Start screen recording"}
-          >
-            <span className="relative inline-flex items-center justify-center">
-              <Disc className={sz.icon} />
-              {isRecording && (
-                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-status-danger" />
-              )}
-            </span>
-            {isRecording ? "Stop rec" : "Record"}
-          </Button>
-        )}
-        {b.record && isRecording && recordingPath && (
-          <Button
-            variant="outline"
-            className={sz.btn}
-            onClick={openRecordingFolder}
-            title="Open recording folder"
-          >
-            <FolderOpen className={sz.icon} />
-            Folder
-          </Button>
-        )}
-        {b.wifi && (
-          <Button
-            variant={phoneToggles?.wifi ? "default" : "outline"}
-            className={sz.btn}
-            onClick={handlePhoneToggle("wifi")}
-            title="Toggle phone Wi-Fi"
-          >
-            <Wifi className={sz.icon} />
-            Wi-Fi
-          </Button>
-        )}
-        {b.bluetooth && (
-          <Button
-            variant={phoneToggles?.bluetooth ? "default" : "outline"}
-            className={sz.btn}
-            onClick={handlePhoneToggle("bluetooth")}
-            title="Toggle phone Bluetooth"
-          >
-            <Bluetooth className={sz.icon} />
-            BT
-          </Button>
-        )}
-        {b.dnd && (
-          <Button
-            variant={phoneToggles?.dnd ? "default" : "outline"}
-            className={sz.btn}
-            onClick={handlePhoneToggle("dnd")}
-            title="Toggle Do Not Disturb"
-          >
-            <BellOff className={sz.icon} />
-            DND
-          </Button>
-        )}
-        {b.endCall && (
-          <Button
-            variant="outline"
-            className={`${sz.btn} hover:bg-status-danger-bg hover:text-status-danger hover:border-status-danger/50`}
-            onClick={handleEndCall}
-            title="End active phone call"
-          >
-            <PhoneOff className={sz.icon} />
-            End call
-          </Button>
-        )}
-          </>
+            {i > 0 && divider}
+            {g.items.map(renderItem)}
+          </div>
+        ))}
+        {model.more.length > 0 && (
+          <div className={vertical ? "mt-auto flex flex-col items-center gap-1.5 pt-1.5" : "flex items-center gap-2"}>
+            {!vertical && divider}
+            <MorePopover
+              items={model.more}
+              icons={moreIcons}
+              onActivate={activate}
+              side={vertical ? "left" : "right"}
+            />
+          </div>
         )}
       </div>
-      {showObsGuide && (
+      {localNotice && (
+        <div
+          role="status"
+          className="popover-panel fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-gold-400/50 bg-ink-800 px-3 py-1.5 text-xs text-gold-400 shadow-elevated"
+        >
+          <span>{localNotice.text}</span>
+          {localNotice.onAction && (
+            <button
+              type="button"
+              onClick={localNotice.onAction}
+              className="btn-tactile cursor-pointer rounded border border-gold-400/60 px-2 py-0.5 font-semibold text-gold-400 hover:bg-ink-700"
+            >
+              {localNotice.actionLabel}
+            </button>
+          )}
+        </div>
+      )}
+      {showGuide && (
         <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4">
-          <div className="modal-panel relative w-full max-w-sm rounded-xl border border-ink-700 bg-ink-900 p-4 text-left shadow-elevated space-y-3">
+          <div className="modal-panel relative w-full max-w-sm space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-4 text-left shadow-elevated">
             <div className="flex items-center justify-between border-b border-ink-700 pb-2">
               <div className="flex items-center gap-2 text-xs font-bold text-mist-300">
-                <Camera className="h-4 w-4" />
-                <span>Google Meet & OBS Virtual Camera</span>
+                <Video className="h-4 w-4" />
+                <span>Use AnyLeap Camera in any app</span>
               </div>
               <button
                 type="button"
-                onClick={() => setShowObsGuide(false)}
+                aria-label="Close"
+                onClick={() => setShowGuide(false)}
                 className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <ol className="list-decimal list-inside space-y-2 text-[11px] text-text leading-relaxed">
+            <ol className="list-inside list-decimal space-y-2 text-[11px] leading-relaxed text-text">
               <li>
-                Open <strong className="text-text-strong">OBS Studio</strong> (free desktop app).
-              </li>
-              <li>
-                In Sources, click <strong>+ → Window Capture</strong>.
+                In your video-call or streaming app, add a <strong className="text-text-strong">window capture</strong>{" "}
+                source (or share this window).
               </li>
               <li>
                 Select <strong className="text-gold-400">AnyLeap Camera Studio</strong>.
               </li>
               <li>
-                In OBS (bottom right), click <strong className="text-status-success">Start Virtual Camera</strong>.
-              </li>
-              <li>
-                In <strong className="text-mist-300">meet.google.com</strong> or Zoom settings, choose <strong className="text-mist-300">OBS Virtual Camera</strong>.
+                If the app offers a virtual camera, start it and choose it as your camera in the call settings.
               </li>
             </ol>
             <button
               type="button"
-              onClick={() => setShowObsGuide(false)}
-              className="btn-tactile w-full rounded-lg bg-gold-400 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600 cursor-pointer"
+              onClick={() => setShowGuide(false)}
+              className="btn-tactile w-full cursor-pointer rounded-lg bg-gold-400 py-1.5 text-xs font-semibold text-ink-950 hover:bg-gold-600"
             >
               Got it
             </button>

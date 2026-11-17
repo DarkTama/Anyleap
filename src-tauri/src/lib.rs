@@ -83,6 +83,7 @@ pub fn run() {
             commands::stop_recording,
             commands::place_call,
             commands::end_call,
+            commands::get_call_active,
             wheel_swipe::set_wheel_swipe,
             embed::embed_mirror,
             embed::resize_embedded_mirror,

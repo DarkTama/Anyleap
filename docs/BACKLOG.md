@@ -37,7 +37,7 @@ Items observed during M2 testing, to be sequenced into future milestones.
 
 - ~~Per-mode mirroring defaults, migration and Phone mirroring section~~ (SPEC-28 phase 1, done).
 - ~~Seven-section rail with filter, relabelled rows, Advanced section, Computers "Custom" chip~~ (SPEC-28 phase 2, done).
-- **Phase 3:** mirror window control bar redesign.
+- ~~**Phase 3:** mirror window control bar redesign~~ (SPEC-28 phase 3, done; live Mirror/Flex/Camera visual check still pending).
 - **Follow-ups:** remove `syncFileTransfer` from the type and the Rust `SYNC_FILES` gate; move KVM settings from `localStorage` to `settings.json`; optional per-phone mode defaults.
 
 ## Dependencies
