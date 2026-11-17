@@ -345,6 +345,36 @@ fn precheck_blocked(kind: &str) {
     }
 }
 
+/// Pure decision: with no readable cursor, is the input desktop a secure one?
+/// A failing `GetCursorPos` plus a non-Default (or `open_err`) desktop means UAC /
+/// Winlogon owns input, so injection can never happen and must be reported here.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn secure_desktop_when_cursor_missing(
+    cursor: Option<(i32, i32)>,
+    input_desktop: Option<&str>,
+) -> bool {
+    cursor.is_none() && block_reason(false, None, input_desktop) == Some(BlockReason::SecureDesktop)
+}
+
+/// Called when `GetCursorPos` fails while entered: reports a secure-desktop block using the
+/// cached desktop check (no injection happens on this path, so no precheck runs).
+#[cfg(windows)]
+pub fn report_if_secure_desktop(kind: &str) {
+    let now_ms = super::debug_log::now_us() / 1000;
+    let secure = DESKTOP_CACHE.lock().ok().is_some_and(|mut c| {
+        let name = c.get(now_ms, DESKTOP_CHECK_INTERVAL_MS, || {
+            Some(current_input_desktop_name()).filter(|n| n != "unknown")
+        });
+        secure_desktop_when_cursor_missing(None, name)
+    });
+    if secure {
+        note_input_blocked(kind, BlockReason::SecureDesktop);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn report_if_secure_desktop(_kind: &str) {}
+
 #[cfg(windows)]
 fn foreground_process_name() -> String {
     super::hooks::foreground_process_name()
@@ -700,6 +730,18 @@ mod tests {
 #[cfg(test)]
 mod block_tests {
     use super::*;
+
+    #[test]
+    fn secure_report_when_cursor_missing() {
+        assert!(secure_desktop_when_cursor_missing(None, Some("open_err")));
+        assert!(secure_desktop_when_cursor_missing(None, Some("Winlogon")));
+        assert!(!secure_desktop_when_cursor_missing(None, Some("Default")));
+        assert!(!secure_desktop_when_cursor_missing(None, None));
+        assert!(!secure_desktop_when_cursor_missing(
+            Some((1, 2)),
+            Some("Winlogon")
+        ));
+    }
 
     #[test]
     fn block_reason_matrix() {

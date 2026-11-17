@@ -271,3 +271,16 @@ describe("transferBarReducer", () => {
     expect(staleState.transfers).toHaveLength(0);
   });
 });
+
+describe("same-text notice after expiry", () => {
+  it("shows again with a fresh id and expiry", () => {
+    let s = setTransferNotice(initialTransferBarState, { text: "Input blocked" }, 1000);
+    s = expireTransferBar(s, 1000 + TRANSFER_NOTICE_LINGER_MS + 1);
+    expect(s.notice).toBeNull();
+    const again = setTransferNotice(s, { text: "Input blocked" }, 57_000);
+    expect(again.notice?.text).toBe("Input blocked");
+    expect(again.notice?.id).toBe("notice-57000");
+    expect(again.notice?.id).not.toBe("notice-1000");
+    expect(again.notice?.expiresAt).toBe(57_000 + TRANSFER_NOTICE_LINGER_MS);
+  });
+});

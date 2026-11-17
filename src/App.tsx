@@ -46,6 +46,12 @@ import { usePhoneHubStore } from "@/stores/phoneHubStore";
 import type { PhoneHubNotification } from "@/types/phone";
 import { UpdateModal } from "@/components/shell/UpdateModal";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
+import {
+  TRANSFER_BAR_CLOSE_WAIT_MS,
+  TRANSFER_BAR_REVEAL_VERIFY_MS,
+  decideTransferBarWindowAction,
+} from "@/components/desktop/transferBarWindowPolicy";
+import { settingsForMode } from "@/lib/settingsForMode";
 import { loadAllowControl, useKvmStore } from "@/stores/kvmStore";
 import { kvmDebugNote, kvmOpenUrlOnLinked, kvmSetDebugLog } from "@/services/kvmService";
 import { logActivity, useActivityStore } from "@/stores/activityStore";
@@ -602,17 +608,10 @@ function App() {
   }, [hudNotice, openHudWindow, closeHudWindow]);
 
   // Manage native OS topmost floating Transfer Bar window (independent of leap HUD)
-  const closeTransferBarWindow = useCallback(async () => {
-    const w = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
-    if (w) {
-      await w.close().catch(() => {});
-    }
-  }, []);
+  const transferBarQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const hadTransferBarContentRef = useRef(false);
 
-  const openTransferBarWindow = useCallback(async () => {
-    const existing = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
-    if (existing) return;
-
+  const spawnTransferBarWindow = useCallback(() => {
     const BAR_WIDTH = 340;
     const BAR_HEIGHT = 40;
     const MARGIN_BOTTOM = 24;
@@ -643,29 +642,66 @@ function App() {
         shadow: false,
         focus: false,
       });
-      w.once("tauri://error", (e) => console.error("kvm-transfer-bar window error:", e));
+      void w.once("tauri://error", (e) => console.error("kvm-transfer-bar window error:", e));
     } catch (e) {
       console.error("Failed to spawn floating transfer bar:", e);
     }
   }, []);
 
-  const hadTransferBarContentRef = useRef(false);
+  const closeTransferBarAndWait = useCallback(async () => {
+    const w = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
+    if (w) await w.close().catch(() => {});
+    const deadline = Date.now() + TRANSFER_BAR_CLOSE_WAIT_MS;
+    while (Date.now() < deadline) {
+      const cur = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
+      if (!cur) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }, []);
+
+  // Bar window operations run serialized so an open never races a pending close.
+  const syncTransferBarWindow = useCallback(
+    async (hasContent: boolean) => {
+      const hadContent = hadTransferBarContentRef.current;
+      hadTransferBarContentRef.current = hasContent;
+      const existing = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
+      const action = decideTransferBarWindowAction({
+        hasContent,
+        hadContent,
+        windowExists: existing !== null,
+      });
+      if (action === "close") {
+        await closeTransferBarAndWait();
+      } else if (action === "open") {
+        spawnTransferBarWindow();
+      } else if (action === "recreate") {
+        await closeTransferBarAndWait();
+        spawnTransferBarWindow();
+      } else if (action === "reveal" && existing) {
+        await existing.show().catch(() => {});
+        // Window may be mid self-close: if it vanished, recreate it.
+        await new Promise((r) => setTimeout(r, TRANSFER_BAR_REVEAL_VERIFY_MS));
+        const still = await WebviewWindow.getByLabel("kvm-transfer-bar").catch(() => null);
+        const st = useKvmStore.getState();
+        if (!still && (st.continuityNotice !== null || st.continuityTransfers.length > 0)) {
+          spawnTransferBarWindow();
+        }
+      }
+    },
+    [spawnTransferBarWindow, closeTransferBarAndWait],
+  );
+
   const transferBarTriggerKey = `${continuityTransfers.map((t) => t.id).join(",")}|${continuityNotice?.id ?? ""}`;
   useEffect(() => {
     const hasContent = continuityTransfers.length > 0 || continuityNotice !== null;
-    if (hasContent) {
-      hadTransferBarContentRef.current = true;
-      void openTransferBarWindow();
-    } else if (hadTransferBarContentRef.current) {
-      hadTransferBarContentRef.current = false;
-      void closeTransferBarWindow();
-    }
+    transferBarQueueRef.current = transferBarQueueRef.current
+      .then(() => syncTransferBarWindow(hasContent))
+      .catch(() => {});
   }, [
     transferBarTriggerKey,
     continuityTransfers.length,
     continuityNotice,
-    openTransferBarWindow,
-    closeTransferBarWindow,
+    syncTransferBarWindow,
   ]);
 
   const paletteCommands = useMemo(() => {
@@ -701,14 +737,7 @@ function App() {
         setActiveTab("devices");
         if (!selectedSerial) return;
         const base = store.settings;
-        const nextSettings =
-          mode === "flex"
-            ? { ...base, flexDisplay: true, embedded: true, noWindowAspectRatioLock: true, renderFit: "unscaled" as const }
-            : mode === "mirror"
-              ? { ...base, flexDisplay: false, embedded: true, noWindowAspectRatioLock: false, renderFit: "letterbox" as const }
-              : mode === "camera"
-                ? { ...base, flexDisplay: false, embedded: true, noAudio: true, stayAwake: true }
-                : { ...base, embedded: true, maxFps: 60, videoBitRate: 20_000_000, videoCodec: "av1" as const };
+        const nextSettings = settingsForMode(base, mode);
         store.setSettings(nextSettings);
         if (mode !== "camera") {
           void startMirror(selectedSerial, nextSettings).catch((err) => {

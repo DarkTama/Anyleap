@@ -2484,6 +2484,7 @@ async fn start_server_inner(
                         },
                     }
 
+                    let mut cursor_unavailable = false;
                     let action = {
                         let Ok(mut st) = rx_state.lock() else {
                             continue;
@@ -2622,9 +2623,14 @@ async fn start_server_inner(
                                 }
                             }
                         } else {
+                            cursor_unavailable = true;
                             DeltaAction::Ignore
                         }
                     };
+                    if cursor_unavailable {
+                        // GetCursorPos fails off the input desktop (UAC): no inject, no precheck.
+                        injector::report_if_secure_desktop("move");
+                    }
 
                     match action {
                         DeltaAction::Ignore => {}
