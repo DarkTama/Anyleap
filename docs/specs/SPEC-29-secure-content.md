@@ -1,6 +1,6 @@
 # SPEC-29: Secure Content and Screen-Wake While Mirroring
 
-> **Status:** Proposed (2026-11-17)
+> **Status:** Approved (2026-11-17)
 > **Scope:** Rust session layer (`src-tauri/src/commands.rs`), a new `secure_watch` backend module, the Transfer Bar notice path (`src-tauri/src/kvm/commands.rs`, `src/components/desktop/TransferBarWindow.tsx`), the control bar screen-off toggle (`src/components/ControlBar.tsx`), and one per-mode setting (SPEC-28 Phone mirroring tabs).
 > **Related:** SPEC-28 (per-mode settings), SPEC-25 (Continuity notices), GitHub issue #86.
 > **Plan:** `docs/superpowers/plans/2026-11-17-spec29-secure-content.md`
