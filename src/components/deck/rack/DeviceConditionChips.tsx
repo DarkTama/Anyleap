@@ -68,23 +68,32 @@ export function BatteryChip({
   );
 }
 
-export function StatusChip({ status }: { status: DeviceStatus }) {
+export function StatusChip({
+  status,
+  reconnecting = false,
+}: {
+  status: DeviceStatus;
+  reconnecting?: boolean;
+}) {
+  const warm = status === "mirroring" || (status === "offline" && reconnecting);
   const styles =
-    status === "mirroring"
+    warm
       ? "border-ink-700 bg-ink-800 text-gold-400"
       : status === "connected"
       ? "border-transparent bg-status-success-bg text-status-success"
       : "border-transparent bg-status-danger-bg text-status-danger";
 
   const dot =
-    status === "mirroring"
+    warm
       ? "bg-gold-400"
       : status === "connected"
       ? "bg-status-success"
       : "bg-status-danger";
 
   const label =
-    status === "mirroring" ? "Mirroring" : status === "connected" ? "Connected" : "Offline";
+    status === "offline" && reconnecting
+      ? "Reconnecting…"
+      : status === "mirroring" ? "Mirroring" : status === "connected" ? "Connected" : "Offline";
 
   return (
     <span

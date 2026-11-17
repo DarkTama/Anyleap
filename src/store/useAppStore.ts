@@ -44,6 +44,9 @@ interface AppStore {
   closeDoctor: () => void;
   setTimelineOpen: (open: boolean) => void;
   repairNeeded: Record<string, string>;
+  /** Saved-device keys currently being auto-reconnected by the health monitor. */
+  reconnecting: Record<string, boolean>;
+  setReconnecting: (key: string, on: boolean) => void;
   setRepairNeeded: (key: string, msg: string | null) => void;
 
   setDevices: (d: DeviceInfo[]) => void;
@@ -78,6 +81,16 @@ export const useAppStore = create<AppStore>((set) => ({
   doctorSerial: null,
   timelineOpen: false,
   repairNeeded: {},
+  reconnecting: {},
+
+  setReconnecting: (key, on) =>
+    set((st) => {
+      if (Boolean(st.reconnecting[key]) === on) return st;
+      const next = { ...st.reconnecting };
+      if (on) next[key] = true;
+      else delete next[key];
+      return { reconnecting: next };
+    }),
 
   setRepairNeeded: (key, msg) =>
     set((st) => {

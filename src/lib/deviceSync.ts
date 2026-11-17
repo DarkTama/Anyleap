@@ -33,6 +33,12 @@ let lastSyncResult: SyncResult | null = null;
 let lastSyncAtMs: number | null = null;
 let lastRefreshResult: RefreshResult | null = null;
 let lastRefreshAtMs: number | null = null;
+let activeReconnects = 0;
+
+/** True while a refresh or any reconnect is running (background health checks skip then). */
+export function isDeviceSyncBusy(): boolean {
+  return inFlightRefresh !== null || activeReconnects > 0;
+}
 
 /**
  * Pure decision helper: reuse a recently completed device sync/refresh result
@@ -56,6 +62,7 @@ export function resetDeviceSyncStateForTest(): void {
   lastSyncAtMs = null;
   lastRefreshResult = null;
   lastRefreshAtMs = null;
+  activeReconnects = 0;
 }
 
 export function repairKeyFor(target: {
@@ -231,6 +238,18 @@ function applyReconnectedTransport(
  * only when no mDNS match exists or adb rejects authentication.
  */
 export async function reconnectSavedDevice(
+  saved: SavedDevice,
+  opts?: { silent?: boolean; skipSync?: boolean },
+): Promise<ReconnectResult> {
+  activeReconnects++;
+  try {
+    return await reconnectSavedDeviceInner(saved, opts);
+  } finally {
+    activeReconnects--;
+  }
+}
+
+async function reconnectSavedDeviceInner(
   saved: SavedDevice,
   opts?: { silent?: boolean; skipSync?: boolean },
 ): Promise<ReconnectResult> {

@@ -18,6 +18,7 @@ interface DeviceListItemProps {
   subtitle: string;
   telemetryLabel: string;
   status: DeviceStatus;
+  reconnecting?: boolean;
   offlineTone?: "muted" | "danger";
   isSelected: boolean;
   isOfflineDimmed?: boolean;
@@ -64,6 +65,7 @@ export function DeviceListItem({
   subtitle,
   telemetryLabel,
   status,
+  reconnecting = false,
   offlineTone = "muted",
   isSelected,
   isOfflineDimmed = false,
@@ -192,7 +194,7 @@ export function DeviceListItem({
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <TransportChip transport={transport} />
         <BatteryChip battery={battery} showUnknown={true} />
-        <StatusChip status={status} />
+        <StatusChip status={status} reconnecting={reconnecting} />
       </div>
 
       {repairMsg && (

@@ -62,6 +62,7 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
   const setCurrentMode = useAppStore((s) => s.setCurrentMode);
   const batteryMap = useAppStore((s) => s.batteryMap);
   const repairNeeded = useAppStore((s) => s.repairNeeded);
+  const reconnectingMap = useAppStore((s) => s.reconnecting);
   const activities = useActivityStore((s) => s.activities);
   const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
 
@@ -304,6 +305,13 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
           hasUsb={resolved.hasUsb}
           hasWifi={resolved.hasWifi}
           repairMessage={repairMessage}
+          autoReconnecting={
+            !isLive &&
+            Boolean(
+              reconnectingMap[targetRepairKey] ||
+                (resolved.saved?.id && reconnectingMap[resolved.saved.id]),
+            )
+          }
           activeSession={activeSession}
           currentMode={currentMode}
           battery={activeSerial ? batteryMap[activeSerial] : undefined}

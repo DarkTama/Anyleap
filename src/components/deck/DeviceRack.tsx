@@ -12,6 +12,7 @@ import { forgetSaved } from "@/lib/savedDevices";
 import {
   buildRows,
   deviceStatusOf,
+  savedHardwareKey,
   findSessionForDevice,
   getNicknameKey,
   isWifiSerial,
@@ -60,6 +61,7 @@ export function DeviceRack({
   const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
   const openDoctor = useAppStore((s) => s.openDoctor);
   const repairNeeded = useAppStore((s) => s.repairNeeded);
+  const reconnectingMap = useAppStore((s) => s.reconnecting);
 
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -384,6 +386,9 @@ export function DeviceRack({
               subtitle={nickname ? `"${nickname}"` : targetSerial}
               telemetryLabel={telemetryLabel}
               status={status}
+              reconnecting={Boolean(
+                reconnectingMap[savedHardwareKey(saved)] || reconnectingMap[saved.id],
+              )}
               offlineTone="muted"
               isSelected={isSelected}
               isOfflineDimmed={true}

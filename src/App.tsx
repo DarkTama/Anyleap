@@ -27,6 +27,7 @@ import { MSG_NEEDS_REPAIR, resolveDeviceNickname, resolveDeviceTarget } from "@/
 import { createInputBlockedThrottle, inputBlockedMessage } from "@/lib/inputBlockedNotice";
 import { surfaceAdbError } from "@/lib/adbError";
 import { refreshAndReconnectDevices } from "@/lib/deviceSync";
+import { deviceHealth, reportDeviceError } from "@/lib/deviceHealth";
 import {
   isPermissionGranted,
   requestPermission,
@@ -119,7 +120,13 @@ function App() {
     setNotificationsLoading(true);
     setNotificationsError(null);
     try {
-      const list = await getDeviceNotifications(activePhoneSerial);
+      let list;
+      try {
+        list = await getDeviceNotifications(activePhoneSerial);
+      } catch (firstErr) {
+        if (!(await reportDeviceError(firstErr, activePhoneSerial))) throw firstErr;
+        list = await getDeviceNotifications(activePhoneSerial);
+      }
       const normalized: PhoneHubNotification[] = list.map((n) => ({
         key: n.key,
         package: n.package,
@@ -338,6 +345,12 @@ function App() {
       cancelled = true;
     };
   }, [setSavedDevices, setError]);
+
+  // Background health check: notice dropped wireless phones and reconnect via mDNS.
+  useEffect(() => {
+    deviceHealth.start();
+    return () => deviceHealth.stop();
+  }, []);
 
   // Load the persisted control-bar config on launch.
   useEffect(() => {
