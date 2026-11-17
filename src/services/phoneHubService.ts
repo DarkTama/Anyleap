@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { SessionInfo } from "@/lib/types";
+import type { OpenAppResult } from "@/lib/types";
+import { useAppStore } from "@/store/useAppStore";
 import type {
   Album,
   Conversation,
@@ -30,8 +31,13 @@ export const phoneHubSetSettings = (notificationPollSecs: number) =>
 export const phoneListApps = (serial: string, refresh = false) =>
   invoke<PhoneApp[]>("phone_list_apps", { serial, refresh });
 
+/** Opens in the running Flex/Mirror session, else a new window built from the Devices preset. */
 export const phoneOpenApp = (serial: string, packageName: string) =>
-  invoke<SessionInfo>("phone_open_app", { serial, package: packageName });
+  invoke<OpenAppResult>("phone_open_app", {
+    serial,
+    package: packageName,
+    settings: useAppStore.getState().settings,
+  });
 
 export const phoneGetConversations = (serial: string) =>
   invoke<Conversation[]>("phone_get_conversations", { serial });

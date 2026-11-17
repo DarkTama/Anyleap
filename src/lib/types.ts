@@ -34,6 +34,13 @@ export interface SessionInfo {
   recording_path?: string | null;
 }
 
+export type OpenAppOutcome = "flex" | "mirror" | "newWindow";
+
+export interface OpenAppResult {
+  outcome: OpenAppOutcome;
+  session?: SessionInfo | null;
+}
+
 export interface PhoneToggles {
   wifi: boolean;
   bluetooth: boolean;

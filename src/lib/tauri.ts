@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { useAppStore } from "@/store/useAppStore";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   CameraDeviceOption,
@@ -9,6 +10,7 @@ import type {
   DeviceInfo,
   DoctorCheck,
   MdnsService,
+  OpenAppResult,
   MirrorRect,
   PhoneNotification,
   PhoneToggleKey,
@@ -176,8 +178,11 @@ export const getDeviceNotifications = (serial: string) =>
 export const openUrlOnDevice = (serial: string, url: string) =>
   invoke<void>("open_url_on_device", { serial, url });
 
-export const launchAppWindow = (serial: string, packageName: string) =>
-  invoke<SessionInfo>("launch_app_window", { serial, package: packageName });
+export const launchAppWindow = (
+  serial: string,
+  packageName: string,
+  settings: CoreSettings = useAppStore.getState().settings,
+) => invoke<OpenAppResult>("launch_app_window", { serial, package: packageName, settings });
 
 export const getPhoneToggles = (serial: string) =>
   invoke<PhoneToggles>("get_phone_toggles", { serial });

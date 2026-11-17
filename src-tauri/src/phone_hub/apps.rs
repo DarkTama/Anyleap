@@ -7,9 +7,13 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Notify;
 
-use crate::commands::{launch_app_window, validate_package_name, SessionInfo};
+use crate::commands::{
+    adb_cmd, launch_app_window, query_virtual_display, spawn_app_window, validate_package_name,
+    CoreSettings, SessionInfo,
+};
 use crate::phone_hub::poller::PhoneMessagesUpdatedEvent;
 use crate::phone_hub::{resolve_device_identity, scrcpy, validate_serial, PhoneHubState};
+use crate::state::AppState;
 
 pub const UNKNOWN_PKG_REFRESH_COOLDOWN_MS: u64 = 60_000;
 const SCRCPY_LIST_APPS_TIMEOUT_SECS: u64 = 15;
@@ -499,10 +503,235 @@ pub async fn phone_open_app(
     app: AppHandle,
     serial: String,
     package: String,
-) -> Result<SessionInfo, String> {
+    settings: CoreSettings,
+) -> Result<OpenAppResult, String> {
     validate_serial(&serial)?;
     validate_app_package(&package)?;
-    launch_app_window(app, serial, package).await
+    launch_app_window(app, serial, package, settings).await
+}
+
+/// Where an "Open app" request ended up.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum OpenAppOutcome {
+    /// Launched on the virtual display of the running Flex session.
+    Flex,
+    /// Launched on the main display, shown in the running Phone Mirror window.
+    Mirror,
+    /// No display session: a new per-app scrcpy window was spawned.
+    NewWindow,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAppResult {
+    pub outcome: OpenAppOutcome,
+    /// Only set for `NewWindow`.
+    pub session: Option<SessionInfo>,
+}
+
+/// Minimal view of a running scrcpy session used to decide how to open an app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionView {
+    pub mode: String,
+    pub args: Vec<String>,
+    pub display_id: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenAppPlan {
+    /// Flex session; `display_id` None = not captured yet, query `dumpsys display`.
+    Flex {
+        display_id: Option<u32>,
+    },
+    Mirror,
+    NewWindow,
+}
+
+fn is_flex_args(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display="))
+}
+
+/// Pure decision: Flex session wins, then a main-display mirror, else a new
+/// window (none, audio-only, or camera sessions are not display sessions; the
+/// new window is built from the Devices preset by the caller).
+pub fn plan_open_app(sessions: &[SessionView]) -> OpenAppPlan {
+    let displays: Vec<&SessionView> = sessions
+        .iter()
+        .filter(|s| s.mode == "display" && !s.args.iter().any(|a| a == "--no-video"))
+        .collect();
+    if let Some(flex) = displays
+        .iter()
+        .find(|s| s.display_id.is_some() || is_flex_args(&s.args))
+    {
+        return OpenAppPlan::Flex {
+            display_id: flex.display_id,
+        };
+    }
+    if !displays.is_empty() {
+        return OpenAppPlan::Mirror;
+    }
+    OpenAppPlan::NewWindow
+}
+
+/// Extract `pkg/activity` from `cmd package resolve-activity --brief` output
+/// (last non-empty line; earlier lines are `priority=...` noise).
+pub fn parse_resolve_activity(output: &str) -> Option<String> {
+    let line = output.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    let (pkg, act) = line.split_once('/')?;
+    let ok = |t: &str| {
+        !t.is_empty()
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$'))
+    };
+    (ok(pkg) && pkg.contains('.') && ok(act)).then(|| line.to_string())
+}
+
+/// `am start` prints errors but may still exit 0.
+fn am_start_failed(output: &str) -> bool {
+    output.contains("Error:")
+        || output.contains("Exception")
+        || output.contains("Permission Denial")
+        || output.contains("does not exist")
+}
+
+async fn adb_shell_text(app: &AppHandle, serial: &str, args: &[&str]) -> Result<String, String> {
+    let out = adb_cmd(app)
+        .await?
+        .args(["-s", serial, "shell"])
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    ))
+}
+
+async fn resolve_launcher_activity(app: &AppHandle, serial: &str, package: &str) -> Option<String> {
+    let text = adb_shell_text(
+        app,
+        serial,
+        &[
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            package,
+        ],
+    )
+    .await
+    .ok()?;
+    parse_resolve_activity(&text)
+}
+
+async fn start_on_device(
+    app: &AppHandle,
+    serial: &str,
+    package: &str,
+    display_id: Option<u32>,
+) -> Result<(), String> {
+    let component = resolve_launcher_activity(app, serial, package).await;
+    let text = match (&component, display_id) {
+        (Some(c), Some(d)) => {
+            let d = d.to_string();
+            adb_shell_text(app, serial, &["am", "start", "--display", &d, "-n", c]).await?
+        }
+        (Some(c), None) => adb_shell_text(app, serial, &["am", "start", "-n", c]).await?,
+        // monkey cannot target a display, so it is only a main-display fallback.
+        (None, None) => {
+            adb_shell_text(
+                app,
+                serial,
+                &[
+                    "monkey",
+                    "-p",
+                    package,
+                    "-c",
+                    "android.intent.category.LAUNCHER",
+                    "1",
+                ],
+            )
+            .await?
+        }
+        (None, Some(_)) => {
+            return Err(format!("No launcher activity found for {package}"));
+        }
+    };
+    if am_start_failed(&text) || text.contains("No activities found") {
+        let msg = text.trim();
+        return Err(if msg.is_empty() {
+            "Failed to open app on device".into()
+        } else {
+            msg.lines().take(3).collect::<Vec<_>>().join(" ")
+        });
+    }
+    Ok(())
+}
+
+fn sessions_for_serial(app: &AppHandle, serial: &str) -> Result<Vec<SessionView>, String> {
+    let state = app.state::<AppState>();
+    let map = state.sessions.lock().map_err(crate::state::poison_error)?;
+    Ok(map
+        .values()
+        .filter(|s| s.serial == serial)
+        .map(|s| SessionView {
+            mode: s.mode.clone(),
+            args: s.args.clone(),
+            display_id: s.display_id,
+        })
+        .collect())
+}
+
+pub(crate) async fn open_app(
+    app: &AppHandle,
+    serial: String,
+    package: String,
+    settings: CoreSettings,
+) -> Result<OpenAppResult, String> {
+    match plan_open_app(&sessions_for_serial(app, &serial)?) {
+        OpenAppPlan::Flex { display_id } => {
+            // Display id comes from scrcpy's "New display" log line stored on the
+            // session; `dumpsys display` is only a fallback if it was not seen yet.
+            let id = match display_id {
+                Some(id) => id,
+                None => {
+                    let adb =
+                        crate::commands::adb_path().ok_or_else(|| "adb not found".to_string())?;
+                    let serial_c = serial.clone();
+                    tokio::task::spawn_blocking(move || query_virtual_display(&adb, &serial_c))
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .map(|(id, _)| id)
+                        .ok_or_else(|| "Flex display is not ready yet; try again".to_string())?
+                }
+            };
+            start_on_device(app, &serial, &package, Some(id)).await?;
+            Ok(OpenAppResult {
+                outcome: OpenAppOutcome::Flex,
+                session: None,
+            })
+        }
+        OpenAppPlan::Mirror => {
+            start_on_device(app, &serial, &package, None).await?;
+            Ok(OpenAppResult {
+                outcome: OpenAppOutcome::Mirror,
+                session: None,
+            })
+        }
+        OpenAppPlan::NewWindow => {
+            let info = spawn_app_window(app, serial, &package, settings).await?;
+            Ok(OpenAppResult {
+                outcome: OpenAppOutcome::NewWindow,
+                session: Some(info),
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -663,5 +892,92 @@ mod tests {
         assert!(validate_app_package("com.example.chat rm").is_err());
         assert!(validate_app_package("").is_err());
         assert!(validate_app_package("single").is_err());
+    }
+
+    fn view(mode: &str, args: &[&str], display_id: Option<u32>) -> SessionView {
+        SessionView {
+            mode: mode.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            display_id,
+        }
+    }
+
+    #[test]
+    fn plan_open_app_branches() {
+        assert_eq!(plan_open_app(&[]), OpenAppPlan::NewWindow);
+
+        let mirror = view("display", &["--serial", "X", "--max-size=1280"], None);
+        assert_eq!(
+            plan_open_app(std::slice::from_ref(&mirror)),
+            OpenAppPlan::Mirror
+        );
+
+        let flex = view(
+            "display",
+            &["--new-display=1920x1080/240", "--flex-display"],
+            Some(18),
+        );
+        assert_eq!(
+            plan_open_app(std::slice::from_ref(&flex)),
+            OpenAppPlan::Flex {
+                display_id: Some(18)
+            }
+        );
+        // Display id not captured yet: still Flex (caller falls back to dumpsys).
+        let flex_pending = view("display", &["--new-display"], None);
+        assert_eq!(
+            plan_open_app(&[flex_pending]),
+            OpenAppPlan::Flex { display_id: None }
+        );
+        // Flex wins over a mirror regardless of order.
+        assert_eq!(
+            plan_open_app(&[mirror, flex]),
+            OpenAppPlan::Flex {
+                display_id: Some(18)
+            }
+        );
+    }
+
+    #[test]
+    fn plan_open_app_ignores_camera_and_video_less_sessions() {
+        let camera = view("camera", &["--video-source=camera"], None);
+        assert_eq!(plan_open_app(&[camera]), OpenAppPlan::NewWindow);
+        let audio = view("display", &["--no-video", "--no-window"], None);
+        assert_eq!(plan_open_app(&[audio]), OpenAppPlan::NewWindow);
+    }
+
+    #[test]
+    fn resolve_activity_parser() {
+        let tele = "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false\r\norg.telegram.messenger/.DefaultIcon\r\n";
+        assert_eq!(
+            parse_resolve_activity(tele).as_deref(),
+            Some("org.telegram.messenger/.DefaultIcon")
+        );
+        let settings = "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\ncom.android.settings/.Settings\n";
+        assert_eq!(
+            parse_resolve_activity(settings).as_deref(),
+            Some("com.android.settings/.Settings")
+        );
+        assert_eq!(
+            parse_resolve_activity("x\ncom.android.chrome/com.google.android.apps.chrome.Main")
+                .as_deref(),
+            Some("com.android.chrome/com.google.android.apps.chrome.Main")
+        );
+        assert_eq!(parse_resolve_activity("No activity found\n"), None);
+        assert_eq!(parse_resolve_activity(""), None);
+        assert_eq!(parse_resolve_activity("priority=0 isDefault=false\n"), None);
+    }
+
+    #[test]
+    fn am_start_error_detection() {
+        assert!(am_start_failed(
+            "Error: Activity class {x/y} does not exist."
+        ));
+        assert!(am_start_failed(
+            "java.lang.SecurityException: Permission Denial"
+        ));
+        assert!(!am_start_failed(
+            "Starting: Intent { cmp=a.b/.C }\nWarning: Activity not started, intent has been delivered to currently running top-most instance."
+        ));
     }
 }

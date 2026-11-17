@@ -8,6 +8,7 @@ import {
   Search,
 } from "lucide-react";
 import { phoneListApps, phoneOpenApp } from "@/services/phoneHubService";
+import { describeOpenApp } from "@/lib/openApp";
 import { logActivity } from "@/stores/activityStore";
 import type { PhoneApp } from "@/types/phone";
 
@@ -73,12 +74,15 @@ export function AppsView({ serial }: AppsViewProps) {
   async function handleOpen(app: PhoneApp) {
     setOpeningPkg(app.package);
     setError(null);
-    setStatusMsg(`Opening ${app.label || app.package} in a mirror window…`);
+    const name = app.label || app.package;
+    setStatusMsg(`Opening ${name}…`);
     try {
-      await phoneOpenApp(serial, app.package);
+      const res = await phoneOpenApp(serial, app.package);
+      const msg = describeOpenApp(name, res?.outcome);
+      setStatusMsg(msg);
       logActivity({
         kind: "app",
-        title: `Opened ${app.label || app.package}`,
+        title: msg,
         detail: app.package,
       });
     } catch (e) {
