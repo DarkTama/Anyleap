@@ -21,6 +21,7 @@ import {
   type DeviceStatus,
   type SavedRow,
   findSessionForDevice,
+  savedHardwareKey,
   getNicknameKey,
   isWifiSerial,
   MSG_NEEDS_REPAIR,
@@ -295,6 +296,9 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const setNickname = useAppStore((s) => s.setNickname);
   const openDoctor = useAppStore((s) => s.openDoctor);
   const repairNeeded = useAppStore((s) => s.repairNeeded);
+  const autoReconnecting = useAppStore(
+    (s) => Boolean(s.reconnecting[savedHardwareKey(saved)] || s.reconnecting[saved.id]),
+  );
   const batteryMap = useAppStore((s) => s.batteryMap);
   const overviewBySerial = usePhoneHubStore((s) => s.overviewsBySerial);
   const [editing, setEditing] = useState(false);
@@ -481,8 +485,10 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
             />
           )}
           <StatusBadge status={status} mode={session?.mode} />
-          {rowRepairMsg && (
-            <span className="text-[11px] text-status-danger">{rowRepairMsg}</span>
+          {status === "offline" && autoReconnecting ? (
+            <span className="text-[11px] text-gold-400">Reconnecting…</span>
+          ) : (
+            rowRepairMsg && <span className="text-[11px] text-status-danger">{rowRepairMsg}</span>
           )}
         </span>
         <span className="flex gap-2">

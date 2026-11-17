@@ -32,6 +32,7 @@ interface DeviceHeroCardProps {
   hasUsb?: boolean;
   hasWifi?: boolean;
   repairMessage?: string | null;
+  autoReconnecting?: boolean;
   activeSession: SessionInfo | null;
   currentMode: StudioMode;
   battery?: BatteryInfo;
@@ -63,6 +64,7 @@ export function DeviceHeroCard({
   hasUsb,
   hasWifi,
   repairMessage,
+  autoReconnecting = false,
   activeSession,
   currentMode,
   battery,
@@ -186,7 +188,7 @@ export function DeviceHeroCard({
                 </span>
               )}
               <TransportChip transport={transport} />
-              <StatusChip status={status} />
+              <StatusChip status={status} reconnecting={autoReconnecting} />
             </div>
 
             <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-text-muted">

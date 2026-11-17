@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { pullDeviceFile } from "@/lib/tauri";
+import { reportDeviceError } from "@/lib/deviceHealth";
 import { selectClass, optionClass } from "@/lib/styles";
 import {
   phoneListAlbums,
@@ -302,13 +303,22 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
       setError(null);
 
       try {
-        const res = await phoneListMedia(
-          serial,
-          kind,
-          album === "__all" ? null : album,
-          offset,
-          GALLERY_PAGE_SIZE,
-        );
+        const query = () =>
+          phoneListMedia(
+            serial,
+            kind,
+            album === "__all" ? null : album,
+            offset,
+            GALLERY_PAGE_SIZE,
+          );
+        let res;
+        try {
+          res = await query();
+        } catch (firstErr) {
+          // Dropped wireless transport: reconnect via mDNS, then retry once.
+          if (!(await reportDeviceError(firstErr, serial))) throw firstErr;
+          res = await query();
+        }
         if (gen !== queryGenerationRef.current) return;
 
         setTotal(res.total);

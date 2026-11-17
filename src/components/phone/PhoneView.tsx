@@ -1,3 +1,4 @@
+import { reportDeviceError } from "@/lib/deviceHealth";
 import { useEffect, useState } from "react";
 import {
   AppWindow,
@@ -143,6 +144,11 @@ export function PhoneView({
 
     void phoneHubWatch(activeSerial, ["overview", "notifications"]).catch(() => {});
     phoneGetOverview(activeSerial, true)
+      .catch(async (firstErr) => {
+        // Dropped wireless transport: reconnect via mDNS, then retry once.
+        if (!(await reportDeviceError(firstErr, activeSerial))) throw firstErr;
+        return phoneGetOverview(activeSerial, true);
+      })
       .then((ov) => {
         if (!cancelled) applyOverview(activeSerial, ov);
       })
