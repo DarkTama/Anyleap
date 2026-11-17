@@ -1884,9 +1884,10 @@ async fn start_server_inner(
     let pkt_out_tx = outgoing_tx.clone();
     {
         let blocked_tx = outgoing_tx.clone();
-        injector::set_input_blocked_sink(move |proc_name| {
+        injector::set_input_blocked_sink(move |proc_name, reason| {
             let _ = blocked_tx.send(Outbound::Packet(KvmPacket::InputBlocked {
                 foreground_process: proc_name,
+                reason,
             }));
         });
     }
@@ -3083,13 +3084,18 @@ pub async fn kvm_connect_peer(
                     super::open_on_linked::handle_open_file_packet(&app_h, &transfer_id);
                 }
                 // --- end SPEC-25c ---
-                KvmPacket::InputBlocked { foreground_process } => {
+                KvmPacket::InputBlocked {
+                    foreground_process,
+                    reason,
+                } => {
                     super::debug_log::note(|| {
-                        format!("INPUT_BLOCKED_RECV side=main fg_process={foreground_process}")
+                        format!(
+                            "INPUT_BLOCKED_RECV side=main reason={reason} fg_process={foreground_process}"
+                        )
                     });
                     let _ = app_h.emit(
                         "kvm-input-blocked",
-                        serde_json::json!({ "proc": foreground_process }),
+                        serde_json::json!({ "proc": foreground_process, "reason": reason }),
                     );
                 }
                 // --- SPEC-25b ---
