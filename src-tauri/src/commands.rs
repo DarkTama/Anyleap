@@ -677,11 +677,42 @@ fn degrade_args(args: &[String]) -> Vec<String> {
 /// Pick a human-useful one-liner from scrcpy stderr. scrcpy prints the real cause
 /// as an `ERROR:` line, then a terse final "killed"/"aborted" — so we surface the
 /// ERROR (or a device WARN), not the last line.
+/// adb push/progress output (success noise), e.g. "1 file pushed, 0 skipped. 13.3 MB/s".
+fn is_adb_progress_line(line: &str) -> bool {
+    let low = line.to_lowercase();
+    if low.contains("file pushed") || low.contains("files pushed") {
+        return true;
+    }
+    let mut from = 0;
+    while let Some(i) = low[from..].find("mb/s") {
+        let pos = from + i;
+        if low[..pos]
+            .trim_end()
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
+        from = pos + 4;
+    }
+    false
+}
+
+/// Error text for a session exit: empty when the user stopped it on purpose.
+fn exit_error_summary(user_stopped: bool, stderr: &str, command_error: Option<&str>) -> String {
+    if user_stopped {
+        String::new()
+    } else {
+        summarize_scrcpy_error(stderr, command_error)
+    }
+}
+
 fn summarize_scrcpy_error(stderr: &str, command_error: Option<&str>) -> String {
     let lines: Vec<&str> = stderr
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && !is_adb_progress_line(l))
         .collect();
     if let Some(err) = lines.iter().find(|l| l.contains("ERROR:")) {
         return err.to_string();
@@ -808,6 +839,7 @@ async fn stop_stale_sessions_for_serial(app: &AppHandle, serial: &str) -> bool {
                 .collect();
             for sid in stale_ids {
                 if let Some(old) = map.remove(&sid) {
+                    st.mark_user_stopped(&sid);
                     stale.push(old);
                 }
             }
@@ -950,6 +982,10 @@ pub(crate) fn spawn_session_inner<'a>(
                     }
                     CommandEvent::Error(e) => command_error = Some(e),
                     CommandEvent::Terminated(payload) => {
+                        let user_stopped = app2
+                            .try_state::<AppState>()
+                            .map(|st| st.take_user_stopped(&id2))
+                            .unwrap_or(false);
                         if let Some(st) = app2.try_state::<AppState>() {
                             match st.sessions.lock() {
                                 Ok(mut s) => {
@@ -1049,7 +1085,8 @@ pub(crate) fn spawn_session_inner<'a>(
                             .await;
                             break;
                         }
-                        let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
+                        let summary =
+                            exit_error_summary(user_stopped, &stderr_buf, command_error.as_deref());
                         let _ = app2.emit(
                             "session-exited",
                             SessionExited {
@@ -1397,7 +1434,10 @@ pub async fn restart_with_screen_off(
             .iter()
             .find(|(_, s)| s.serial == serial)
             .map(|(k, _)| k.clone());
-        key.and_then(|k| map.remove(&k))
+        key.and_then(|k| {
+            state.mark_user_stopped(&k);
+            map.remove(&k)
+        })
     };
     let old = old.ok_or_else(|| "no active mirror for this device".to_string())?;
     let args = restart_screen_off_args(&old.args, off);
@@ -1498,6 +1538,7 @@ pub async fn stop_mirror(
         .map_err(poison_error)?
         .remove(&session_id);
     if let Some(s) = session {
+        state.mark_user_stopped(&session_id);
         let serial = s.serial.clone();
         let pid = s.pid;
         let is_flex = s.display_id.is_some()
@@ -2338,6 +2379,44 @@ pub(crate) fn query_virtual_display(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn summarizer_ignores_adb_push_lines() {
+        let push = "scrcpy-server: 1 file pushed, 0 skipped. 13.3 MB/s (733930 bytes in 0.052s)";
+        assert_eq!(
+            summarize_scrcpy_error(push, None),
+            "scrcpy exited without output"
+        );
+        let mixed = format!(
+            "{push}
+ERROR: Device disconnected
+{push}"
+        );
+        assert_eq!(
+            summarize_scrcpy_error(&mixed, None),
+            "ERROR: Device disconnected"
+        );
+        assert!(is_adb_progress_line("3 files pushed, 0 skipped"));
+        assert!(is_adb_progress_line("5 MB/s"));
+        assert!(!is_adb_progress_line("MB/s unknown"));
+    }
+
+    #[test]
+    fn user_stop_suppresses_error() {
+        let stderr = "x: 1 file pushed, 0 skipped. 13.3 MB/s
+ERROR: boom";
+        assert_eq!(exit_error_summary(true, stderr, None), "");
+        assert_eq!(exit_error_summary(false, stderr, None), "ERROR: boom");
+    }
+
+    #[test]
+    fn user_stopped_flag_is_consumed_once() {
+        let st = AppState::default();
+        assert!(!st.take_user_stopped("a"));
+        st.mark_user_stopped("a");
+        assert!(st.take_user_stopped("a"));
+        assert!(!st.take_user_stopped("a"));
+    }
+
     use super::*;
 
     #[test]

@@ -48,6 +48,25 @@ pub struct Session {
 pub struct AppState {
     pub sessions: Mutex<HashMap<String, Session>>,
     pub kvm: Mutex<KvmState>,
+    /// Session ids the user stopped on purpose; their exit must not surface an error.
+    pub user_stopped: Mutex<std::collections::HashSet<String>>,
+}
+
+impl AppState {
+    /// Mark a session as user-stopped before killing it.
+    pub fn mark_user_stopped(&self, id: &str) {
+        if let Ok(mut set) = self.user_stopped.lock() {
+            set.insert(id.to_string());
+        }
+    }
+
+    /// Consume the user-stopped flag for a session; true if it was set.
+    pub fn take_user_stopped(&self, id: &str) -> bool {
+        self.user_stopped
+            .lock()
+            .map(|mut set| set.remove(id))
+            .unwrap_or(false)
+    }
 }
 
 /// Format a PoisonError into a human-readable String for Tauri command results.
