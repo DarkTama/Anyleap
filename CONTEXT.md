@@ -90,3 +90,9 @@ Flat, high-contrast workstation theme replacing the Graphite palette (`SPEC-17`)
 - **Accents**: `--gold-400` (`#D8B46A`, used sparingly for primary CTAs, active/selected states, focus rings, active KVM edge highlight, and brand moments), `--gold-600` (`#A9822F` pressed/light accent), `--mist-300` (`#B7C9D6` info/secondary highlight).
 - **Status Tokens**: `--status-success` / `--status-warning` / `--status-danger` (non-neon, `>= 4.5:1` contrast).
 - **Motion Curve**: `--ease-out` (`cubic-bezier(0.23, 1, 0.32, 1)`), 160ms press feedback (`scale(0.97)`), zero gradients or backdrop-blur, zero animation on keyboard-initiated actions (`Ctrl+K`).
+
+### Mode defaults (`SPEC-28`, ADR-0005)
+The per-mode mirroring settings persisted as `modeDefaults` in `settings.json`. Each **mirroring mode** (`mirror`, `flex`, `camera`, `hifi`; code type `StudioMode`) owns a complete object, so switching modes never changes another mode. A Devices launch builds its `CoreSettings` with `resolveLaunchSettings(mode, defaults)`, which forces only `flexDisplay` (true for `flex`).
+- **Quality** (UI): per-mode choice Smooth / Balanced / Sharp / Maximum, the former Low / Medium / High / Highest preset bundles. Derived from `maxSize`, `videoBitRate`, `maxFps`, `videoCodec`; shown as Custom when no bundle matches. Replaces the global "Quality preset".
+- **Settings rail**: seven sections (General, Phone mirroring, Control bar, Shared mouse & keyboard, Clipboard & files, Audio, media & power, Advanced) with a filter box.
+- **Single-source rule**: a setting has one editor; other places show it read-only with a link (for example dwell and deadzone are edited in the Computers tab).
