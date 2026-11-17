@@ -1,17 +1,9 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeftRight, FolderOpen, LayoutGrid, Monitor, RefreshCw, Sparkles, Laptop } from "lucide-react";
-import { getSystemResolution } from "@/lib/tauri";
+import { ArrowLeftRight, FolderOpen, RefreshCw, Sparkles, Laptop } from "lucide-react";
+import { PhoneMirroringSection } from "@/components/settings/PhoneMirroringSection";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppUpdateStore } from "@/stores/appUpdateStore";
-import {
-  PRESET_BUNDLES,
-  PRESET_HINTS,
-  PRESET_LABELS,
-  type Codec,
-  type CoreSettings,
-  type QualityPreset,
-} from "@/lib/types";
 import { optionClass, selectClass } from "@/lib/styles";
 import { emit } from "@tauri-apps/api/event";
 import {
@@ -22,7 +14,7 @@ import {
   saveControlConfig,
   type ControlConfig,
 } from "@/lib/controlConfig";
-import { saveAppPrefs, saveQuality, type AppPrefs } from "@/lib/persist";
+import { saveAppPrefs, type AppPrefs } from "@/lib/persist";
 import { useKvmStore } from "@/stores/kvmStore";
 import {
   kvmGetDebugLogPath,
@@ -30,34 +22,13 @@ import {
   kvmSetSyncSettings,
 } from "@/services/kvmService";
 
-const CODECS: Codec[] = ["h264", "h265", "av1"];
 const SIZE_LABELS: Record<ControlConfig["size"], string> = {
   sm: "Small",
   md: "Medium",
   lg: "Large",
 };
-const PRESETS: QualityPreset[] = ["low", "medium", "high", "highest", "custom"];
 
 export function SettingsPanel() {
-  const settings = useAppStore((s) => s.settings);
-  const preset = useAppStore((s) => s.preset);
-  const setSettings = useAppStore((s) => s.setSettings);
-  const setPreset = useAppStore((s) => s.setPreset);
-
-  function applyPreset(p: QualityPreset) {
-    const next = p !== "custom" ? { ...settings, ...PRESET_BUNDLES[p] } : settings;
-    setPreset(p);
-    setSettings(next);
-    void saveQuality(next, p);
-  }
-
-  function update<K extends keyof CoreSettings>(key: K, value: CoreSettings[K]) {
-    const next = { ...settings, [key]: value };
-    setSettings(next);
-    setPreset("custom");
-    void saveQuality(next, "custom");
-  }
-
   const controlConfig = useAppStore((s) => s.controlConfig);
   const setControlConfig = useAppStore((s) => s.setControlConfig);
 
@@ -83,241 +54,16 @@ export function SettingsPanel() {
 
   return (
     <div className="space-y-4">
+    <PhoneMirroringSection />
+
     <Card>
       <CardHeader>
-        <CardTitle>Settings</CardTitle>
+        <CardTitle>General</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-text-muted">Quality preset</label>
-          <select
-            className={selectClass}
-            value={preset}
-            onChange={(e) => applyPreset(e.target.value as QualityPreset)}
-          >
-            {PRESETS.map((p) => (
-              <option key={p} value={p} className={optionClass}>
-                {PRESET_LABELS[p]}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-text-muted">{PRESET_HINTS[preset]}</p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <NumberField
-            label="Max resolution"
-            hint="Long side in px; 0 = native"
-            value={settings.maxSize}
-            onChange={(v) => update("maxSize", v)}
-          />
-          <NumberField
-            label="Bitrate (Mbps)"
-            hint="Higher = sharper, needs better Wi-Fi"
-            value={Math.round(settings.videoBitRate / 1_000_000)}
-            onChange={(v) => update("videoBitRate", v * 1_000_000)}
-          />
-          <NumberField
-            label="Max FPS"
-            hint="60 smooth; 30 saves bandwidth"
-            value={settings.maxFps}
-            onChange={(v) => update("maxFps", v)}
-          />
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-text-muted">Codec</label>
-            <select
-              className={selectClass}
-              value={settings.videoCodec}
-              onChange={(e) => update("videoCodec", e.target.value as Codec)}
-            >
-              {CODECS.map((c) => (
-                <option key={c} value={c} className={optionClass}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-2">
           <Toggle
-            label="Keep awake"
-            checked={settings.stayAwake}
-            onChange={(v) => update("stayAwake", v)}
-          />
-          <Toggle
-            label="Turn screen off"
-            checked={settings.turnScreenOff}
-            onChange={(v) => update("turnScreenOff", v)}
-          />
-          <Toggle
-            label="Fullscreen"
-            checked={settings.fullscreen}
-            onChange={(v) => update("fullscreen", v)}
-          />
-          <Toggle
-            label="Show touches"
-            checked={settings.showTouches}
-            onChange={(v) => update("showTouches", v)}
-          />
-          <Toggle
-            label="No audio"
-            checked={settings.noAudio}
-            onChange={(v) => update("noAudio", v)}
-          />
-          <Toggle
-            label="View only"
-            checked={settings.noControl}
-            onChange={(v) => update("noControl", v)}
-          />
-          <Toggle
-            label="Disable virtual keyboard"
-            checked={settings.noKeyboardIme}
-            onChange={(v) => update("noKeyboardIme", v)}
-          />
-        </div>
-
-        <div className="space-y-2 border-t border-ink-700 pt-3">
-          <label className="text-xs font-medium text-text-muted">Display</label>
-          <div className="space-y-1">
-            <Toggle
-              label="Flex display (desktop mode)"
-              checked={settings.flexDisplay}
-              onChange={(v) => update("flexDisplay", v)}
-            />
-            <p className="text-[11px] text-text-muted">
-              Virtual display that continuously resizes with the window (Android 10+)
-            </p>
-          </div>
-          <div className="space-y-1">
-            <Toggle
-              label="Embedded mirror (integrated sidebar)"
-              checked={settings.embedded ?? false}
-              onChange={(v) => update("embedded", v)}
-            />
-            <p className="text-[11px] text-text-muted">
-              Embeds mirror viewport and toolbar into a single native window (Escrcpy style)
-            </p>
-          </div>
-          {settings.flexDisplay && (() => {
-            const rawSize = settings.flexDisplaySize || "";
-            const dpiMatch = rawSize.match(/\/(\d+)/);
-            const parsedDpi = dpiMatch ? Number.parseInt(dpiMatch[1], 10) : 240;
-            const iconSize = Math.max(20, Math.min(48, Math.round(28 * (parsedDpi / 200))));
-            const autoDetectResolution = async () => {
-              try {
-                const [w, h] = await getSystemResolution();
-                update("flexDisplaySize", `${w}x${h}/200`);
-              } catch (e) {
-                console.error(e);
-              }
-            };
-            return (
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    className={selectClass}
-                    value={settings.flexDisplaySize}
-                    placeholder="Auto — or e.g. 1920x1080/200"
-                    onChange={(e) => update("flexDisplaySize", e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    onClick={autoDetectResolution}
-                    className="btn-tactile flex items-center gap-1 rounded border border-ink-700 bg-ink-800 px-2 text-[11px] text-text hover:border-text-muted hover:text-text-strong shrink-0"
-                    title="Detect PC native monitor resolution"
-                  >
-                    <Monitor className="h-3 w-3" />
-                    Auto PC Res
-                  </button>
-                </div>
-
-                {/* DPI Scale explanation & Live Icon Preview */}
-                <div className="flex items-center gap-3 rounded border border-ink-700 bg-ink-950 p-2.5">
-                  <div className="flex flex-col items-center gap-1 shrink-0">
-                    <div
-                      className="flex items-center justify-center rounded-xl border border-gold-400/50 bg-ink-800 text-gold-400"
-                      style={{ width: `${iconSize}px`, height: `${iconSize}px` }}
-                    >
-                      <LayoutGrid className="w-1/2 h-1/2" />
-                    </div>
-                    <span className="text-[10px] text-text-muted">App</span>
-                  </div>
-                  <div className="text-xs text-text-muted">
-                    <span className="font-semibold text-text-strong">{parsedDpi} DPI</span> icon size preview
-                    <p className="text-[10px] text-text-muted mt-0.5">
-                      {parsedDpi <= 160
-                        ? "Compact: small icons, maximum desktop workspace"
-                        : parsedDpi <= 200
-                        ? "Medium: balanced app and desktop scaling"
-                        : parsedDpi <= 240
-                        ? "Standard: tablet default sizing"
-                        : "Large: touch-friendly oversized icons"}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Preset chips */}
-                <div className="flex flex-wrap gap-1.5 pt-0.5">
-                  {[
-                    { label: "1080p Compact (160 DPI)", val: "1920x1080/160" },
-                    { label: "1080p Balanced (200 DPI)", val: "1920x1080/200" },
-                    { label: "1080p Standard (240 DPI)", val: "1920x1080/240" },
-                    { label: "1440p HiDPI (200 DPI)", val: "2560x1440/200" },
-                  ].map((p) => (
-                    <button
-                      key={p.val}
-                      type="button"
-                      onClick={() => update("flexDisplaySize", p.val)}
-                      className={`btn-tactile rounded px-1.5 py-0.5 text-[10px] ${
-                        settings.flexDisplaySize === p.val
-                          ? "border border-gold-400 bg-ink-800 text-gold-400 font-medium"
-                          : "border border-ink-700 bg-ink-950 text-text-muted hover:bg-ink-800 hover:text-text-strong"
-                      }`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-text-muted">
-                  Resolution as WxH, and /dpi. Lower DPI gives smaller icons and more screen space.
-                </p>
-
-                <Toggle
-                  label="Hide virtual taskbar"
-                  checked={settings.hideVirtualTaskbar ?? false}
-                  onChange={(v) => update("hideVirtualTaskbar", v)}
-                />
-                <p className="text-[11px] text-text-muted">
-                  Hides Android navigation bar / taskbar on the virtual desktop display
-                </p>
-              </div>
-            );
-          })()}
-          <Toggle
-            label="Unlock aspect ratio"
-            checked={settings.noWindowAspectRatioLock}
-            onChange={(v) => update("noWindowAspectRatioLock", v)}
-          />
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-text-muted">Render fit</label>
-            <select
-              className={selectClass}
-              value={settings.renderFit}
-              onChange={(e) => update("renderFit", e.target.value as CoreSettings["renderFit"])}
-            >
-              <option value="letterbox" className={optionClass}>Letterbox</option>
-              <option value="unscaled" className={optionClass}>Unscaled</option>
-              <option value="stretched" className={optionClass}>Stretched</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="space-y-2 border-t border-ink-700 pt-3">
-          <label className="text-xs font-medium text-text-muted">App</label>
-          <Toggle
-            label="Minimize to tray on close"
+            label="Minimize to tray when closing the window"
             checked={appPrefs.minimizeToTrayOnClose}
             onChange={(v) => updateAppPrefs({ ...appPrefs, minimizeToTrayOnClose: v })}
           />
@@ -327,7 +73,7 @@ export function SettingsPanel() {
             onChange={(v) => updateAppPrefs({ ...appPrefs, checkUpdates: v })}
           />
           <Toggle
-            label="Desktop pop-ups for phone notifications"
+            label="Show phone notifications on this PC"
             checked={appPrefs.desktopNotifications}
             onChange={(v) => updateAppPrefs({ ...appPrefs, desktopNotifications: v })}
           />
@@ -462,13 +208,10 @@ function KvmSettingsCard() {
     void kvmSetSyncSettings(
       kvmSettings.syncClipboardText,
       kvmSettings.syncClipboardImage,
-      kvmSettings.syncFileTransfer
+      // Retired gate (SPEC-28 §9.3): always on; "Copy-paste files" is the only file switch.
+      true
     ).catch(() => {});
-  }, [
-    kvmSettings.syncClipboardText,
-    kvmSettings.syncClipboardImage,
-    kvmSettings.syncFileTransfer,
-  ]);
+  }, [kvmSettings.syncClipboardText, kvmSettings.syncClipboardImage]);
 
   useEffect(() => {
     void kvmGetDebugLogPath()
@@ -632,13 +375,6 @@ function KvmSettingsCard() {
               checked={kvmSettings.syncClipboardImage}
               onChange={(checked) =>
                 updateKvmSettings({ syncClipboardImage: checked })
-              }
-            />
-            <Toggle
-              label="File Transfer Drop Sync"
-              checked={kvmSettings.syncFileTransfer}
-              onChange={(checked) =>
-                updateKvmSettings({ syncFileTransfer: checked })
               }
             />
           </div>

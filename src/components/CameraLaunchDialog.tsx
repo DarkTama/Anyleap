@@ -6,7 +6,11 @@ import { selectClass } from "@/lib/styles";
 import { listDeviceCameras, startCameraMirror } from "@/lib/tauri";
 import type { CameraDeviceOption, CameraSettings } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
+import { CAMERA_BITRATE_BPS, toCameraSettings } from "@/lib/modeSettings";
 import { logActivity } from "@/stores/activityStore";
+/** Camera defaults say low / balanced / high; the dialog calls the top tier "maximum". */
+const dialogBitrate = (b: string) => (b === "high" ? "maximum" : b);
+
 interface CameraLaunchDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -32,11 +36,16 @@ export function CameraLaunchDialog({
   const [resolution, setResolution] = useState<string>("1280x720");
   const [fps, setFps] = useState<number>(30);
   const [orientation, setOrientation] = useState<string>("270");
-  const [bitrateMode, setBitrateMode] = useState<string>("smooth");
+  // Pre-filled from the Camera mode defaults (Settings > Phone mirroring); per-launch
+  // choices made here are not written back.
+  const cameraDefaults = useAppStore((s) => s.modeDefaults.camera);
+  const [bitrateMode, setBitrateMode] = useState<string>(dialogBitrate(cameraDefaults.bitrate));
   const [torch, setTorch] = useState<boolean>(false);
-  const [micAudio, setMicAudio] = useState<boolean>(true);
+  const [micAudio, setMicAudio] = useState<boolean>(cameraDefaults.playAudio);
   useEffect(() => {
     if (!isOpen) return;
+    setBitrateMode(dialogBitrate(cameraDefaults.bitrate));
+    setMicAudio(cameraDefaults.playAudio);
 
     let active = true;
     setLoading(true);
@@ -66,7 +75,7 @@ export function CameraLaunchDialog({
     return () => {
       active = false;
     };
-  }, [isOpen, serial]);
+  }, [isOpen, serial, cameraDefaults.bitrate, cameraDefaults.playAudio]);
 
   if (!isOpen) return null;
 
@@ -74,13 +83,13 @@ export function CameraLaunchDialog({
     setStarting(true);
     setError(null);
     try {
-      const isEmbedded = useAppStore.getState().settings.embedded;
+      const camera = useAppStore.getState().modeDefaults.camera;
       let videoBitRate: number | undefined = 4_000_000;
-      if (bitrateMode === "low") videoBitRate = 2_000_000;
-      if (bitrateMode === "balanced") videoBitRate = 8_000_000;
-      if (bitrateMode === "maximum") videoBitRate = 16_000_000;
+      if (bitrateMode === "low") videoBitRate = CAMERA_BITRATE_BPS.low;
+      if (bitrateMode === "balanced") videoBitRate = CAMERA_BITRATE_BPS.balanced;
+      if (bitrateMode === "maximum") videoBitRate = CAMERA_BITRATE_BPS.high;
 
-      const settings: CameraSettings = {
+      const settings: CameraSettings = toCameraSettings(camera, {
         facing,
         cameraId: selectedId || undefined,
         size: resolution || undefined,
@@ -91,8 +100,7 @@ export function CameraLaunchDialog({
         highSpeed: false,
         torch,
         noAudio: !micAudio,
-        embedded: isEmbedded,
-      };
+      });
       await startCameraMirror(serial, settings);
       onClose();
       onStarted?.();

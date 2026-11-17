@@ -100,3 +100,16 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
    ```
 4. Options: `--scenario` (`basic`, `hud` [<=50 ms while HUD toast appears], `reenter`, `after-click`, or `all`), `--repeat <N>`, `--delay-ms <MS>`, `--addr <IP:PORT>`. Prints per-step foreground HWND/process and a summary table; exits non-zero on any `FAIL`.
 
+
+---
+
+## F. Per-mode mirroring settings (SPEC-28 phase 1)
+
+- [ ] Upgrade a profile that had Camera residue (`noAudio: true`): Mirror and Flex have sound, and Settings > Phone mirroring shows the one-time audio notice; Dismiss removes it for good.
+- [ ] Launch each mode (Mirror, Flex, High fidelity) from the Devices rack, the Devices deck, the Command Palette and Phone Hub > Mirror: each uses its own tab's values.
+- [ ] Switching the mode in Devices changes no value on the Settings tabs; switching tabs in Settings changes nothing.
+- [ ] Flex size, Hide Android taskbar and the DPI preview appear on the Flex tab only; the deck toggles edit the selected mode's values.
+- [ ] Camera tab: microphone, bitrate and one-window toggles pre-fill the Camera launch dialog.
+- [ ] Keyboard only: Tab to the mode tabs, Left/Right/Home/End select; Space toggles a switch; every control has a visible label.
+- [ ] "File Transfer Drop Sync" is gone; a profile that had it off now has "Copy-paste files across PCs" off.
+- [ ] Control window hides Rotate for a Flex session and shows it for Mirror.

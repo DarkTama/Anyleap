@@ -33,6 +33,13 @@ Items observed during M2 testing, to be sequenced into future milestones.
 - **Strict stream-to-offer binding**: bind incoming `DragFile` and `ClipFile` unidirectional QUIC streams strictly to active offer IDs and declared file sizes.
 - **Intermittent receiver-side Cancel**: investigate rare cases where transfer **Cancel** only took effect from the sender (could not reproduce during SPEC-25 verification).
 
+## Settings redesign (SPEC-28)
+
+- ~~Per-mode mirroring defaults, migration and Phone mirroring section~~ (SPEC-28 phase 1, done).
+- **Phase 2:** seven-section rail with filter, relabelled Control bar / Shared mouse & keyboard / Continuity rows, Advanced section, Computers "Custom" chip for dwell and deadzone.
+- **Phase 3:** mirror window control bar redesign.
+- **Follow-ups:** remove `syncFileTransfer` from the type and the Rust `SYNC_FILES` gate; move KVM settings from `localStorage` to `settings.json`; optional per-phone mode defaults.
+
 ## Dependencies
 
 Planned manual major upgrades (require two-PC testing and/or release verification):

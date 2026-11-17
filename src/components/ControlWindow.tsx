@@ -5,7 +5,6 @@ import { listen } from "@tauri-apps/api/event";
 import { Gamepad2, GripHorizontal, Minimize2, X } from "lucide-react";
 import { ControlBar } from "@/components/ControlBar";
 import { mirrorRect } from "@/lib/tauri";
-import { loadQuality } from "@/lib/persist";
 import {
   DEFAULT_CONTROL_CONFIG,
   loadControlConfig,
@@ -22,18 +21,21 @@ const countButtons = (c: ControlConfig) => Object.values(c.buttons).filter(Boole
 
 /** Floating, always-on-top control window. Reads the user's control-bar config
  *  (dock side / size / buttons) and docks itself to the scrcpy mirror window. */
-export function ControlWindow({ serial }: { serial: string }) {
+export function ControlWindow({
+  serial,
+  flexDisplay = false,
+}: {
+  serial: string;
+  /** True when the running session was launched from the Flex mode (SPEC-28). */
+  flexDisplay?: boolean;
+}) {
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
-  // Rotate only affects the physical display, so hide it while mirroring a
+  // Rotate only affects the physical display, so it is hidden while mirroring a
   // flex (virtual) display.
-  const [flexDisplay, setFlexDisplay] = useState(false);
 
   // Load config + live updates from the main window.
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
-    loadQuality()
-      .then((q) => setFlexDisplay(q?.settings.flexDisplay ?? false))
-      .catch(() => {});
     const un = listen<ControlConfig>("control-config", (e) => setConfig(e.payload));
     return () => {
       un.then((f) => f());

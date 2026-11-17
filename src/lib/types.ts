@@ -80,35 +80,20 @@ export interface CoreSettings {
   hideVirtualTaskbar?: boolean; // --no-vd-system-decorations
 }
 
-export type QualityPreset = "low" | "medium" | "high" | "highest" | "custom";
+/** Named quality bundles. The UI shows them per mode as Smooth / Balanced / Sharp / Maximum. */
+export type QualityBundleId = "low" | "medium" | "high" | "highest";
 
-/** The fidelity/performance knobs a quality preset controls. */
+/** The fidelity/performance knobs a quality bundle controls. */
 export type PresetVideo = Pick<
   CoreSettings,
   "maxSize" | "videoBitRate" | "maxFps" | "videoCodec"
 >;
 
-export const PRESET_BUNDLES: Record<Exclude<QualityPreset, "custom">, PresetVideo> = {
+export const PRESET_BUNDLES: Record<QualityBundleId, PresetVideo> = {
   low: { maxSize: 800, videoBitRate: 2_000_000, maxFps: 30, videoCodec: "h264" },
   medium: { maxSize: 1280, videoBitRate: 8_000_000, maxFps: 60, videoCodec: "h264" },
   high: { maxSize: 1600, videoBitRate: 16_000_000, maxFps: 60, videoCodec: "h265" },
   highest: { maxSize: 0, videoBitRate: 30_000_000, maxFps: 60, videoCodec: "h265" },
-};
-
-export const PRESET_LABELS: Record<QualityPreset, string> = {
-  low: "Low — Smooth",
-  medium: "Medium — Balanced",
-  high: "High",
-  highest: "Highest — Crisp",
-  custom: "Custom",
-};
-
-export const PRESET_HINTS: Record<QualityPreset, string> = {
-  low: "Weak/busy Wi-Fi, lowest latency, older phones",
-  medium: "Most users on decent Wi-Fi",
-  high: "Strong 5 GHz Wi-Fi or USB; sharper text",
-  highest: "USB or excellent Wi-Fi; max fidelity",
-  custom: "Your own tuned settings",
 };
 
 export const DEFAULT_SETTINGS: CoreSettings = {

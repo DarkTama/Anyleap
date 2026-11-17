@@ -12,6 +12,7 @@ import "./index.css";
 const params = new URLSearchParams(window.location.search);
 const controlSerial = params.get("control") ? params.get("serial") : null;
 const mirrorSerial = params.get("mirror") ? params.get("serial") : null;
+const controlFlex = params.get("flex") === "1";
 const mirrorMode = (params.get("mode") as SessionMode) || undefined;
 const isHudWindow = params.get("kvm_hud") === "1";
 const isTransferBarWindow = params.get("kvm_transfer_bar") === "1";
@@ -31,7 +32,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     ) : mirrorSerial ? (
       <EmbeddedMirrorWindow serial={mirrorSerial} initialMode={mirrorMode} />
     ) : controlSerial ? (
-      <ControlWindow serial={controlSerial} />
+      <ControlWindow serial={controlSerial} flexDisplay={controlFlex} />
     ) : (
       <App />
     )}

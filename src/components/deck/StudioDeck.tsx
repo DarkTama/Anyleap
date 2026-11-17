@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useId, useState, useMemo, type ReactNode } from "react";
 import {
   Play,
   Square,
@@ -11,6 +11,7 @@ import {
   History,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
+import { editMode, resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import { logActivity, useActivityStore } from "@/stores/activityStore";
 import {
   startMirror,
@@ -43,6 +44,54 @@ import type { DeviceInfo, SavedDevice } from "@/lib/types";
 
 type DeckSectionTab = "presets" | "activity";
 
+function DeckToggle({
+  icon,
+  title,
+  hint,
+  checked,
+  onChange,
+}: {
+  icon: ReactNode;
+  title: string;
+  hint: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
+      <div>
+        <div className="flex items-center gap-1.5">
+          {icon}
+          <span id={`${id}-label`} className="text-xs font-semibold text-text-strong">
+            {title}
+          </span>
+        </div>
+        <p id={`${id}-hint`} className="mt-0.5 text-[10px] text-text-muted">
+          {hint}
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-hint`}
+        onClick={() => onChange(!checked)}
+        className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
+          checked ? "bg-gold-400" : "bg-ink-800"
+        }`}
+      >
+        <span
+          className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
+            checked ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
+
 interface StudioDeckProps {
   onOpenPair?: () => void;
   onViewPhoneDetails?: (serial: string) => void;
@@ -52,8 +101,8 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
   const devices = useAppStore((s) => s.devices);
   const savedDevices = useAppStore((s) => s.savedDevices);
   const sessions = useAppStore((s) => s.sessions);
-  const settings = useAppStore((s) => s.settings);
-  const setSettings = useAppStore((s) => s.setSettings);
+  const flexSettings = useAppStore((s) => s.modeDefaults.flex);
+  const mirrorSettings = useAppStore((s) => s.modeDefaults.mirror);
   const setError = useAppStore((s) => s.setError);
   const nicknames = useAppStore((s) => s.nicknames);
   const selectedSerial = useAppStore((s) => s.selectedSerial);
@@ -124,28 +173,22 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
 
   // Parse current DPI from flexDisplaySize or fallback to 160
   const currentDpi = useMemo(() => {
-    const raw = settings.flexDisplaySize || "";
+    const raw = flexSettings.flexDisplaySize || "";
     const m = raw.match(/\/(\d+)/);
     return m ? Number.parseInt(m[1], 10) : 160;
-  }, [settings.flexDisplaySize]);
+  }, [flexSettings.flexDisplaySize]);
 
   const handleDpiChange = (newDpi: number) => {
-    const raw = settings.flexDisplaySize || "";
+    const raw = flexSettings.flexDisplaySize || "";
     const slashIdx = raw.indexOf("/");
     const baseRes = slashIdx !== -1 ? raw.slice(0, slashIdx) : raw || "1920x1080";
-    setSettings({
-      ...settings,
-      flexDisplaySize: `${baseRes}/${newDpi}`,
-    });
+    editMode("flex", { flexDisplaySize: `${baseRes}/${newDpi}` });
   };
 
   const handleSetPCResolution = async () => {
     try {
       const [w, h] = await getSystemResolution();
-      setSettings({
-        ...settings,
-        flexDisplaySize: `${w}x${h}/${currentDpi}`,
-      });
+      editMode("flex", { flexDisplaySize: `${w}x${h}/${currentDpi}` });
     } catch (e) {
       setError(String(e));
     }
@@ -198,7 +241,7 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
       }
 
       try {
-        await startMirror(targetSerial, settings);
+        await startMirror(targetSerial, resolveSelectedLaunchSettings());
       } catch (launchErr) {
         if (resolved.saved && isWifiSerial(targetSerial)) {
           const res = await reconnectSavedDevice(resolved.saved, { silent: false });
@@ -206,7 +249,7 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
             (res.status === "reconnected" || res.status === "already_connected") &&
             res.serial
           ) {
-            await startMirror(res.serial, settings);
+            await startMirror(res.serial, resolveSelectedLaunchSettings());
             return;
           }
           if (res.status === "needs_repair") {
@@ -412,71 +455,22 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
 
             <DpiVisualizer dpi={currentDpi} onChange={handleDpiChange} />
 
-            {/* Quick Toggles */}
+            {/* Quick Toggles (write the Flex mode only) */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <EyeOff className="h-3.5 w-3.5 text-text-muted" />
-                    <span className="text-xs font-semibold text-text-strong">
-                      Hide Android Taskbar
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-text-muted">
-                    Removes bottom bar for full desktop area.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSettings({
-                      ...settings,
-                      hideVirtualTaskbar: !settings.hideVirtualTaskbar,
-                    })
-                  }
-                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
-                    settings.hideVirtualTaskbar ? "bg-gold-400" : "bg-ink-800"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
-                      settings.hideVirtualTaskbar ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <Sun className="h-3.5 w-3.5 text-text-muted" />
-                    <span className="text-xs font-semibold text-text-strong">
-                      Turn Phone Screen Off
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-text-muted">
-                    Saves battery and protects display.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSettings({
-                      ...settings,
-                      turnScreenOff: !settings.turnScreenOff,
-                    })
-                  }
-                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
-                    settings.turnScreenOff ? "bg-gold-400" : "bg-ink-800"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
-                      settings.turnScreenOff ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
-                    }`}
-                  />
-                </button>
-              </div>
+              <DeckToggle
+                icon={<EyeOff className="h-3.5 w-3.5 text-text-muted" />}
+                title="Hide Android taskbar"
+                hint="Removes bottom bar for full desktop area."
+                checked={flexSettings.hideVirtualTaskbar ?? false}
+                onChange={(v) => editMode("flex", { hideVirtualTaskbar: v })}
+              />
+              <DeckToggle
+                icon={<Sun className="h-3.5 w-3.5 text-text-muted" />}
+                title="Turn phone screen off"
+                hint="Saves battery and protects display."
+                checked={flexSettings.turnScreenOff}
+                onChange={(v) => editMode("flex", { turnScreenOff: v })}
+              />
             </div>
           </div>
         )}
@@ -487,67 +481,20 @@ export function StudioDeck({ onOpenPair, onViewPhoneDetails }: StudioDeckProps) 
               Mirror Tuning
             </span>
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <MousePointer2 className="h-3.5 w-3.5 text-text-muted" />
-                    <span className="text-xs font-semibold text-text-strong">Show Touches</span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-text-muted">
-                    Draw visual touch points on screen.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSettings({
-                      ...settings,
-                      showTouches: !settings.showTouches,
-                    })
-                  }
-                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
-                    settings.showTouches ? "bg-gold-400" : "bg-ink-800"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
-                      settings.showTouches ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between rounded-xl border border-ink-700 bg-ink-900 p-3">
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <Sun className="h-3.5 w-3.5 text-text-muted" />
-                    <span className="text-xs font-semibold text-text-strong">
-                      Physical Screen Off
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-text-muted">
-                    Darken device during stream.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSettings({
-                      ...settings,
-                      turnScreenOff: !settings.turnScreenOff,
-                    })
-                  }
-                  className={`btn-tactile relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent ${
-                    settings.turnScreenOff ? "bg-gold-400" : "bg-ink-800"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full transition-transform duration-150 ease-out ${
-                      settings.turnScreenOff ? "translate-x-3.5 bg-ink-950" : "translate-x-0 bg-text-muted"
-                    }`}
-                  />
-                </button>
-              </div>
+              <DeckToggle
+                icon={<MousePointer2 className="h-3.5 w-3.5 text-text-muted" />}
+                title="Show touches"
+                hint="Draw visual touch points on screen."
+                checked={mirrorSettings.showTouches}
+                onChange={(v) => editMode("mirror", { showTouches: v })}
+              />
+              <DeckToggle
+                icon={<Sun className="h-3.5 w-3.5 text-text-muted" />}
+                title="Turn phone screen off"
+                hint="Darken device during stream."
+                checked={mirrorSettings.turnScreenOff}
+                onChange={(v) => editMode("mirror", { turnScreenOff: v })}
+              />
             </div>
           </div>
         )}

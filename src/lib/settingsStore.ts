@@ -1,6 +1,11 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
-import type { CoreSettings, QualityPreset, SavedDevice } from "./types";
-import { DEFAULT_SETTINGS } from "./types";
+import type { CoreSettings, SavedDevice } from "./types";
+import {
+  fileSyncMigrationPatch,
+  migrateLegacy,
+  normalizeModeDefaults,
+  type ModeDefaultsV2,
+} from "./modeSettings";
 import { DEFAULT_CONTROL_CONFIG, type ControlConfig } from "./controlConfig";
 
 export interface AppPrefs {
@@ -16,11 +21,6 @@ export const DEFAULT_APP_PREFS: AppPrefs = {
   desktopNotifications: false,
   batteryAlerts: true,
 };
-
-export interface Quality {
-  settings: CoreSettings;
-  preset: QualityPreset;
-}
 
 const STORE_PATH = "settings.json";
 
@@ -50,7 +50,7 @@ export async function migrateLegacyStores(): Promise<void> {
         if (settings && !(await store.get("settings"))) {
           await store.set("settings", settings);
         }
-        const preset = await oldConfig.get<QualityPreset>("preset");
+        const preset = await oldConfig.get<string>("preset");
         if (preset && !(await store.get("preset"))) {
           await store.set("preset", preset);
         }
@@ -93,26 +93,77 @@ async function getStore(): Promise<Store> {
   return getSharedStore();
 }
 
-export async function loadSettings(): Promise<Quality | null> {
-  const store = await getStore();
-  const settings = await store.get<CoreSettings>("settings");
-  const preset = await store.get<QualityPreset>("preset");
-  if (!settings || !preset) return null;
-  return { settings: { ...DEFAULT_SETTINGS, ...settings }, preset };
+/** The minimal store surface the mode-defaults persistence needs (eases testing). */
+export interface KeyValueStore {
+  get<T>(key: string): Promise<T | undefined | null>;
+  set(key: string, value: unknown): Promise<void>;
+  save(): Promise<void>;
 }
 
-export async function saveSettings(
-  settings: CoreSettings,
-  preset: QualityPreset = "custom",
-): Promise<void> {
+export interface LoadedModeDefaults {
+  modeDefaults: ModeDefaultsV2;
+  /** One-time "audio is now on" notice is pending. */
+  notice: boolean;
+}
+
+/**
+ * SPEC-28 §5.4 step 7. Loads `modeDefaults`; when absent, migrates the frozen legacy
+ * `settings` + `preset` keys once. Writes modeDefaults, then the notice flag, then saves.
+ * Legacy keys are never deleted, so a half-written store re-runs safely.
+ */
+export async function loadModeDefaultsFrom(store: KeyValueStore): Promise<LoadedModeDefaults> {
+  const existing = await store.get<unknown>("modeDefaults");
+  if (existing) {
+    const notice = (await store.get<boolean>("modeDefaultsNotice")) ?? false;
+    return { modeDefaults: normalizeModeDefaults(existing), notice: notice === true };
+  }
+  const legacy = await store.get<Partial<CoreSettings>>("settings");
+  const preset = await store.get<string>("preset");
+  const { modeDefaults, audioNotice } = migrateLegacy(legacy ?? null, preset);
+  await store.set("modeDefaults", modeDefaults);
+  await store.set("modeDefaultsNotice", audioNotice);
+  await store.save();
+  return { modeDefaults, notice: audioNotice };
+}
+
+export async function loadModeDefaults(): Promise<LoadedModeDefaults> {
+  return loadModeDefaultsFrom(await getStore());
+}
+
+export async function saveModeDefaults(modeDefaults: ModeDefaultsV2): Promise<void> {
   const store = await getStore();
-  await store.set("settings", settings);
-  await store.set("preset", preset);
+  await store.set("modeDefaults", modeDefaults);
   await store.save();
 }
 
-export const loadQuality = loadSettings;
-export const saveQuality = saveSettings;
+export async function saveModeDefaultsNotice(pending: boolean): Promise<void> {
+  const store = await getStore();
+  await store.set("modeDefaultsNotice", pending);
+  await store.save();
+}
+
+/**
+ * SPEC-28 §5.4 step 6, once (flag `fileSyncMigrated`): when the retired file gate was
+ * off, turn file copy-paste off through the normal KVM settings path.
+ */
+export async function runFileSyncMigrationFrom(
+  store: KeyValueStore,
+  kvm: {
+    get: () => { syncFileTransfer?: boolean; continuityFileClipboard?: boolean };
+    update: (patch: { continuityFileClipboard: false }) => void;
+  },
+): Promise<boolean> {
+  if ((await store.get<boolean>("fileSyncMigrated")) === true) return false;
+  const patch = fileSyncMigrationPatch(kvm.get());
+  if (patch) kvm.update(patch);
+  await store.set("fileSyncMigrated", true);
+  await store.save();
+  return patch !== null;
+}
+
+export async function runFileSyncMigration(kvm: Parameters<typeof runFileSyncMigrationFrom>[1]) {
+  return runFileSyncMigrationFrom(await getStore(), kvm);
+}
 
 export async function loadAppPrefs(): Promise<AppPrefs> {
   const store = await getStore();
@@ -207,8 +258,6 @@ export async function forgetDevice(id: string): Promise<SavedDevice[]> {
 export const listSaved = listSavedDevices;
 export const upsertSaved = saveDevice;
 export const forgetSaved = forgetDevice;
-export const getSettings = loadSettings;
-export const setSettings = saveSettings;
 export const getSavedDevices = listSavedDevices;
 
 export async function getNicknames(): Promise<Record<string, string>> {

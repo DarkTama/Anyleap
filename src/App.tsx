@@ -34,7 +34,8 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
-import { getNicknames, loadAppPrefs, loadQuality } from "@/lib/persist";
+import { getNicknames, loadAppPrefs, loadModeDefaults, runFileSyncMigration } from "@/lib/persist";
+import { resolveLaunchSettings } from "@/lib/modeSettings";
 import {
   onPhoneNotifications,
   phoneHubSetSettings,
@@ -50,7 +51,6 @@ import {
   TRANSFER_BAR_REVEAL_VERIFY_MS,
   decideTransferBarWindowAction,
 } from "@/components/desktop/transferBarWindowPolicy";
-import { settingsForMode } from "@/lib/settingsForMode";
 import { loadAllowControl, useKvmStore } from "@/stores/kvmStore";
 import { kvmDebugNote, kvmOpenUrlOnLinked, kvmSetDebugLog } from "@/services/kvmService";
 import { logActivity, useActivityStore } from "@/stores/activityStore";
@@ -71,8 +71,7 @@ function App() {
   const removeSession = useAppStore((s) => s.removeSession);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setControlConfig = useAppStore((s) => s.setControlConfig);
-  const setSettings = useAppStore((s) => s.setSettings);
-  const setPreset = useAppStore((s) => s.setPreset);
+  const setModeDefaults = useAppStore((s) => s.setModeDefaults);
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
   const setError = useAppStore((s) => s.setError);
   const setNicknames = useAppStore((s) => s.setNicknames);
@@ -343,13 +342,8 @@ function App() {
 
   // Load persisted quality settings + app prefs on launch; run the update check.
   useEffect(() => {
-    loadQuality()
-      .then((q) => {
-        if (q) {
-          setSettings(q.settings);
-          setPreset(q.preset);
-        }
-      })
+    loadModeDefaults()
+      .then((m) => setModeDefaults(m.modeDefaults, m.notice))
       .catch(() => {});
     loadAppPrefs()
       .then((p) => {
@@ -363,7 +357,12 @@ function App() {
     void kvmSetDebugLog(Boolean(useKvmStore.getState().settings.debugLog)).catch(() => {});
     useKvmStore.getState().syncContinuitySettings();
     void useKvmStore.getState().init();
-  }, [setSettings, setPreset, setAppPrefs, setNicknames]);
+    // SPEC-28 §5.4 step 6: keep file copy-paste off for users who had the retired gate off.
+    void runFileSyncMigration({
+      get: () => useKvmStore.getState().settings,
+      update: (patch) => useKvmStore.getState().updateSettings(patch),
+    }).catch(() => {});
+  }, [setModeDefaults, setAppPrefs, setNicknames]);
 
   // Global Ctrl+K shortcut for Command Palette
   useEffect(() => {
@@ -417,7 +416,13 @@ function App() {
         const mode = lastSession.mode || "display";
         const mirrorLabel = `mirror-${serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         const existingMirror = await WebviewWindow.getByLabel(mirrorLabel);
-        const isEmbedded = useAppStore.getState().settings.embedded;
+        const st = useAppStore.getState();
+        const sessionMode = st.sessionModes[lastSession.id] ?? st.currentMode;
+        const isEmbedded =
+          sessionMode === "camera"
+            ? st.modeDefaults.camera.embedded
+            : resolveLaunchSettings(sessionMode, st.modeDefaults).embedded;
+        const isFlex = sessionMode === "flex";
 
         if (isEmbedded) {
           if (existingControls) {
@@ -446,7 +451,7 @@ function App() {
           if (!existingControls) {
             try {
               const w = new WebviewWindow("controls", {
-                url: `index.html?control=1&serial=${encodeURIComponent(serial)}`,
+                url: `index.html?control=1&serial=${encodeURIComponent(serial)}&flex=${isFlex ? 1 : 0}`,
                 title: "AnyLeap Controls",
                 width: 88,
                 height: 560,
@@ -714,11 +719,8 @@ function App() {
         store.setCurrentMode(mode);
         setActiveTab("devices");
         if (!selectedSerial) return;
-        const base = store.settings;
-        const nextSettings = settingsForMode(base, mode);
-        store.setSettings(nextSettings);
         if (mode !== "camera") {
-          void startMirror(selectedSerial, nextSettings).catch((err) => {
+          void startMirror(selectedSerial, resolveLaunchSettings(mode, store.modeDefaults)).catch((err) => {
             const msg = String(err);
             store.setError(msg);
             logActivity({ kind: "mirror", title: "Failed to start mirror", detail: msg });

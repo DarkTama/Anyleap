@@ -138,7 +138,7 @@ export function buildCommands(ctx: CommandPaletteContext): PaletteCommand[] {
       id: "mode-flex",
       label: "Start Desktop Flex mode",
       group: "Stream",
-      keywords: ["dex", "mirror", "launch", "virtual display"],
+      keywords: ["desktop", "mirror", "launch", "virtual display"],
       disabled: noDeviceReason,
       run: () => ctx.startMode("flex"),
     },
