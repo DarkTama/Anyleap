@@ -1,6 +1,6 @@
 # SPEC-28: Settings Redesign and Per-Mode Mirroring Defaults
 
-> **Status:** Approved (2026-11-17). Phase 1 implemented (per-mode defaults, migration, Phone mirroring section); phases 2–3 pending. Phases 1–3
+> **Status:** Approved (2026-11-17). Phases 1–2 implemented (per-mode defaults, migration, Phone mirroring section; sectioned Settings with rail, filter, relabels, Advanced); phase 3 pending.
 > **Scope:** `(deck)` Settings tab (`src/components/SettingsPanel.tsx`), persisted mirroring settings (`src/lib/settingsStore.ts`, `src/store/useAppStore.ts`), and every launch path that reads them (Devices tab, command palette, control window).
 > **Related:** ADR-0005 (per-mode mirroring settings), SPEC-26 (Ink & Gold tokens), SPEC-25 (Continuity), SPEC-24 (Edge Leap).
 > **Plan:** `docs/superpowers/plans/2026-11-17-spec28-settings-redesign.md`

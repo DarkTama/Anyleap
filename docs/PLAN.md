@@ -70,7 +70,7 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 
 ## Per-mode mirroring settings (SPEC-28)
 
-Settled: each mirroring mode owns its settings (`modeDefaults`), launch settings are resolved per mode, and the global quality preset is replaced by a derived per-mode Quality choice (ADR-0005). Phase 1 (data model, migration, Phone mirroring section) is implemented; phases 2 (sections, rail, filter) and 3 (mirror window control bar) are pending.
+Settled: each mirroring mode owns its settings (`modeDefaults`), launch settings are resolved per mode, and the global quality preset is replaced by a derived per-mode Quality choice (ADR-0005). Phases 1 (data model, migration, Phone mirroring section) and 2 (sections, rail, filter, relabels, Advanced) are implemented; phase 3 (mirror window control bar) is pending.
 
 ## Milestones
 

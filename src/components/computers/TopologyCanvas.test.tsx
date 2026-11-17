@@ -245,4 +245,19 @@ describe("TopologyCanvas (SPEC-24)", () => {
 
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
+
+  it("shows an extra Custom chip for a stored dwell or deadzone that is not a chip value", async () => {
+    act(() => {
+      useKvmStore.setState({
+        settings: { ...useKvmStore.getState().settings, cornerDeadzonePx: 60, edgeResistanceMs: 50 },
+      });
+    });
+    await act(async () => {
+      root.render(<TopologyCanvas />);
+    });
+    const labels = Array.from(container.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).toContain("Custom: 60px");
+    expect(labels).toContain("Custom: 50ms");
+    expect(labels).not.toContain("Custom: 48px");
+  });
 });

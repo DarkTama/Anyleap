@@ -113,3 +113,13 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
 - [ ] Keyboard only: Tab to the mode tabs, Left/Right/Home/End select; Space toggles a switch; every control has a visible label.
 - [ ] "File Transfer Drop Sync" is gone; a profile that had it off now has "Copy-paste files across PCs" off.
 - [ ] Control window hides Rotate for a Flex session and shows it for Mirror.
+
+## G. Sectioned Settings (SPEC-28 phase 2)
+
+- [ ] Rail lists seven sections in order; Tab enters it once, Up/Down/Home/End move, Enter opens a section and focus lands on its heading.
+- [ ] "Skip to settings" appears on focus after the filter box and jumps into the pane.
+- [ ] Filter: "mute" and "sound" find the audio switches; Escape clears; a nonsense query shows "No settings match" with Clear; the match count is announced; Advanced expands while it has a match; no value changes.
+- [ ] Shared mouse & keyboard: crossing delay and corner dead zone are read-only with "Edit in Computers", which opens the Computers tab. A stored value that is not a chip (for example 60 px) shows a "Custom: 60px" chip there.
+- [ ] Each relabelled switch still changes behaviour (clipboard text/images, file copy and drop, pointer style, audio bridge, lock/sleep together, Explorer menu, cursor badge).
+- [ ] Advanced: large-file limits and the diagnostics log toggle work; "Open log folder" opens the folder.
+- [ ] Contrast spot check: helper text readable on every surface; selected rail item is dark text on gold.

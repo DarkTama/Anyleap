@@ -406,7 +406,9 @@ export function PhoneMirroringSection() {
   return (
     <Card aria-labelledby={headingId}>
       <CardHeader>
-        <CardTitle id={headingId}>Phone mirroring</CardTitle>
+        <CardTitle id={headingId} className="sr-only">
+          Phone mirroring
+        </CardTitle>
         <p className="text-[11px] text-text-muted">
           Each mode keeps its own settings. Devices launches use the selected mode.
         </p>

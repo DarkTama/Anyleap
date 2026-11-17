@@ -888,8 +888,8 @@ function App() {
         )}
         {activeTab === "computers" && <ComputersView />}
         {activeTab === "settings" && (
-          <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-6 max-w-4xl mx-auto w-full">
-            <SettingsPanel />
+          <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-6 max-w-5xl mx-auto w-full">
+            <SettingsPanel onOpenComputers={() => setActiveTab("computers")} />
           </div>
         )}
       </main>
