@@ -12,6 +12,7 @@ import { phoneOpenApp } from "@/services/phoneHubService";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
 import { useAppStore } from "@/store/useAppStore";
 import { saveAppPrefs } from "@/lib/persist";
+import { describeOpenApp } from "@/lib/openApp";
 import { logActivity } from "@/stores/activityStore";
 import type { PhoneHubNotification } from "@/types/phone";
 
@@ -136,9 +137,10 @@ export function NotificationsView({
   async function handleOpenApp(pkg: string, label: string) {
     setOpenMenuPkg(null);
     try {
-      await phoneOpenApp(serial, pkg);
-      setActionMsg(`Opening ${label} on PC…`);
-      logActivity({ kind: "app", title: `Opened ${label}`, detail: pkg });
+      const res = await phoneOpenApp(serial, pkg);
+      const msg = describeOpenApp(label, res?.outcome);
+      setActionMsg(msg);
+      logActivity({ kind: "app", title: msg, detail: pkg });
     } catch (e) {
       setActionMsg(String(e));
     }

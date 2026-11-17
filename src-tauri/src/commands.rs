@@ -851,7 +851,7 @@ fn recording_path_from_args(args: &[String]) -> Option<String> {
         .find_map(|a| a.strip_prefix("--record=").map(|s| s.to_string()))
 }
 
-fn spawn_session_inner<'a>(
+pub(crate) fn spawn_session_inner<'a>(
     app: &'a AppHandle,
     serial: String,
     args: Vec<String>,
@@ -2398,6 +2398,26 @@ other _weird._tcp 10.0.0.6:1234\n";
             parse_new_display_line("[server] INFO: New display: 1920x1080 (id=5)"),
             Some((5, (1920, 1080)))
         );
+        // Real scrcpy 5.0.1 output, CRLF, no prefix, and multi-line chunks.
+        assert_eq!(
+            parse_new_display_line(
+                "[server] INFO: New display: 1280x720/240 (id=20)
+"
+            ),
+            Some((20, (1280, 720)))
+        );
+        assert_eq!(
+            parse_new_display_line("INFO: New display: 1920x1080/240 (id=7)"),
+            Some((7, (1920, 1080)))
+        );
+        assert_eq!(
+            parse_new_display_line(
+                "[server] INFO: Device: x
+[server] INFO: New display: 800x600/160 (id=31)
+INFO: Texture: 1x1"
+            ),
+            Some((31, (800, 600)))
+        );
         assert!(parse_new_display_line("INFO: Texture: 956x2160").is_none());
         assert!(parse_new_display_line("New display: garbage (id=)").is_none());
     }
@@ -3569,28 +3589,6 @@ pub(crate) fn validate_package_name(pkg: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn default_app_window_settings() -> CoreSettings {
-    CoreSettings {
-        max_size: 1280,
-        video_bit_rate: 8_000_000,
-        max_fps: 60,
-        video_codec: "h264".into(),
-        stay_awake: true,
-        turn_screen_off: false,
-        fullscreen: false,
-        show_touches: false,
-        no_audio: false,
-        no_control: false,
-        no_keyboard_ime: false,
-        flex_display: false,
-        flex_display_size: String::new(),
-        no_window_aspect_ratio_lock: false,
-        render_fit: "letterbox".into(),
-        embedded: false,
-        hide_virtual_taskbar: false,
-    }
-}
-
 pub(crate) fn build_app_window_args(
     serial: &str,
     settings: &CoreSettings,
@@ -3638,12 +3636,29 @@ pub async fn launch_app_window(
     app: AppHandle,
     serial: String,
     package: String,
-) -> Result<SessionInfo, String> {
+    settings: CoreSettings,
+) -> Result<crate::phone_hub::apps::OpenAppResult, String> {
     validate_package_name(&package)?;
-    let device_label = query_device_model(&app, &serial).await;
-    let settings = default_app_window_settings();
-    let args = build_app_window_args(&serial, &settings, &package, &device_label);
-    spawn_session_inner(&app, serial, args, false, "display", false).await
+    crate::phone_hub::apps::open_app(&app, serial, package, settings).await
+}
+
+pub(crate) async fn spawn_app_window(
+    app: &AppHandle,
+    serial: String,
+    package: &str,
+    mut settings: CoreSettings,
+) -> Result<SessionInfo, String> {
+    // A per-app window is never an embedded host pane.
+    settings.embedded = false;
+    let device_label = query_device_model(app, &serial).await;
+    let args = build_app_window_args(&serial, &settings, package, &device_label);
+    if !args
+        .iter()
+        .any(|a| a == "--no-audio" || a == "--no-audio-playback")
+    {
+        crate::phone_hub::audio_only::stop_for_serial(app, &serial);
+    }
+    spawn_session_inner(app, serial, args, false, "display", false).await
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -4067,7 +4082,25 @@ mod spec20_tests {
 
     #[test]
     fn scrcpy_arg_builders_app_window_and_recording() {
-        let s = default_app_window_settings();
+        let s = CoreSettings {
+            max_size: 1280,
+            video_bit_rate: 8_000_000,
+            max_fps: 60,
+            video_codec: "h264".into(),
+            stay_awake: true,
+            turn_screen_off: false,
+            fullscreen: false,
+            show_touches: false,
+            no_audio: false,
+            no_control: false,
+            no_keyboard_ime: false,
+            flex_display: false,
+            flex_display_size: String::new(),
+            no_window_aspect_ratio_lock: false,
+            render_fit: "letterbox".into(),
+            embedded: false,
+            hide_virtual_taskbar: false,
+        };
         let app_args = build_app_window_args("SER123", &s, "com.example.app", "Pixel 9");
         assert!(app_args.contains(&"--new-display".to_string()));
         assert!(app_args.contains(&"--start-app=com.example.app".to_string()));
