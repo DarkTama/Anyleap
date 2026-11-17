@@ -211,6 +211,7 @@ pub fn run() {
                                 .map(|(id, _)| id.clone())
                                 .collect();
                             for id in to_remove {
+                                state.mark_user_stopped(&id);
                                 if let Some(s) = sessions.remove(&id) {
                                     let _ = s.child.kill();
                                 }
@@ -229,7 +230,8 @@ pub fn run() {
                 if let Some(state) = app.try_state::<AppState>() {
                     match state.sessions.lock() {
                         Ok(mut sessions) => {
-                            for (_, session) in sessions.drain() {
+                            for (id, session) in sessions.drain() {
+                                state.mark_user_stopped(&id);
                                 let _ = session.child.kill();
                             }
                         }
