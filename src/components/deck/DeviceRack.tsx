@@ -1,3 +1,4 @@
+import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import { useState, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
@@ -52,7 +53,6 @@ export function DeviceRack({
   const sessions = useAppStore((s) => s.sessions);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
-  const settings = useAppStore((s) => s.settings);
   const appPrefs = useAppStore((s) => s.appPrefs);
   const nicknames = useAppStore((s) => s.nicknames);
   const setNickname = useAppStore((s) => s.setNickname);
@@ -219,7 +219,7 @@ export function DeviceRack({
     setError(null);
     setFailedSerial(null);
     try {
-      await startMirror(serial, settings);
+      await startMirror(serial, resolveSelectedLaunchSettings());
     } catch (e) {
       if (saved && isWifiSerial(serial)) {
         const res = await reconnectSavedDevice(saved, { silent: false });
@@ -228,7 +228,7 @@ export function DeviceRack({
           res.serial
         ) {
           try {
-            await startMirror(res.serial, settings);
+            await startMirror(res.serial, resolveSelectedLaunchSettings());
             return;
           } catch (retryErr) {
             const msg = String(retryErr);

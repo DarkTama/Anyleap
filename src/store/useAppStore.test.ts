@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useAppStore } from "./useAppStore";
-import { DEFAULT_SETTINGS } from "@/lib/types";
+import { defaultModeDefaults } from "@/lib/modeSettings";
 import { DEFAULT_CONTROL_CONFIG } from "@/lib/controlConfig";
 import { DEFAULT_APP_PREFS } from "@/lib/persist";
 import type { SessionInfo } from "@/lib/types";
@@ -11,8 +11,10 @@ describe("useAppStore", () => {
       devices: [],
       sessions: [],
       savedDevices: [],
-      settings: DEFAULT_SETTINGS,
-      preset: "medium",
+      modeDefaults: defaultModeDefaults(),
+      modeDefaultsNotice: false,
+      sessionModes: {},
+      currentMode: "flex",
       controlConfig: DEFAULT_CONTROL_CONFIG,
       appPrefs: DEFAULT_APP_PREFS,
       error: null,

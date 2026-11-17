@@ -1,0 +1,142 @@
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/persist", async (orig) => ({
+  ...(await orig<typeof import("@/lib/persist")>()),
+  saveModeDefaults: vi.fn(async () => {}),
+  saveModeDefaultsNotice: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/tauri", () => ({ getSystemResolution: vi.fn(async () => [1920, 1080]) }));
+
+import { PhoneMirroringSection } from "../PhoneMirroringSection";
+import { useAppStore } from "@/store/useAppStore";
+import { defaultModeDefaults } from "@/lib/modeSettings";
+import { saveModeDefaults } from "@/lib/persist";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+let root: Root;
+let el: HTMLDivElement;
+
+async function mount() {
+  el = document.createElement("div");
+  document.body.appendChild(el);
+  root = createRoot(el);
+  await act(async () => {
+    root.render(<PhoneMirroringSection />);
+  });
+}
+const tab = (name: string) =>
+  Array.from(el.querySelectorAll<HTMLElement>('[role="tab"]')).find((t) => t.textContent === name)!;
+const sw = (label: string) =>
+  Array.from(el.querySelectorAll<HTMLElement>('[role="switch"]')).find(
+    (b) => document.getElementById(b.getAttribute("aria-labelledby")!)?.textContent === label,
+  )!;
+
+describe("PhoneMirroringSection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAppStore.setState({
+      modeDefaults: defaultModeDefaults(),
+      modeDefaultsNotice: false,
+      currentMode: "flex",
+    });
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    el.remove();
+  });
+
+  it("renders four mode tabs; selecting a tab writes no settings", async () => {
+    await mount();
+    const names = Array.from(el.querySelectorAll('[role="tab"]')).map((t) => t.textContent);
+    expect(names).toEqual(["Mirror", "Flex", "Camera", "High fidelity"]);
+    const before = structuredClone(useAppStore.getState().modeDefaults);
+    for (const n of ["Flex", "Camera", "High fidelity", "Mirror"]) {
+      await act(async () => tab(n).click());
+    }
+    expect(useAppStore.getState().modeDefaults).toEqual(before);
+    expect(saveModeDefaults).not.toHaveBeenCalled();
+    expect(useAppStore.getState().currentMode).toBe("flex");
+  });
+
+  it("Camera then Mirror leaves Mirror audio unchanged", async () => {
+    await mount();
+    await act(async () => tab("Camera").click());
+    await act(async () => sw("Use the phone microphone on this PC").click());
+    expect(useAppStore.getState().modeDefaults.camera.playAudio).toBe(false);
+    await act(async () => tab("Mirror").click());
+    expect(useAppStore.getState().modeDefaults.mirror.noAudio).toBe(false);
+    expect(sw("Play phone audio on this PC").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("the audio switch writes the inverted flag to the selected mode only", async () => {
+    await mount();
+    await act(async () => tab("High fidelity").click());
+    const before = structuredClone(useAppStore.getState().modeDefaults);
+    await act(async () => sw("Play phone audio on this PC").click());
+    const after = useAppStore.getState().modeDefaults;
+    expect(after.hifi.noAudio).toBe(true);
+    expect(after.mirror).toEqual(before.mirror);
+    expect(after.flex).toEqual(before.flex);
+    expect(after.camera).toEqual(before.camera);
+    expect(saveModeDefaults).toHaveBeenCalledTimes(1);
+  });
+
+  it("Flex display controls exist on the Flex tab only; no flex or preset toggles elsewhere", async () => {
+    await mount();
+    expect(el.textContent).not.toContain("Virtual display size");
+    expect(el.textContent).not.toContain("Quality preset");
+    expect(el.textContent).not.toContain("Flex display (desktop mode)");
+    await act(async () => tab("Flex").click());
+    expect(el.textContent).toContain("Virtual display size");
+    expect(el.textContent).toContain("Hide Android taskbar");
+    await act(async () => tab("High fidelity").click());
+    expect(el.textContent).not.toContain("Virtual display size");
+  });
+
+  it("aspect-ratio switch is disabled with a reason while one-window mode is on", async () => {
+    await mount();
+    const row = sw("Keep phone aspect ratio");
+    expect(row.hasAttribute("disabled")).toBe(true);
+    expect(el.textContent).toContain("Not available while the phone is shown in one AnyLeap window.");
+    await act(async () => sw("Show phone in one AnyLeap window").click());
+    expect(sw("Keep phone aspect ratio").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("every switch has a visible label and the embedded helper names no product", async () => {
+    await mount();
+    for (const b of el.querySelectorAll<HTMLElement>('[role="switch"]')) {
+      const label = document.getElementById(b.getAttribute("aria-labelledby")!);
+      expect(label?.textContent?.length).toBeGreaterThan(0);
+    }
+    expect(el.textContent).toContain("Keeps the phone view and its toolbar together.");
+  });
+
+  it("shows the one-time audio notice and dismiss clears it", async () => {
+    useAppStore.setState({ modeDefaultsNotice: true });
+    await mount();
+    expect(el.textContent).toContain(
+      "Audio is now on in Mirror, Flex and High fidelity. Turn it off per mode here.",
+    );
+    const dismiss = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Dismiss")!;
+    await act(async () => dismiss.click());
+    expect(useAppStore.getState().modeDefaultsNotice).toBe(false);
+    expect(el.textContent).not.toContain("Audio is now on");
+  });
+
+  it("quality segments write only the selected mode and Custom shows for odd values", async () => {
+    await mount();
+    const sharp = Array.from(el.querySelectorAll<HTMLElement>('[role="radio"]')).find(
+      (r) => r.textContent === "Sharp",
+    )!;
+    await act(async () => sharp.click());
+    const d = useAppStore.getState().modeDefaults;
+    expect(d.mirror.videoBitRate).toBe(16_000_000);
+    expect(d.flex.videoBitRate).toBe(8_000_000);
+    useAppStore.getState().updateMode("mirror", { maxFps: 45 });
+    await act(async () => {});
+    expect(el.textContent).toContain("Custom");
+  });
+});

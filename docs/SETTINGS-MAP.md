@@ -8,6 +8,8 @@ Goal: expose scrcpy's options as **typed GUI controls**, never raw command input
 
 ## Quality presets (game-style)
 
+> **SPEC-28:** the bundles below are now a per-mode **Quality** choice (Smooth / Balanced / Sharp / Maximum) in Settings > Phone mirroring. The choice is derived from the four fields, never stored, and each mode keeps its own values.
+
 For the wide range of users who don't want to think about individual flags, a single **Quality** selector picks a bundle of the performance-vs-fidelity settings — exactly like Low / Medium / High / Highest in games. Picking a preset fills in the underlying settings; touching any individual setting flips the selector to **Custom**.
 
 | Preset | Max resolution (`--max-size`) | Bitrate (`--video-bit-rate`) | Max FPS (`--max-fps`) | Codec (`--video-codec`) | Best for |

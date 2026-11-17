@@ -1,15 +1,21 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { LaunchMatrix } from "../LaunchMatrix";
 import { useAppStore } from "@/store/useAppStore";
+import { defaultModeDefaults, resolveLaunchSettings } from "@/lib/modeSettings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("LaunchMatrix noAudio", () => {
-  for (const pre of [false, true]) {
-    it(`camera then mirror/flex keeps noAudio=${pre}`, async () => {
-      useAppStore.getState().setSettings({ ...useAppStore.getState().settings, noAudio: pre });
+describe("LaunchMatrix", () => {
+  beforeEach(() => {
+    useAppStore.setState({ modeDefaults: defaultModeDefaults(), currentMode: "mirror" });
+  });
+
+  for (const noAudio of [false, true]) {
+    it(`camera then mirror/flex leaves every mode untouched (mirror noAudio=${noAudio})`, async () => {
+      useAppStore.getState().updateMode("mirror", { noAudio });
+      const before = structuredClone(useAppStore.getState().modeDefaults);
       const picked: string[] = [];
       const el = document.createElement("div");
       document.body.appendChild(el);
@@ -27,12 +33,15 @@ describe("LaunchMatrix noAudio", () => {
         });
       };
       await click("Camera");
-      expect(useAppStore.getState().settings.noAudio).toBe(pre);
       await click("Phone Mirror");
-      expect(useAppStore.getState().settings.noAudio).toBe(pre);
       await click("Desktop Flex");
-      expect(useAppStore.getState().settings.noAudio).toBe(pre);
-      expect(picked).toEqual(["camera", "mirror", "flex"]);
+      await click("High Fidelity");
+      expect(picked).toEqual(["camera", "mirror", "flex", "hifi"]);
+      // Selecting a mode writes no settings (SPEC-28 §5.1 rule 3).
+      expect(useAppStore.getState().modeDefaults).toEqual(before);
+      expect(
+        resolveLaunchSettings("mirror", useAppStore.getState().modeDefaults).noAudio,
+      ).toBe(noAudio);
       await act(async () => root.unmount());
     });
   }

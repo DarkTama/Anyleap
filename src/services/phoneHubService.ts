@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { OpenAppResult } from "@/lib/types";
-import { useAppStore } from "@/store/useAppStore";
+import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import type {
   Album,
   Conversation,
@@ -42,7 +42,7 @@ export const phoneOpenApp = (serial: string, packageName: string) =>
   invoke<OpenAppResult>("phone_open_app", {
     serial,
     package: packageName,
-    settings: useAppStore.getState().settings,
+    settings: resolveSelectedLaunchSettings(),
   });
 
 export const phoneGetConversations = (serial: string) =>

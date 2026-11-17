@@ -1,6 +1,4 @@
 import { Monitor, Smartphone, Video, Zap, Check } from "lucide-react";
-import { useAppStore } from "@/store/useAppStore";
-import { settingsForMode } from "@/lib/settingsForMode";
 
 export type StudioMode = "flex" | "mirror" | "camera" | "hifi";
 
@@ -10,14 +8,8 @@ interface LaunchMatrixProps {
 }
 
 export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
-  const settings = useAppStore((s) => s.settings);
-  const setSettings = useAppStore((s) => s.setSettings);
-
-  const handleSelect = (mode: StudioMode) => {
-    onSelectMode(mode);
-
-    setSettings(settingsForMode(settings, mode));
-  };
+  // Selecting a mode only changes the selected mode. It writes no settings (SPEC-28 §5.1).
+  const handleSelect = (mode: StudioMode) => onSelectMode(mode);
 
   const PROFILES: {
     id: StudioMode;
@@ -30,7 +22,7 @@ export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
     {
       id: "flex",
       title: "Desktop Flex",
-      badge: "DeX Workspace",
+      badge: "Desktop Workspace",
       description: "Secondary independent virtual display with custom DPI scaling & app multi-windowing.",
       features: ["Custom DPI scaling", "Multi-window apps", "PC taskbar integration"],
       icon: Monitor,

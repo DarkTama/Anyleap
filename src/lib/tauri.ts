@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useAppStore } from "@/store/useAppStore";
+import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   CameraDeviceOption,
@@ -121,7 +121,7 @@ export const resizeEmbeddedMirror = (
 
 export const resetDeviceDisplay = (serial: string) =>
   invoke<void>("reset_device_display", { serial });
-// --- Escrcpy Features (SPEC-07) ---
+// --- Extra mirroring features (SPEC-07) ---
 
 export const handleDroppedFiles = (serial: string, paths: string[]) =>
   invoke<string>("handle_dropped_files", { serial, paths });
@@ -181,7 +181,7 @@ export const openUrlOnDevice = (serial: string, url: string) =>
 export const launchAppWindow = (
   serial: string,
   packageName: string,
-  settings: CoreSettings = useAppStore.getState().settings,
+  settings: CoreSettings = resolveSelectedLaunchSettings(),
 ) => invoke<OpenAppResult>("launch_app_window", { serial, package: packageName, settings });
 
 export const getPhoneToggles = (serial: string) =>

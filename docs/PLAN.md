@@ -68,6 +68,10 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 - On second launch, a previously-paired phone reconnects and is mirrorable in one click.
 - A user can change common settings (resolution, bitrate, fps, stay-awake, turn-screen-off) without seeing a flag.
 
+## Per-mode mirroring settings (SPEC-28)
+
+Settled: each mirroring mode owns its settings (`modeDefaults`), launch settings are resolved per mode, and the global quality preset is replaced by a derived per-mode Quality choice (ADR-0005). Phase 1 (data model, migration, Phone mirroring section) is implemented; phases 2 (sections, rail, filter) and 3 (mirror window control bar) are pending.
+
 ## Milestones
 
 1. **M0 — Docs & decisions** (this commit): plan, architecture, wireless flows, settings map.
