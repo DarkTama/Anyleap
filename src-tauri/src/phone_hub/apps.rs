@@ -135,32 +135,94 @@ pub fn validate_app_package(package: &str) -> Result<(), String> {
 pub struct AppLabelCache {
     #[serde(default)]
     devices: HashMap<String, Vec<PhoneApp>>,
+    #[serde(default)]
+    pinned: HashMap<String, Vec<String>>,
     #[serde(skip)]
     path: Option<PathBuf>,
 }
 
+#[derive(Deserialize)]
+struct AppCacheFile {
+    #[serde(default)]
+    devices: HashMap<String, Vec<PhoneApp>>,
+    #[serde(default)]
+    pinned: HashMap<String, Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AppCacheOnDisk {
+    // Legacy first: a legacy map would otherwise match Current with empty defaults.
+    Legacy(HashMap<String, Vec<PhoneApp>>),
+    Current(AppCacheFile),
+}
+
+#[derive(Serialize)]
+struct AppCacheFileRef<'a> {
+    devices: &'a HashMap<String, Vec<PhoneApp>>,
+    pinned: &'a HashMap<String, Vec<String>>,
+}
+
 impl AppLabelCache {
     pub fn load_from_path(path: PathBuf) -> Self {
-        let devices = std::fs::read_to_string(&path)
+        let (devices, pinned) = std::fs::read_to_string(&path)
             .ok()
-            .and_then(|s| serde_json::from_str::<HashMap<String, Vec<PhoneApp>>>(&s).ok())
+            .and_then(|s| serde_json::from_str::<AppCacheOnDisk>(&s).ok())
+            .map(|f| match f {
+                AppCacheOnDisk::Current(c) => (c.devices, c.pinned),
+                AppCacheOnDisk::Legacy(d) => (d, HashMap::new()),
+            })
             .unwrap_or_default();
         Self {
             devices,
+            pinned,
             path: Some(path),
         }
     }
 
-    pub fn set_apps(&mut self, identity: &str, apps: Vec<PhoneApp>) {
-        self.devices.insert(identity.to_string(), apps);
+    fn persist(&self) {
         if let Some(ref path) = self.path {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Ok(json) = serde_json::to_string(&self.devices) {
+            let file = AppCacheFileRef {
+                devices: &self.devices,
+                pinned: &self.pinned,
+            };
+            if let Ok(json) = serde_json::to_string(&file) {
                 let _ = std::fs::write(path, json);
             }
         }
+    }
+
+    /// Replaces the app list and prunes pins whose package is no longer installed.
+    pub fn set_apps(&mut self, identity: &str, apps: Vec<PhoneApp>) {
+        if let Some(pins) = self.pinned.get_mut(identity) {
+            pins.retain(|p| apps.iter().any(|a| &a.package == p));
+            if pins.is_empty() {
+                self.pinned.remove(identity);
+            }
+        }
+        self.devices.insert(identity.to_string(), apps);
+        self.persist();
+    }
+
+    pub fn get_pinned(&self, identity: &str) -> Vec<String> {
+        self.pinned.get(identity).cloned().unwrap_or_default()
+    }
+
+    pub fn set_pinned(&mut self, identity: &str, package: &str, pinned: bool) -> Vec<String> {
+        let list = self.pinned.entry(identity.to_string()).or_default();
+        list.retain(|p| p != package);
+        if pinned {
+            list.push(package.to_string());
+        }
+        let out = list.clone();
+        if out.is_empty() {
+            self.pinned.remove(identity);
+        }
+        self.persist();
+        out
     }
 
     pub fn get_apps(&self, identity: &str) -> Option<&[PhoneApp]> {
@@ -496,6 +558,31 @@ pub async fn phone_list_apps(
     }
 
     refresh_apps_for_identity(&app, &state, &serial, &identity).await
+}
+
+#[tauri::command]
+pub async fn phone_get_pinned_apps(
+    app: AppHandle,
+    state: State<'_, PhoneHubState>,
+    serial: String,
+) -> Result<Vec<String>, String> {
+    validate_serial(&serial)?;
+    let identity = resolve_device_identity(&app, &state, &serial).await;
+    with_apps_cache(&app, &state, |c| c.get_pinned(&identity))
+}
+
+#[tauri::command]
+pub async fn phone_set_app_pinned(
+    app: AppHandle,
+    state: State<'_, PhoneHubState>,
+    serial: String,
+    package: String,
+    pinned: bool,
+) -> Result<Vec<String>, String> {
+    validate_serial(&serial)?;
+    validate_app_package(&package)?;
+    let identity = resolve_device_identity(&app, &state, &serial).await;
+    with_apps_cache(&app, &state, |c| c.set_pinned(&identity, &package, pinned))
 }
 
 #[tauri::command]
@@ -979,5 +1066,66 @@ mod tests {
         assert!(!am_start_failed(
             "Starting: Intent { cmp=a.b/.C }\nWarning: Activity not started, intent has been delivered to currently running top-most instance."
         ));
+    }
+
+    fn chat() -> PhoneApp {
+        PhoneApp {
+            package: "com.example.chat".into(),
+            label: "Chat".into(),
+            system: false,
+        }
+    }
+
+    #[test]
+    fn legacy_file_without_pinned_loads() {
+        let dir = std::env::temp_dir().join(format!("anyleap_pin_legacy_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("phone_hub_apps.json");
+        std::fs::write(
+            &path,
+            r#"{"HW1":[{"package":"com.example.chat","label":"Chat","system":false}]}"#,
+        )
+        .unwrap();
+        let c = AppLabelCache::load_from_path(path.clone());
+        assert_eq!(c.get("HW1", "com.example.chat").as_deref(), Some("Chat"));
+        assert!(c.get_pinned("HW1").is_empty());
+
+        std::fs::write(&path, r#"{"devices":{"HW1":[]}}"#).unwrap();
+        let c = AppLabelCache::load_from_path(path);
+        assert!(c.get_pinned("HW1").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pins_persist_per_identity_and_toggle() {
+        let dir =
+            std::env::temp_dir().join(format!("anyleap_pin_persist_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("phone_hub_apps.json");
+        {
+            let mut c = AppLabelCache::load_from_path(path.clone());
+            c.set_apps("HW1", vec![chat()]);
+            assert_eq!(
+                c.set_pinned("HW1", "com.example.chat", true),
+                ["com.example.chat"]
+            );
+            assert_eq!(c.set_pinned("HW1", "com.example.chat", true).len(), 1);
+            assert!(c.get_pinned("HW2").is_empty());
+        }
+        let mut c = AppLabelCache::load_from_path(path);
+        assert_eq!(c.get_pinned("HW1"), ["com.example.chat"]);
+        assert!(c.set_pinned("HW1", "com.example.chat", false).is_empty());
+        assert!(c.get_pinned("HW1").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_apps_prunes_uninstalled_pins() {
+        let mut c = AppLabelCache::default();
+        c.set_apps("HW1", vec![chat()]);
+        c.set_pinned("HW1", "com.example.chat", true);
+        c.set_pinned("HW1", "com.example.gone", true);
+        c.set_apps("HW1", vec![chat()]);
+        assert_eq!(c.get_pinned("HW1"), ["com.example.chat"]);
     }
 }

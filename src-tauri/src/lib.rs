@@ -132,6 +132,8 @@ pub fn run() {
             phone_hub::poller::phone_get_overview,
             phone_hub::apps::phone_list_apps,
             phone_hub::apps::phone_open_app,
+            phone_hub::apps::phone_get_pinned_apps,
+            phone_hub::apps::phone_set_app_pinned,
             phone_hub::messages::phone_get_conversations,
             phone_hub::messages::phone_mark_conversation_read,
             phone_hub::media::phone_list_albums,
