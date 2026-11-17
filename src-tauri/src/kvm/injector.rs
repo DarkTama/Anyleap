@@ -210,15 +210,138 @@ fn rate_limit_allows(last_ms: &mut Option<u64>, now_ms: u64, interval_ms: u64) -
     }
 }
 
-type InputBlockedSink = Box<dyn Fn(String) + Send + Sync>;
+type InputBlockedSink = Box<dyn Fn(String, String) + Send + Sync>;
 
 static INPUT_BLOCKED_SINK: Mutex<Option<InputBlockedSink>> = Mutex::new(None);
 static INPUT_BLOCKED_LAST_MS: Mutex<Option<u64>> = Mutex::new(None);
 
 /// Registers where blocked-input reports go (the receiver's link to the Main PC).
-pub fn set_input_blocked_sink(sink: impl Fn(String) + Send + Sync + 'static) {
+pub fn set_input_blocked_sink(sink: impl Fn(String, String) + Send + Sync + 'static) {
     if let Ok(mut g) = INPUT_BLOCKED_SINK.lock() {
         *g = Some(Box::new(sink));
+    }
+}
+
+/// Why receiver input is (about to be) dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockReason {
+    ElevatedForeground,
+    SecureDesktop,
+    SendInputZero,
+}
+
+impl BlockReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BlockReason::ElevatedForeground => "elevated_foreground",
+            BlockReason::SecureDesktop => "secure_desktop",
+            BlockReason::SendInputZero => "sendinput_zero",
+        }
+    }
+}
+
+/// Pure decision: would injected input be dropped? Secure desktop wins over elevation.
+/// Unknown foreground elevation / unknown desktop never reports.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn block_reason(
+    self_elevated: bool,
+    fg_elevated: Option<bool>,
+    input_desktop: Option<&str>,
+) -> Option<BlockReason> {
+    if matches!(input_desktop, Some(d) if !d.eq_ignore_ascii_case("Default")) {
+        return Some(BlockReason::SecureDesktop);
+    }
+    if !self_elevated && fg_elevated == Some(true) {
+        return Some(BlockReason::ElevatedForeground);
+    }
+    None
+}
+
+/// Caches the foreground process elevation by `HWND` so the process is only
+/// queried when the foreground window changes.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Default)]
+struct ForegroundElevationCache {
+    entry: Option<(isize, Option<bool>)>,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl ForegroundElevationCache {
+    fn lookup(&mut self, hwnd: isize, query: impl FnOnce(isize) -> Option<bool>) -> Option<bool> {
+        if let Some((h, v)) = self.entry {
+            if h == hwnd {
+                return v;
+            }
+        }
+        let v = query(hwnd);
+        self.entry = Some((hwnd, v));
+        v
+    }
+}
+
+/// Input-desktop name cache refreshed at most every `interval_ms`.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Default)]
+struct DesktopCache {
+    checked_ms: Option<u64>,
+    name: Option<String>,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl DesktopCache {
+    fn get(
+        &mut self,
+        now_ms: u64,
+        interval_ms: u64,
+        query: impl FnOnce() -> Option<String>,
+    ) -> Option<&str> {
+        let fresh = matches!(self.checked_ms, Some(t) if now_ms.saturating_sub(t) < interval_ms);
+        if !fresh {
+            self.name = query();
+            self.checked_ms = Some(now_ms);
+        }
+        self.name.as_deref()
+    }
+}
+
+#[cfg(windows)]
+const DESKTOP_CHECK_INTERVAL_MS: u64 = 500;
+
+#[cfg(windows)]
+static FG_ELEVATION_CACHE: Mutex<ForegroundElevationCache> =
+    Mutex::new(ForegroundElevationCache { entry: None });
+#[cfg(windows)]
+static DESKTOP_CACHE: Mutex<DesktopCache> = Mutex::new(DesktopCache {
+    checked_ms: None,
+    name: None,
+});
+#[cfg(windows)]
+static SELF_ELEVATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Checks (cheaply, cached) whether the injection about to happen will be dropped and
+/// reports it. Runs on the receiver injection path, not inside a hook callback.
+#[cfg(windows)]
+fn precheck_blocked(kind: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let now_ms = super::debug_log::now_us() / 1000;
+    let self_elevated = *SELF_ELEVATED.get_or_init(super::hooks::own_process_elevated);
+    let hwnd = unsafe { GetForegroundWindow() }.0 as isize;
+    let fg_elevated = if hwnd == 0 {
+        None
+    } else {
+        FG_ELEVATION_CACHE
+            .lock()
+            .ok()
+            .and_then(|mut c| c.lookup(hwnd, super::hooks::hwnd_process_elevated))
+    };
+    let reason = DESKTOP_CACHE.lock().ok().and_then(|mut c| {
+        let name = c.get(now_ms, DESKTOP_CHECK_INTERVAL_MS, || {
+            Some(current_input_desktop_name()).filter(|n| n != "unknown")
+        });
+        block_reason(self_elevated, fg_elevated, name)
+    });
+    if let Some(reason) = reason {
+        note_input_blocked(kind, reason);
     }
 }
 
@@ -232,9 +355,10 @@ fn foreground_process_name() -> String {
     "unknown".to_string()
 }
 
-/// Called when a receiver `SendInput` returned 0 (typically UIPI: elevated foreground
-/// window). Rate-limited to one report per 2 s: logs and notifies the Main PC.
-pub fn note_input_blocked(kind: &str) {
+/// Called when receiver input is (or will be) blocked: UIPI elevated foreground, secure
+/// desktop, or `SendInput` returning 0. Rate-limited to one report per 2 s: logs and
+/// notifies the Main PC.
+pub fn note_input_blocked(kind: &str, reason: BlockReason) {
     let now_ms = super::debug_log::now_us() / 1000;
     let due = INPUT_BLOCKED_LAST_MS
         .lock()
@@ -244,10 +368,13 @@ pub fn note_input_blocked(kind: &str) {
         return;
     }
     let proc_name = foreground_process_name();
-    super::debug_log::note(|| format!("INPUT_BLOCKED_UIPI kind={kind} fg_process={proc_name}"));
+    let reason_s = reason.as_str();
+    super::debug_log::note(|| {
+        format!("INPUT_BLOCKED_UIPI reason={reason_s} kind={kind} fg_process={proc_name}")
+    });
     if let Ok(g) = INPUT_BLOCKED_SINK.lock() {
         if let Some(sink) = g.as_ref() {
-            sink(proc_name);
+            sink(proc_name, reason_s.to_string());
         }
     }
 }
@@ -272,6 +399,7 @@ pub fn normalize_virtual_desk(x: i32, y: i32, vx: i32, vy: i32, vw: i32, vh: i32
 pub fn inject_mouse_move_absolute(x: i32, y: i32) -> bool {
     #[cfg(windows)]
     unsafe {
+        precheck_blocked("move");
         use windows::Win32::UI::WindowsAndMessaging::{
             GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
             SM_YVIRTUALSCREEN,
@@ -298,7 +426,7 @@ pub fn inject_mouse_move_absolute(x: i32, y: i32) -> bool {
             },
         };
         if SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 0 {
-            note_input_blocked("move");
+            note_input_blocked("move", BlockReason::SendInputZero);
             return false;
         }
         true
@@ -313,6 +441,7 @@ pub fn inject_mouse_move_absolute(x: i32, y: i32) -> bool {
 pub fn inject_mouse_delta(dx: i32, dy: i32) {
     #[cfg(windows)]
     unsafe {
+        precheck_blocked("move_rel");
         let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -327,7 +456,7 @@ pub fn inject_mouse_delta(dx: i32, dy: i32) {
             },
         };
         if SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 0 {
-            note_input_blocked("move_rel");
+            note_input_blocked("move_rel", BlockReason::SendInputZero);
         }
     }
 }
@@ -342,6 +471,7 @@ pub fn set_cursor_position(x: i32, y: i32) {
 pub fn inject_mouse_button(button: u8, is_down: bool) -> (u32, u32) {
     #[cfg(windows)]
     unsafe {
+        precheck_blocked("button");
         let flag = match (button, is_down) {
             (1, true) => MOUSEEVENTF_LEFTDOWN,
             (1, false) => MOUSEEVENTF_LEFTUP,
@@ -367,7 +497,7 @@ pub fn inject_mouse_button(button: u8, is_down: bool) -> (u32, u32) {
         };
         let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
         if sent == 0 {
-            note_input_blocked("button");
+            note_input_blocked("button", BlockReason::SendInputZero);
         }
         let err = if sent == 0 {
             windows::Win32::Foundation::GetLastError().0
@@ -386,6 +516,7 @@ pub fn inject_mouse_button(button: u8, is_down: bool) -> (u32, u32) {
 pub fn inject_mouse_wheel(delta: i32) {
     #[cfg(windows)]
     unsafe {
+        precheck_blocked("wheel");
         let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -400,7 +531,7 @@ pub fn inject_mouse_wheel(delta: i32) {
             },
         };
         if SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 0 {
-            note_input_blocked("wheel");
+            note_input_blocked("wheel", BlockReason::SendInputZero);
         }
     }
 }
@@ -408,6 +539,7 @@ pub fn inject_mouse_wheel(delta: i32) {
 pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) -> (u32, u32) {
     #[cfg(windows)]
     unsafe {
+        precheck_blocked("key");
         let mut flags = KEYBD_EVENT_FLAGS(0);
         if !is_down {
             flags |= KEYEVENTF_KEYUP;
@@ -433,7 +565,7 @@ pub fn inject_key(key_code: u16, scan_code: u16, is_down: bool, extended: bool) 
         };
         let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
         if sent == 0 {
-            note_input_blocked("key");
+            note_input_blocked("key", BlockReason::SendInputZero);
         }
         let err = if sent == 0 {
             windows::Win32::Foundation::GetLastError().0
@@ -562,5 +694,89 @@ mod tests {
         mark_post_unlock_nudge_pending();
         assert!(take_post_unlock_nudge_pending());
         assert!(!take_post_unlock_nudge_pending());
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+
+    #[test]
+    fn block_reason_matrix() {
+        use BlockReason::*;
+        for self_el in [false, true] {
+            for fg in [None, Some(false), Some(true)] {
+                for desk in [
+                    None,
+                    Some("Default"),
+                    Some("default"),
+                    Some("Winlogon"),
+                    Some("open_err"),
+                ] {
+                    let secure = matches!(desk, Some("Winlogon") | Some("open_err"));
+                    let expected = if secure {
+                        Some(SecureDesktop)
+                    } else if !self_el && fg == Some(true) {
+                        Some(ElevatedForeground)
+                    } else {
+                        None
+                    };
+                    assert_eq!(block_reason(self_el, fg, desk), expected);
+                }
+            }
+        }
+        assert_eq!(block_reason(false, None, Some("Default")), None);
+        assert_eq!(block_reason(true, Some(true), Some("Default")), None);
+        assert_eq!(
+            block_reason(true, Some(true), Some("Winlogon")),
+            Some(SecureDesktop)
+        );
+    }
+
+    #[test]
+    fn reason_strings() {
+        assert_eq!(
+            BlockReason::ElevatedForeground.as_str(),
+            "elevated_foreground"
+        );
+        assert_eq!(BlockReason::SecureDesktop.as_str(), "secure_desktop");
+        assert_eq!(BlockReason::SendInputZero.as_str(), "sendinput_zero");
+    }
+
+    #[test]
+    fn hwnd_cache_queries_only_on_change() {
+        let mut c = ForegroundElevationCache::default();
+        let mut n = 0;
+        for h in [1, 1, 1, 2, 2, 1] {
+            c.lookup(h, |_| {
+                n += 1;
+                Some(h == 2)
+            });
+        }
+        assert_eq!(n, 3);
+        assert_eq!(c.lookup(1, |_| panic!("cached")), Some(false));
+        let mut c = ForegroundElevationCache::default();
+        let mut n = 0;
+        for _ in 0..3 {
+            let v = c.lookup(9, |_| {
+                n += 1;
+                None
+            });
+            assert_eq!(v, None);
+        }
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn desktop_cache_refreshes_after_interval() {
+        let mut c = DesktopCache::default();
+        let mut n = 0;
+        for t in [0u64, 100, 499, 500, 700, 1000] {
+            c.get(t, 500, || {
+                n += 1;
+                Some("Default".into())
+            });
+        }
+        assert_eq!(n, 3);
     }
 }

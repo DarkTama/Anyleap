@@ -161,6 +161,9 @@ pub enum KvmPacket {
     /// Linked -> Main: receiver `SendInput` was rejected (UIPI, elevated foreground window).
     InputBlocked {
         foreground_process: String,
+        /// `elevated_foreground` | `secure_desktop` | `sendinput_zero` (empty from older peers).
+        #[serde(default)]
+        reason: String,
     },
     MediaKey {
         vk: u16,
@@ -840,9 +843,23 @@ mod tests {
     fn input_blocked_round_trips() {
         let p = KvmPacket::InputBlocked {
             foreground_process: "taskmgr.exe".into(),
+            reason: "elevated_foreground".into(),
         };
         let json = serde_json::to_string(&p).unwrap();
         assert_eq!(serde_json::from_str::<KvmPacket>(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn input_blocked_without_reason_deserializes() {
+        let json = r#"{"type":"InputBlocked","payload":{"foreground_process":"taskmgr.exe"}}"#;
+        let p = serde_json::from_str::<KvmPacket>(json).unwrap();
+        assert_eq!(
+            p,
+            KvmPacket::InputBlocked {
+                foreground_process: "taskmgr.exe".into(),
+                reason: String::new(),
+            }
+        );
     }
 
     #[tokio::test]

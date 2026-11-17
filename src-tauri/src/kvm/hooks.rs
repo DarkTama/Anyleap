@@ -2193,6 +2193,29 @@ pub fn foreground_process_name() -> String {
     }
 }
 
+/// True when AnyLeap's own process is elevated (unknown counts as elevated: no false reports).
+#[cfg(windows)]
+pub fn own_process_elevated() -> bool {
+    !matches!(
+        unsafe { query_own_elevation() },
+        ProcessElevation::Standard { .. }
+    )
+}
+
+/// Elevation of the process owning `hwnd`; `None` when unknown.
+#[cfg(windows)]
+pub fn hwnd_process_elevated(hwnd: isize) -> Option<bool> {
+    unsafe {
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid));
+        match query_process_info(pid).0 {
+            ProcessElevation::Elevated => Some(true),
+            ProcessElevation::Standard { .. } => Some(false),
+            ProcessElevation::Unknown => None,
+        }
+    }
+}
+
 #[cfg(windows)]
 unsafe fn query_process_info(pid: u32) -> (ProcessElevation, String) {
     if pid == 0 {
