@@ -24,7 +24,6 @@ import {
   setPhoneToggle,
 } from "@/lib/tauri";
 import { MSG_NEEDS_REPAIR, resolveDeviceNickname, resolveDeviceTarget } from "@/lib/deviceStatus";
-import { createInputBlockedThrottle, inputBlockedMessage } from "@/lib/inputBlockedNotice";
 import { surfaceAdbError } from "@/lib/adbError";
 import { refreshAndReconnectDevices } from "@/lib/deviceSync";
 import { deviceHealth, reportDeviceError } from "@/lib/deviceHealth";
@@ -57,7 +56,6 @@ import { listen } from "@tauri-apps/api/event";
 
 const EMPTY_NOTIFICATIONS: PhoneHubNotification[] = [];
 
-const inputBlockedThrottle = createInputBlockedThrottle();
 
 function App() {
   const error = useAppStore((s) => s.error);
@@ -298,26 +296,6 @@ function App() {
           hudNoticeRef.current = null;
           setHudNotice(null);
         }, 4000);
-      }),
-      listen<{ proc?: string; reason?: string }>("kvm-input-blocked", (e) => {
-        const proc = e.payload?.proc || "unknown";
-        const reason = e.payload?.reason;
-        const text = inputBlockedMessage(reason, proc);
-        setToast(text);
-        if (inputBlockedThrottle(reason, proc)) {
-          void (async () => {
-            let granted = await isPermissionGranted().catch(() => false);
-            if (!granted) {
-              const perm = await requestPermission().catch(() => "denied");
-              granted = perm === "granted";
-            }
-            if (granted) {
-              sendNotification({ title: "AnyLeap: Linked PC input blocked", body: text });
-            }
-          })();
-        }
-        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = setTimeout(() => setToast(null), 7000);
       }),
     ];
     listSessions()

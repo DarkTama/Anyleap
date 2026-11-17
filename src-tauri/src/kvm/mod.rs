@@ -1,3 +1,4 @@
+pub mod blocked_notice;
 pub mod client;
 pub mod clipboard;
 pub mod commands;
