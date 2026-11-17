@@ -130,7 +130,7 @@
 
 ## Phase 3: mirror window control bar
 
-1. Extract the button list into a pure, grouped model (`controlBarGroups(config, sessionMode, state)`) with unit tests: group order, Sleep removed, End call only during a call, camera group only in camera mode, More-menu contents.
+1. Extract the button list into a pure, grouped model (`controlBarGroups(config, sessionMode, state)`) with unit tests: group order, Sleep removed, End call only during a call, camera group only in camera mode, More-menu contents. `collapsed` (Navigate + More only) applies to the floating control window only (`surface: "floating"`); the embedded sidebar always shows every enabled group.
 2. Rebuild `ControlBar.tsx`: 40 px icon buttons, accessible tooltip component (hover and focus), `aria-label`, `aria-pressed` for toggles, and dividers between groups. Fix the volume-down icon.
 3. Add the More popover (keyboard reachable, Escape closes, focus returns to the More button).
 4. Widen the wrapper sidebar to 60 px in `EmbeddedMirrorWindow.tsx`, enlarge the title-bar controls, and add a red hover on Close.

@@ -10,7 +10,6 @@ export type ButtonId =
   | "power"
   | "screenshot"
   | "notifications"
-  | "sleep"
   | "screenOff"
   | "orientToggle"
   | "swipeScroll"
@@ -37,7 +36,6 @@ export const BUTTON_IDS: ButtonId[] = [
   "power",
   "screenshot",
   "notifications",
-  "sleep",
   "screenOff",
   "orientToggle",
   "swipeScroll",
@@ -51,19 +49,18 @@ export const BUTTON_IDS: ButtonId[] = [
 export const BUTTON_LABELS: Record<ButtonId, string> = {
   back: "Back",
   home: "Home",
-  recents: "Recents",
-  volUp: "Volume +",
-  volDown: "Volume −",
+  recents: "Recent apps",
+  volUp: "Volume up",
+  volDown: "Volume down",
   power: "Power",
   screenshot: "Screenshot",
   notifications: "Notifications",
-  sleep: "Sleep / Wake",
-  screenOff: "Screen off (scrcpy)",
-  orientToggle: "Rotate device",
-  swipeScroll: "Swipe scroll (Reels)",
+  screenOff: "Turn phone screen off (keep mirroring)",
+  orientToggle: "Rotate",
+  swipeScroll: "Mouse wheel swipes",
   record: "Record screen",
-  wifi: "Wi-Fi toggle",
-  bluetooth: "Bluetooth toggle",
+  wifi: "Wi-Fi",
+  bluetooth: "Bluetooth",
   dnd: "Do Not Disturb",
   endCall: "End call",
 };
@@ -84,7 +81,6 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
     power: true,
     screenshot: true,
     notifications: true,
-    sleep: true,
     screenOff: true,
     orientToggle: true,
     swipeScroll: true,
@@ -95,5 +91,23 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
     endCall: true,
   },
 };
+
+/** Merge a stored control-bar config with defaults. Drops buttons that no
+ *  longer exist (e.g. the removed `sleep` button, SPEC-28 phase 3). */
+export function normalizeControlConfig(saved: unknown): ControlConfig {
+  if (!saved || typeof saved !== "object") return DEFAULT_CONTROL_CONFIG;
+  const s = saved as Partial<ControlConfig> & { buttons?: Record<string, unknown> };
+  const buttons = { ...DEFAULT_CONTROL_CONFIG.buttons };
+  for (const id of BUTTON_IDS) {
+    const v = s.buttons?.[id];
+    if (typeof v === "boolean") buttons[id] = v;
+  }
+  return {
+    dock: s.dock ?? DEFAULT_CONTROL_CONFIG.dock,
+    size: s.size ?? DEFAULT_CONTROL_CONFIG.size,
+    buttons,
+    collapsed: s.collapsed ?? DEFAULT_CONTROL_CONFIG.collapsed,
+  };
+}
 
 export { loadControlConfig, saveControlConfig } from "./settingsStore";

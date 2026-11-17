@@ -123,3 +123,14 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
 - [ ] Each relabelled switch still changes behaviour (clipboard text/images, file copy and drop, pointer style, audio bridge, lock/sleep together, Explorer menu, cursor badge).
 - [ ] Advanced: large-file limits and the diagnostics log toggle work; "Open log folder" opens the folder.
 - [ ] Contrast spot check: helper text readable on every surface; selected rail item is dark text on gold.
+
+## H. Mirror control bar (SPEC-28 phase 3)
+
+- [ ] Mirror and Flex: sidebar is 60 px; 40 px icon buttons grouped Navigate / Sound / Screen / Capture with dividers; More at the bottom.
+- [ ] Tab through the bar: each button shows a tooltip on keyboard focus; More opens with Enter, arrows move, Escape closes and focus returns to More.
+- [ ] Volume down shows the volume-down icon; no Sleep button; Rotate hidden in Flex.
+- [ ] Screen-off, Record, Wi-Fi, Bluetooth, Do Not Disturb, Mouse wheel swipes show `aria-pressed` and a gold outline when on; Record is red while recording.
+- [ ] Stopping a recording shows a toast with "Open recording folder".
+- [ ] End call appears (red) only during a call.
+- [ ] Camera mode: torch, zoom, stop camera group; help text names no third-party apps.
+- [ ] Title-bar buttons are 36 x 28 px; Close turns red on hover.

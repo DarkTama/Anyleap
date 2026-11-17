@@ -6,7 +6,7 @@ import {
   normalizeModeDefaults,
   type ModeDefaultsV2,
 } from "./modeSettings";
-import { DEFAULT_CONTROL_CONFIG, type ControlConfig } from "./controlConfig";
+import { normalizeControlConfig, type ControlConfig } from "./controlConfig";
 
 export interface AppPrefs {
   minimizeToTrayOnClose: boolean;
@@ -187,13 +187,13 @@ export async function saveAppPrefs(prefs: AppPrefs): Promise<void> {
 export async function loadControlConfig(): Promise<ControlConfig> {
   const store = await getStore();
   const saved = await store.get<Partial<ControlConfig>>("controlBar");
-  if (!saved) return DEFAULT_CONTROL_CONFIG;
-  return {
-    dock: saved.dock ?? DEFAULT_CONTROL_CONFIG.dock,
-    size: saved.size ?? DEFAULT_CONTROL_CONFIG.size,
-    buttons: { ...DEFAULT_CONTROL_CONFIG.buttons, ...(saved.buttons ?? {}) },
-    collapsed: saved.collapsed ?? DEFAULT_CONTROL_CONFIG.collapsed,
-  };
+  const normalized = normalizeControlConfig(saved);
+  // Persist migrations (e.g. dropped buttons) once so stale keys leave settings.json.
+  if (saved && JSON.stringify(saved) !== JSON.stringify(normalized)) {
+    await store.set("controlBar", normalized);
+    await store.save();
+  }
+  return normalized;
 }
 
 export async function saveControlConfig(config: ControlConfig): Promise<void> {
