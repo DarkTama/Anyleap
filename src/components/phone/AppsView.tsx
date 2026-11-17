@@ -4,10 +4,17 @@ import {
   ExternalLink,
   Grid3x3,
   List,
+  Pin,
+  PinOff,
   RefreshCw,
   Search,
 } from "lucide-react";
-import { phoneListApps, phoneOpenApp } from "@/services/phoneHubService";
+import {
+  phoneGetPinnedApps,
+  phoneListApps,
+  phoneOpenApp,
+  phoneSetAppPinned,
+} from "@/services/phoneHubService";
 import { describeOpenApp } from "@/lib/openApp";
 import { logActivity } from "@/stores/activityStore";
 import type { PhoneApp } from "@/types/phone";
@@ -25,6 +32,7 @@ export function AppsView({ serial }: AppsViewProps) {
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [openingPkg, setOpeningPkg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string[]>([]);
 
   const loadApps = useCallback(
     async (refresh: boolean) => {
@@ -36,6 +44,12 @@ export function AppsView({ serial }: AppsViewProps) {
           (a.label || a.package).localeCompare(b.label || b.package),
         );
         setApps(sorted);
+        // Pruning of uninstalled pins is persisted by the backend on refresh; re-read it.
+        try {
+          setPinned(await phoneGetPinnedApps(serial));
+        } catch {
+          /* pins are optional; keep current state */
+        }
         if (refresh) {
           setStatusMsg("App list refreshed from the phone");
         }
@@ -51,6 +65,7 @@ export function AppsView({ serial }: AppsViewProps) {
   useEffect(() => {
     setQuery("");
     setStatusMsg(null);
+    setPinned([]);
     void loadApps(false);
   }, [loadApps]);
 
@@ -70,6 +85,36 @@ export function AppsView({ serial }: AppsViewProps) {
         a.label.toLowerCase().includes(q) || a.package.toLowerCase().includes(q),
     );
   }, [scopedApps, query]);
+
+  const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+
+  const pinnedApps = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return apps
+      .filter((a) => pinnedSet.has(a.package))
+      .filter(
+        (a) =>
+          !q ||
+          a.label.toLowerCase().includes(q) ||
+          a.package.toLowerCase().includes(q),
+      );
+  }, [apps, pinnedSet, query]);
+
+  async function handleTogglePin(app: PhoneApp) {
+    const next = !pinnedSet.has(app.package);
+    const previous = pinned;
+    setPinned(
+      next
+        ? [...previous.filter((p) => p !== app.package), app.package]
+        : previous.filter((p) => p !== app.package),
+    );
+    try {
+      setPinned(await phoneSetAppPinned(serial, app.package, next));
+    } catch (e) {
+      setPinned(previous);
+      setError(String(e));
+    }
+  }
 
   async function handleOpen(app: PhoneApp) {
     setOpeningPkg(app.package);
@@ -212,6 +257,29 @@ export function AppsView({ serial }: AppsViewProps) {
           {statusMsg && <span className="text-gold-400">{statusMsg}</span>}
         </div>
 
+        {pinnedApps.length > 0 && (
+          <section aria-label="Pinned apps" className="mb-4">
+            <h2 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-text-strong">
+              <Pin className="h-3 w-3 text-gold-400" />
+              Pinned <span className="font-mono text-text-muted">{pinnedApps.length}</span>
+            </h2>
+            <AppCollection
+              apps={pinnedApps}
+              viewMode={viewMode}
+              pinnedSet={pinnedSet}
+              openingPkg={openingPkg}
+              onOpen={(a) => void handleOpen(a)}
+              onTogglePin={(a) => void handleTogglePin(a)}
+            />
+          </section>
+        )}
+
+        {pinnedApps.length > 0 && (
+          <h2 className="mb-2 text-xs font-semibold text-text-strong">
+            {scope === "system" ? "System apps" : "User apps"}
+          </h2>
+        )}
+
         {!loading && filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-ink-700 p-8 text-center">
             <Search className="mb-2 h-10 w-10 text-ink-700" />
@@ -235,106 +303,170 @@ export function AppsView({ serial }: AppsViewProps) {
               </button>
             )}
           </div>
-        ) : viewMode === "list" ? (
-          <ul className="overflow-hidden rounded-xl border border-ink-700 bg-ink-900 divide-y divide-ink-700">
-            {filtered.map((app) => {
-              const name = app.label || app.package;
-              const isOpening = openingPkg === app.package;
-              return (
-                <li
-                  key={app.package}
-                  className="flex items-center gap-3 px-3.5 py-2"
-                >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-700 bg-ink-800 text-[13px] font-bold text-text-strong">
-                    {(name[0] || "?").toUpperCase()}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-semibold text-text-strong">
-                      {name}
-                    </span>
-                    <span className="block truncate font-mono text-[11px] text-text-muted">
-                      {app.package}
-                    </span>
-                  </span>
-                  {app.system && (
-                    <span className="rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-text">
-                      System
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    disabled={isOpening}
-                    aria-label={`Open ${name}`}
-                    onClick={() => void handleOpen(app)}
-                    className="btn-tactile inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong disabled:opacity-50 cursor-pointer"
-                  >
-                    {isOpening ? (
-                      <>
-                        <Check className="h-3 w-3 text-status-success" />
-                        Opening…
-                      </>
-                    ) : (
-                      <>
-                        <ExternalLink className="h-3 w-3" />
-                        Open
-                      </>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
         ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-3">
-            {filtered.map((app) => {
-              const name = app.label || app.package;
-              const isOpening = openingPkg === app.package;
-              return (
-                <li
-                  key={app.package}
-                  className="flex min-w-0 flex-col items-start gap-2 rounded-xl border border-ink-700 bg-ink-900 p-3"
-                >
-                  <div className="flex w-full items-center justify-between gap-2">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ink-700 bg-ink-800 text-[13px] font-bold text-text-strong">
-                      {(name[0] || "?").toUpperCase()}
-                    </span>
-                    {app.system && (
-                      <span className="rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-text">
-                        System
-                      </span>
-                    )}
-                  </div>
-                  <span className="w-full truncate text-xs font-semibold text-text-strong">
-                    {name}
-                  </span>
-                  <span className="w-full truncate font-mono text-[11px] text-text-muted">
-                    {app.package}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={isOpening}
-                    aria-label={`Open ${name}`}
-                    onClick={() => void handleOpen(app)}
-                    className="btn-tactile inline-flex w-full items-center justify-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong disabled:opacity-50 cursor-pointer"
-                  >
-                    {isOpening ? (
-                      <>
-                        <Check className="h-3 w-3 text-status-success" />
-                        Opening…
-                      </>
-                    ) : (
-                      <>
-                        <ExternalLink className="h-3 w-3" />
-                        Open
-                      </>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <AppCollection
+            apps={filtered}
+            viewMode={viewMode}
+            pinnedSet={pinnedSet}
+            openingPkg={openingPkg}
+            onOpen={(a) => void handleOpen(a)}
+            onTogglePin={(a) => void handleTogglePin(a)}
+          />
         )}
       </div>
     </div>
+  );
+}
+
+interface AppCollectionProps {
+  apps: PhoneApp[];
+  viewMode: "list" | "grid";
+  pinnedSet: Set<string>;
+  openingPkg: string | null;
+  onOpen: (app: PhoneApp) => void;
+  onTogglePin: (app: PhoneApp) => void;
+}
+
+function PinButton({
+  app,
+  pinned,
+  onTogglePin,
+  className,
+}: {
+  app: PhoneApp;
+  pinned: boolean;
+  onTogglePin: (app: PhoneApp) => void;
+  className?: string;
+}) {
+  const name = app.label || app.package;
+  const Icon = pinned ? PinOff : Pin;
+  return (
+    <button
+      type="button"
+      aria-label={`${pinned ? "Unpin" : "Pin"} ${name}`}
+      aria-pressed={pinned}
+      title={pinned ? "Unpin" : "Pin to top"}
+      onClick={() => onTogglePin(app)}
+      className={`btn-tactile inline-flex shrink-0 items-center justify-center rounded-md border border-ink-700 bg-ink-800 p-1 hover:border-text-muted hover:text-text-strong cursor-pointer ${
+        pinned ? "text-gold-400" : "text-text"
+      } ${className ?? ""}`}
+    >
+      <Icon className="h-3 w-3" />
+    </button>
+  );
+}
+
+function OpenButtonContent({ isOpening }: { isOpening: boolean }) {
+  return isOpening ? (
+    <>
+      <Check className="h-3 w-3 text-status-success" />
+      Opening…
+    </>
+  ) : (
+    <>
+      <ExternalLink className="h-3 w-3" />
+      Open
+    </>
+  );
+}
+
+function AppCollection({
+  apps,
+  viewMode,
+  pinnedSet,
+  openingPkg,
+  onOpen,
+  onTogglePin,
+}: AppCollectionProps) {
+  if (viewMode === "list") {
+    return (
+      <ul className="overflow-hidden rounded-xl border border-ink-700 bg-ink-900 divide-y divide-ink-700">
+        {apps.map((app) => {
+          const name = app.label || app.package;
+          const isOpening = openingPkg === app.package;
+          return (
+            <li key={app.package} className="flex items-center gap-3 px-3.5 py-2">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-700 bg-ink-800 text-[13px] font-bold text-text-strong">
+                {(name[0] || "?").toUpperCase()}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-semibold text-text-strong">
+                  {name}
+                </span>
+                <span className="block truncate font-mono text-[11px] text-text-muted">
+                  {app.package}
+                </span>
+              </span>
+              {app.system && (
+                <span className="rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-text">
+                  System
+                </span>
+              )}
+              <PinButton
+                app={app}
+                pinned={pinnedSet.has(app.package)}
+                onTogglePin={onTogglePin}
+              />
+              <button
+                type="button"
+                disabled={isOpening}
+                aria-label={`Open ${name}`}
+                onClick={() => onOpen(app)}
+                className="btn-tactile inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong disabled:opacity-50 cursor-pointer"
+              >
+                <OpenButtonContent isOpening={isOpening} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+  return (
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-3">
+      {apps.map((app) => {
+        const name = app.label || app.package;
+        const isOpening = openingPkg === app.package;
+        return (
+          <li
+            key={app.package}
+            className="flex min-w-0 flex-col items-start gap-2 rounded-xl border border-ink-700 bg-ink-900 p-3"
+          >
+            <div className="flex w-full items-center justify-between gap-2">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ink-700 bg-ink-800 text-[13px] font-bold text-text-strong">
+                {(name[0] || "?").toUpperCase()}
+              </span>
+              <span className="flex items-center gap-1.5">
+                {app.system && (
+                  <span className="rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-text">
+                    System
+                  </span>
+                )}
+                <PinButton
+                  app={app}
+                  pinned={pinnedSet.has(app.package)}
+                  onTogglePin={onTogglePin}
+                />
+              </span>
+            </div>
+            <span className="w-full truncate text-xs font-semibold text-text-strong">
+              {name}
+            </span>
+            <span className="w-full truncate font-mono text-[11px] text-text-muted">
+              {app.package}
+            </span>
+            <button
+              type="button"
+              disabled={isOpening}
+              aria-label={`Open ${name}`}
+              onClick={() => onOpen(app)}
+              className="btn-tactile inline-flex w-full items-center justify-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong disabled:opacity-50 cursor-pointer"
+            >
+              <OpenButtonContent isOpening={isOpening} />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

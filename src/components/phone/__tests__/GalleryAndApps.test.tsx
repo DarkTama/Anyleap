@@ -22,6 +22,17 @@ const mockPhoneListApps = vi.fn<(...args: unknown[]) => Promise<PhoneApp[]>>(() 
     { package: "system.settings", label: "Settings", system: true },
   ]),
 );
+let pinnedState: string[] = [];
+const mockPhoneGetPinnedApps = vi.fn<(...args: unknown[]) => Promise<string[]>>(() =>
+  Promise.resolve([...pinnedState]),
+);
+const mockPhoneSetAppPinned = vi.fn(
+  (_serial: unknown, pkg: unknown, pinned: unknown) => {
+    pinnedState = pinnedState.filter((p) => p !== pkg);
+    if (pinned) pinnedState.push(pkg as string);
+    return Promise.resolve([...pinnedState]);
+  },
+);
 const mockPhoneOpenApp = vi.fn((..._args: unknown[]) => Promise.resolve({}));
 const mockPullDeviceFile = vi.fn((..._args: unknown[]) => Promise.resolve("C:\\Downloads\\item.jpg"));
 const mockOpenDialog = vi.fn((..._args: unknown[]) => Promise.resolve("C:\\Downloads"));
@@ -32,6 +43,9 @@ vi.mock("@/services/phoneHubService", () => ({
   phoneMediaThumbnail: (...args: unknown[]) => mockPhoneMediaThumbnail(...args),
   phoneOpenMedia: (...args: unknown[]) => mockPhoneOpenMedia(...args),
   phoneListApps: (...args: unknown[]) => mockPhoneListApps(...args),
+  phoneGetPinnedApps: (...args: unknown[]) => mockPhoneGetPinnedApps(...args),
+  phoneSetAppPinned: (...args: unknown[]) =>
+    mockPhoneSetAppPinned(...(args as [unknown, unknown, unknown])),
   phoneOpenApp: (...args: unknown[]) => mockPhoneOpenApp(...args),
 }));
 
@@ -282,6 +296,107 @@ describe("GalleryView & AppsView (SPEC-27b Task B4)", () => {
     });
 
     expect(mockPhoneOpenApp).toHaveBeenCalledWith("serial-1", "app.example.notes");
+  });
+
+  describe("pinned apps", () => {
+    const pinnedSection = () =>
+      container.querySelector<HTMLElement>('section[aria-label="Pinned apps"]');
+
+    async function renderApps() {
+      await act(async () => {
+        root.render(<AppsView serial="serial-1" />);
+      });
+    }
+
+    async function click(label: string) {
+      const btn = container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${label}"]`,
+      );
+      expect(btn).not.toBeNull();
+      await act(async () => {
+        btn?.click();
+      });
+    }
+
+    beforeEach(() => {
+      pinnedState = [];
+      mockPhoneSetAppPinned.mockClear();
+      mockPhoneGetPinnedApps.mockClear();
+    });
+
+    it("hides the pinned section when nothing is pinned", async () => {
+      await renderApps();
+      expect(pinnedSection()).toBeNull();
+      expect(container.querySelector('button[aria-label="Pin Chat"]')).not.toBeNull();
+    });
+
+    it("shows pinned apps sorted by label above the regular list", async () => {
+      pinnedState = ["app.example.notes", "app.example.chat"];
+      await renderApps();
+      const section = pinnedSection();
+      expect(section).not.toBeNull();
+      const names = Array.from(section!.querySelectorAll("li")).map((li) => li.textContent);
+      expect(names).toHaveLength(2);
+      expect(names[0]).toContain("Chat");
+      expect(names[1]).toContain("Notes");
+      expect(section!.querySelector('button[aria-label="Unpin Chat"]')).not.toBeNull();
+      const heading = Array.from(container.querySelectorAll("h2")).find(
+        (h) => h.textContent === "User apps",
+      );
+      expect(heading).toBeDefined();
+      expect(
+        section!.compareDocumentPosition(heading!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("filters pinned apps by search and hides section when none match", async () => {
+      pinnedState = ["app.example.notes", "app.example.chat"];
+      await renderApps();
+      const search = container.querySelector<HTMLInputElement>("#apps-search");
+      const type = async (v: string) =>
+        act(async () => {
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value",
+          )?.set;
+          setter?.call(search, v);
+          search?.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      await type("notes");
+      expect(pinnedSection()?.querySelectorAll("li")).toHaveLength(1);
+      expect(pinnedSection()?.textContent).toContain("Notes");
+      expect(pinnedSection()?.textContent).not.toContain("Chat");
+      await type("zzz");
+      expect(pinnedSection()).toBeNull();
+    });
+
+    it("does not render pins for packages that are not installed", async () => {
+      pinnedState = ["app.example.gone"];
+      await renderApps();
+      expect(pinnedSection()).toBeNull();
+    });
+
+    it("toggles pin optimistically and persists via the service", async () => {
+      await renderApps();
+      await click("Pin Notes");
+      expect(mockPhoneSetAppPinned).toHaveBeenCalledWith("serial-1", "app.example.notes", true);
+      expect(pinnedSection()?.textContent).toContain("Notes");
+      await click("Unpin Notes");
+      expect(mockPhoneSetAppPinned).toHaveBeenLastCalledWith(
+        "serial-1",
+        "app.example.notes",
+        false,
+      );
+      expect(pinnedSection()).toBeNull();
+    });
+
+    it("reverts the optimistic pin when persisting fails", async () => {
+      mockPhoneSetAppPinned.mockImplementationOnce(() => Promise.reject(new Error("boom")));
+      await renderApps();
+      await click("Pin Chat");
+      expect(pinnedSection()).toBeNull();
+      expect(container.textContent).toContain("boom");
+    });
   });
 
   it("caps thumbnail requests at 4 concurrent, uses async/lazy sized imgs, and never uses original device path", async () => {
