@@ -1,7 +1,7 @@
 # ADR 0005: Per-Mode Mirroring Settings
 
 ## Status
-Accepted (phase 1 implemented; accompanies SPEC-28)
+Accepted (phases 1–2 implemented; accompanies SPEC-28)
 
 ## Context
 Mirroring settings are one global `CoreSettings` object plus one `preset` in `settings.json` (`src/lib/settingsStore.ts`). The Devices Mirroring presets (`LaunchMatrix.handleSelect`, palette `startMode` in `src/App.tsx`) overwrite fields of that object when a mode is picked (Camera sets `noAudio: true`, High Fidelity forces AV1, Flex flips `flexDisplay`). Values leak between modes and into the Settings page, which caused the "no sound in Mirror/Flex" defect. The persisted shape and its migration are hard to change later because every installed profile carries it.

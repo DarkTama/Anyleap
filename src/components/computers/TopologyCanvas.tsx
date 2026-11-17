@@ -50,6 +50,13 @@ function shortMonitorLabel(
   return `D${idx + 1}`;
 }
 
+/** Chip values; a stored value outside the list gets an extra "Custom: N" chip (SPEC-28 §9.2). */
+export const DEADZONE_CHIPS = [24, 48, 80];
+export const DWELL_CHIPS = [0, 80, 120, 200];
+export function customChips(stored: number, chips: number[]): number[] {
+  return chips.includes(stored) ? chips : [...chips, stored];
+}
+
 export function TopologyCanvas() {
   const topology = useKvmStore((s) => s.topology);
   const status = useKvmStore((s) => s.status);
@@ -699,7 +706,7 @@ export function TopologyCanvas() {
                 Deadzone: {deadzonePx}px
               </span>
               <div className="flex items-center gap-1 ml-1">
-                {[24, 48, 80].map((val) => (
+                {customChips(deadzonePx, DEADZONE_CHIPS).map((val) => (
                   <button
                     key={val}
                     type="button"
@@ -710,7 +717,7 @@ export function TopologyCanvas() {
                         : "bg-ink-800 text-text-muted hover:text-text-strong"
                     }`}
                   >
-                    {val}px
+                    {DEADZONE_CHIPS.includes(val) ? `${val}px` : `Custom: ${val}px`}
                   </button>
                 ))}
               </div>
@@ -723,7 +730,7 @@ export function TopologyCanvas() {
               Dwell: {settings.edgeResistanceMs}ms
             </span>
             <div className="flex items-center gap-1">
-              {[0, 80, 120, 200].map((ms) => (
+              {customChips(settings.edgeResistanceMs, DWELL_CHIPS).map((ms) => (
                 <button
                   key={ms}
                   type="button"
@@ -734,7 +741,7 @@ export function TopologyCanvas() {
                       : "bg-ink-800 text-text-muted hover:text-text-strong"
                   }`}
                 >
-                  {ms}ms
+                  {DWELL_CHIPS.includes(ms) ? `${ms}ms` : `Custom: ${ms}ms`}
                 </button>
               ))}
             </div>
