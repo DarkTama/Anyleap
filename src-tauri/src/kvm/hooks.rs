@@ -530,6 +530,50 @@ fn is_physical_mouse_hook_event(flags: u32) -> bool {
     (flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) == 0
 }
 
+/// Test-only `dwExtraInfo` magic stamped on `SendInput` moves by
+/// `scripts/e2e/kvm-soak.ps1`. Keep in sync with `$script:AnyLeapE2EInputTag`
+/// in `scripts/e2e/common.ps1`. AnyLeap's own injections use `dwExtraInfo: 0`.
+#[cfg(any(windows, test))]
+const ANYLEAP_E2E_INPUT_TAG: usize = 0x414E_5945_3245_4531;
+
+/// Opt-in flag file (under `%LOCALAPPDATA%id.co.dak.anyleap`) that makes the
+/// hook accept tagged injected mouse events as physical. Test-only hook.
+#[cfg(windows)]
+const E2E_ACCEPT_INJECTED_FLAG_FILE: &str = "e2e-accept-injected";
+
+/// Cached result of the flag-file check; refreshed only on the hook thread
+/// (at start and on the watchdog timer), never inside the hook callback.
+#[cfg(windows)]
+static E2E_ACCEPT_INJECTED: AtomicBool = AtomicBool::new(false);
+
+/// True if the event is genuinely physical, or (E2E flag on) a tagged
+/// injected event. A lower-IL injected event is accepted only when
+/// `LLMHF_INJECTED` is also set, which Windows does for all injected input.
+#[cfg(any(windows, test))]
+fn counts_as_physical(flags: u32, extra_info: usize, e2e_enabled: bool) -> bool {
+    const LLMHF_INJECTED: u32 = 0x0000_0001;
+    if is_physical_mouse_hook_event(flags) {
+        return true;
+    }
+    e2e_enabled && (flags & LLMHF_INJECTED) != 0 && extra_info == ANYLEAP_E2E_INPUT_TAG
+}
+
+#[cfg(windows)]
+fn refresh_e2e_accept_injected() {
+    let present = std::env::var_os("LOCALAPPDATA")
+        .map(|base| {
+            std::path::Path::new(&base)
+                .join("id.co.dak.anyleap")
+                .join(E2E_ACCEPT_INJECTED_FLAG_FILE)
+                .exists()
+        })
+        .unwrap_or(false);
+    let prev = E2E_ACCEPT_INJECTED.swap(present, Ordering::Relaxed);
+    if prev != present {
+        debug_log::note(|| format!("E2E_INJECTED_INPUT enabled={}", u8::from(present)));
+    }
+}
+
 pub fn is_hook_active() -> bool {
     HOOK_ACTIVE.load(Ordering::Acquire)
 }
@@ -1185,6 +1229,7 @@ impl HookController {
             let h_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0);
             let h_kbd = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
             let mut watchdog_timer_id: usize = SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None);
+            refresh_e2e_accept_injected();
             let mut return_verify: Option<ReturnVerifyPending> = None;
 
             while HOOK_ACTIVE.load(Ordering::Relaxed) {
@@ -1262,6 +1307,7 @@ impl HookController {
                         }
                     }
                     if watchdog_timer_id != 0 && msg.wParam.0 == watchdog_timer_id {
+                        refresh_e2e_accept_injected();
                         if load_trap_state().phase == TrapPhase::Trapped {
                             if let Some(last_input_tick) = query_last_input_tick() {
                                 let hook_tick = HAS_LAST_HOOK_TICK
@@ -1456,7 +1502,11 @@ unsafe fn handle_mouse_event(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> O
     let msg = w_param.0 as u32;
     let trap_state = load_trap_state();
     let is_trapped_now = trap_state.phase.is_trapped_like();
-    let is_physical = is_physical_mouse_hook_event(hook_struct.flags);
+    let is_physical = counts_as_physical(
+        hook_struct.flags,
+        hook_struct.dwExtraInfo,
+        E2E_ACCEPT_INJECTED.load(Ordering::Relaxed),
+    );
     if should_ignore_injected_mouse_hook_event(
         hook_struct.flags,
         super::dragdrop::is_local_drag_source_active(),
@@ -3860,6 +3910,27 @@ mod tests {
         assert!(!should_emit_timer_blocked_notice(
             true, false, true, false, 10_000, 0, cd
         ));
+    }
+
+    #[test]
+    fn counts_as_physical_gates_tagged_injected_input() {
+        const INJ: u32 = 1;
+        const LOWER: u32 = 2;
+        let tag = ANYLEAP_E2E_INPUT_TAG;
+        assert!(counts_as_physical(0, 0, false));
+        assert!(counts_as_physical(0, 0, true));
+        // untagged injected: rejected regardless of flag
+        assert!(!counts_as_physical(INJ, 0, false));
+        assert!(!counts_as_physical(INJ, 0, true));
+        assert!(!counts_as_physical(INJ, tag + 1, true));
+        // tagged, flag off: rejected
+        assert!(!counts_as_physical(INJ, tag, false));
+        // tagged, flag on: accepted
+        assert!(counts_as_physical(INJ, tag, true));
+        // lower-IL: accepted only when LLMHF_INJECTED is also set
+        assert!(counts_as_physical(INJ | LOWER, tag, true));
+        assert!(!counts_as_physical(LOWER, tag, true));
+        assert!(!counts_as_physical(INJ | LOWER, tag, false));
     }
 
     // --- SPEC-25a ---
