@@ -25,8 +25,59 @@ import type {
 
 export const listDevices = () => invoke<DeviceInfo[]>("list_devices");
 
-export const startMirror = (serial: string, settings: CoreSettings) =>
-  invoke<SessionInfo>("start_mirror", { serial, settings });
+export const startMirror = async (serial: string, settings: CoreSettings) => {
+  const info = await invoke<SessionInfo>("start_mirror", {
+    serial,
+    settings,
+    // SPEC-29: additive optional fields; the backend defaults both to true.
+    secureDetection: settings.secureDetection ?? true,
+    wakeOnSecure: settings.wakeOnSecure ?? true,
+  });
+  if (settings.flexDisplay) void showFlexSecureWarningOnce();
+  return info;
+};
+
+/** SPEC-29 §7.4: first Flex session only; shown on the Transfer Bar notice path. */
+async function showFlexSecureWarningOnce(): Promise<void> {
+  try {
+    const [{ getSharedStore }, { takeFlexSecureWarning, FLEX_SECURE_WARNING_TEXT }, { useKvmStore }] =
+      await Promise.all([
+        import("./settingsStore"),
+        import("./flexWarning"),
+        import("@/stores/kvmStore"),
+      ]);
+    if (!(await takeFlexSecureWarning(await getSharedStore()))) return;
+    const id = `notice-${Date.now()}`;
+    useKvmStore.setState({
+      continuityNotice: { id, text: FLEX_SECURE_WARNING_TEXT, timestamp: Date.now() },
+    });
+    setTimeout(() => {
+      if (useKvmStore.getState().continuityNotice?.id === id) {
+        useKvmStore.setState({ continuityNotice: null });
+      }
+    }, 8000);
+  } catch {
+    /* the warning is best effort */
+  }
+}
+
+export interface ScreenPowerEvent {
+  serial: string;
+  off: boolean;
+}
+
+export const onScreenPower = (cb: EventCallback<ScreenPowerEvent>): Promise<UnlistenFn> =>
+  listen<ScreenPowerEvent>("screen-power", cb);
+
+export interface SecureStateEvent {
+  serial: string;
+  secureFocused: boolean;
+  keyguardShowing: boolean;
+  focusedDisplayId: number | null;
+}
+
+export const onSecureState = (cb: EventCallback<SecureStateEvent>): Promise<UnlistenFn> =>
+  listen<SecureStateEvent>("secure-state", cb);
 
 export const stopMirror = (sessionId: string) =>
   invoke<void>("stop_mirror", { sessionId });

@@ -15,6 +15,7 @@ pub use crate::device_identity::{
     parse_mdns_services, DeviceInfo, MdnsService, ReconnectDecision, ReconnectResult,
     ReconnectTarget, HW_SERIAL_PROP_SEP,
 };
+use crate::secure_watch::{SessionWake, WakeOpts};
 use crate::state::{poison_error, AppState, Session};
 
 /// Filename of the bundled adb sidecar (target-triple suffixed by Tauri).
@@ -863,6 +864,7 @@ async fn spawn_session(
     mut args: Vec<String>,
     retried: bool,
     mode: &str,
+    opts: WakeOpts,
 ) -> Result<SessionInfo, String> {
     if stop_stale_sessions_for_serial(app, &serial).await {
         args = toggle_record_args(&args, None);
@@ -875,7 +877,7 @@ async fn spawn_session(
         crate::phone_hub::audio_only::stop_for_serial(app, &serial);
     }
     // --- end SPEC-27a ---
-    spawn_session_inner(app, serial, args, retried, mode, true).await
+    spawn_session_inner(app, serial, args, retried, mode, true, opts).await
 }
 
 fn recording_path_from_args(args: &[String]) -> Option<String> {
@@ -890,6 +892,7 @@ pub(crate) fn spawn_session_inner<'a>(
     retried: bool,
     mode: &'a str,
     replace_existing: bool,
+    opts: WakeOpts,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SessionInfo, String>> + Send + 'a>> {
     Box::pin(async move {
         if replace_existing {
@@ -944,8 +947,23 @@ pub(crate) fn spawn_session_inner<'a>(
                     display_id: None,
                     virtual_size: None,
                     mode: mode.to_string(),
+                    wake: SessionWake::new(
+                        crate::secure_watch::args_screen_off(&args),
+                        opts.wake_on_secure,
+                        opts.secure_detection,
+                    ),
+                    watch: None,
                 },
             );
+
+        // SPEC-29: detector task, owned by the session (dropped with it).
+        if let Some(h) = crate::secure_watch::start_watch(app, &id, &serial, &args, mode, opts) {
+            if let Ok(mut map) = app.state::<AppState>().sessions.lock() {
+                if let Some(s) = map.get_mut(&id) {
+                    s.watch = Some(h);
+                }
+            }
+        }
 
         let _ = app.emit("session-started", info.clone());
 
@@ -1081,6 +1099,7 @@ pub(crate) fn spawn_session_inner<'a>(
                                 true,
                                 &mode2,
                                 true,
+                                opts,
                             )
                             .await;
                             break;
@@ -1115,9 +1134,15 @@ pub async fn start_mirror(
     app: AppHandle,
     serial: String,
     settings: CoreSettings,
+    wake_on_secure: Option<bool>,
+    secure_detection: Option<bool>,
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_args(&serial, &settings);
-    spawn_session(&app, serial, args, false, "display").await
+    let opts = WakeOpts {
+        wake_on_secure: wake_on_secure.unwrap_or(true),
+        secure_detection: secure_detection.unwrap_or(true),
+    };
+    spawn_session(&app, serial, args, false, "display", opts).await
 }
 
 /// Query cameras available on a device via scrcpy --list-cameras.
@@ -1150,7 +1175,7 @@ pub async fn start_camera_mirror(
     settings: CameraSettings,
 ) -> Result<SessionInfo, String> {
     let args = build_scrcpy_camera_args(&serial, &settings);
-    spawn_session(&app, serial, args, false, "camera").await
+    spawn_session(&app, serial, args, false, "camera", WakeOpts::default()).await
 }
 
 #[tauri::command]
@@ -1413,6 +1438,8 @@ pub async fn restart_with_screen_off(
                 let mut map = state.sessions.lock().map_err(poison_error)?;
                 if let Some(s) = map.values_mut().find(|s| s.serial == serial) {
                     s.args = toggle_screen_off_args(&s.args, off);
+                    // SPEC-29 §6.2: the user's choice wins over any wake by AnyLeap.
+                    s.wake.user_toggled(off);
                     return Ok(SessionInfo {
                         id: s.id.clone(),
                         serial: s.serial.clone(),
@@ -1446,7 +1473,11 @@ pub async fn restart_with_screen_off(
     } else {
         let _ = old.child.kill();
     }
-    spawn_session(&app, serial, args, false, &old.mode).await
+    let opts = WakeOpts {
+        wake_on_secure: old.wake.wake_on_secure,
+        secure_detection: old.wake.secure_detection,
+    };
+    spawn_session(&app, serial, args, false, &old.mode, opts).await
 }
 
 /// Stop a scrcpy child gracefully on Windows (WM_CLOSE -> wait -> fallback kill)
@@ -3737,7 +3768,16 @@ pub(crate) async fn spawn_app_window(
     {
         crate::phone_hub::audio_only::stop_for_serial(app, &serial);
     }
-    spawn_session_inner(app, serial, args, false, "display", false).await
+    spawn_session_inner(
+        app,
+        serial,
+        args,
+        false,
+        "display",
+        false,
+        WakeOpts::default(),
+    )
+    .await
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -3943,9 +3983,13 @@ pub async fn start_recording(
     let path_str = path.to_string_lossy().to_string();
     let new_args = toggle_record_args(&old.args, Some(&path_str));
     let old_mode = old.mode.clone();
+    let opts = WakeOpts {
+        wake_on_secure: old.wake.wake_on_secure,
+        secure_detection: old.wake.secure_detection,
+    };
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
-    spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, true, opts).await
 }
 
 #[tauri::command]
@@ -3972,9 +4016,13 @@ pub async fn stop_recording(
 
     let new_args = toggle_record_args(&old.args, None);
     let old_mode = old.mode.clone();
+    let opts = WakeOpts {
+        wake_on_secure: old.wake.wake_on_secure,
+        secure_detection: old.wake.secure_detection,
+    };
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
-    spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, true, opts).await
 }
 
 pub(crate) fn validate_phone_number(raw: &str) -> Result<String, String> {

@@ -1,0 +1,20 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized)
+  mCurrentFocus=Window{b1316eb u0 NotificationShade}
+  mFocusedApp=ActivityRecord{83291840 u0 com.example.launcher/org.example.launcher.Home t200}
+
+WINDOW MANAGER POLICY STATE (dumpsys window policy)
+    mStatusBar=Window{7300519 u0 StatusBar}
+    mExpandedPanel=Window{b1316eb u0 NotificationShade}
+    isKeyguardShowing=true
+    mShowingDream=false mDreamingLockscreen=true
+
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{16431af u0 ambient_clock}:
+    mDisplayId=0 mSession=Session{33a8aa9 9857:1000} mClient=android.os.BinderProxy@c3d9742
+    mAttrs={(0,0)(fillxfill) ty=2044 fmt=TRANSPARENT
+      fl=ALLOW_LOCK_WHILE_SCREEN_ON NOT_FOCUSABLE LAYOUT_IN_SCREEN FULLSCREEN SECURE SHOW_WHEN_LOCKED
+  Window #1 Window{b1316eb u0 NotificationShade}:
+    mDisplayId=0 mSession=Session{c2c280d 3968:u0a11} mClient=android.os.BinderProxy@353665c
+    mAttrs={(0,0)(fillxfill) gr=TOP CENTER_VERTICAL ty=NOTIFICATION_SHADE fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE TOUCHABLE_WHEN_WAKING WATCH_OUTSIDE_TOUCH HARDWARE_ACCELERATED

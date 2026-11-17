@@ -316,3 +316,14 @@ export const allowsControl = (s: Pick<CoreSettings, "noControl">) => !s.noContro
 export const usesOnScreenKeyboard = (s: Pick<CoreSettings, "noKeyboardIme">) => !s.noKeyboardIme;
 export const keepsAspectRatio = (s: Pick<CoreSettings, "noWindowAspectRatioLock">) =>
   !s.noWindowAspectRatioLock;
+
+// --- SPEC-29: secure-screen detection and wake ------------------------------------------------
+
+/** Why "Turn the phone screen on for secure screens" is disabled, or null when it is editable. */
+export function wakeOnSecureDisabledReason(
+  s: Pick<ModeSettings, "turnScreenOff" | "secureDetection">,
+): string | null {
+  if (s.secureDetection === false) return "Needs Detect secure screens";
+  if (!s.turnScreenOff) return "Only used when the phone screen is turned off";
+  return null;
+}

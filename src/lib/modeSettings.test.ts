@@ -18,6 +18,7 @@ import {
   segmentForResolution,
   toCameraSettings,
   usesOnScreenKeyboard,
+  wakeOnSecureDisabledReason,
   type ModeDefaultsV2,
 } from "./modeSettings";
 import { DEFAULT_SETTINGS, PRESET_BUNDLES, type CoreSettings } from "./types";
@@ -46,12 +47,12 @@ describe("defaults and resolver", () => {
     }
   });
 
-  it("resolveLaunchSettings returns all 17 CoreSettings keys", () => {
+  it("resolveLaunchSettings returns all 19 CoreSettings keys", () => {
     const d = defaultModeDefaults();
     for (const m of DISPLAY) {
       expect(Object.keys(resolveLaunchSettings(m, d)).sort()).toEqual(CORE_KEYS);
     }
-    expect(CORE_KEYS).toHaveLength(17);
+    expect(CORE_KEYS).toHaveLength(19);
   });
 
   it("flexDisplay is true only for flex", () => {
@@ -337,5 +338,40 @@ describe("quality derivation and helpers", () => {
   });
   it("covers all four modes", () => {
     expect(MIRROR_MODES).toEqual(["mirror", "flex", "camera", "hifi"]);
+  });
+});
+
+describe("SPEC-29 secure-screen settings", () => {
+  it("secureDetection and wakeOnSecure default on in Mirror, High fidelity and Flex", () => {
+    const d = defaultModeDefaults();
+    for (const k of DISPLAY) {
+      expect(d[k].secureDetection).toBe(true);
+      expect(d[k].wakeOnSecure).toBe(true);
+    }
+  });
+
+  it("the SPEC-28 migration keeps both on, and keeps a stored off", () => {
+    const m = migrateLegacy({ maxFps: 60 }).modeDefaults;
+    for (const k of DISPLAY) {
+      expect(m[k].secureDetection).toBe(true);
+      expect(m[k].wakeOnSecure).toBe(true);
+    }
+    const n = normalizeModeDefaults({ mirror: { secureDetection: false } });
+    expect(n.mirror.secureDetection).toBe(false);
+    expect(n.mirror.wakeOnSecure).toBe(true);
+    expect(n.flex.secureDetection).toBe(true);
+  });
+
+  it("wakeOnSecure disabled state follows turnScreenOff and secureDetection", () => {
+    expect(wakeOnSecureDisabledReason({ turnScreenOff: true, secureDetection: true })).toBeNull();
+    expect(wakeOnSecureDisabledReason({ turnScreenOff: false, secureDetection: true })).toBe(
+      "Only used when the phone screen is turned off",
+    );
+    expect(wakeOnSecureDisabledReason({ turnScreenOff: true, secureDetection: false })).toBe(
+      "Needs Detect secure screens",
+    );
+    expect(wakeOnSecureDisabledReason({ turnScreenOff: false, secureDetection: false })).toBe(
+      "Needs Detect secure screens",
+    );
   });
 });

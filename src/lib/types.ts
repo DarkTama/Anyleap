@@ -78,6 +78,10 @@ export interface CoreSettings {
   renderFit: "letterbox" | "unscaled" | "stretched"; // --render-fit
   embedded?: boolean; // Win32 embedded mirror container mode
   hideVirtualTaskbar?: boolean; // --no-vd-system-decorations
+  /** SPEC-29: not a scrcpy flag. Passed to `start_mirror` as `secure_detection`. */
+  secureDetection?: boolean;
+  /** SPEC-29: not a scrcpy flag. Passed to `start_mirror` as `wake_on_secure`. */
+  wakeOnSecure?: boolean;
 }
 
 /** Named quality bundles. The UI shows them per mode as Smooth / Balanced / Sharp / Maximum. */
@@ -111,6 +115,8 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   renderFit: "letterbox",
   embedded: false,
   hideVirtualTaskbar: false,
+  secureDetection: true,
+  wakeOnSecure: true,
 };
 
 // --- Wireless (M2) ---

@@ -14,6 +14,7 @@ import {
   listSessions,
   onSessionExited,
   onSessionStarted,
+  onScreenPower,
   startMirror,
   stopMirror,
   takeScreenshot,
@@ -225,6 +226,8 @@ function App() {
   useEffect(() => {
     const unlisteners = [
       onSessionStarted((e) => upsertSession(e.payload)),
+      // SPEC-29: the detector turned the phone screen on/off; the toggle follows.
+      onScreenPower((e) => useAppStore.getState().setDeviceToggle(e.payload.serial, "screenOff", e.payload.off)),
       onSessionExited((e) => {
         const state = useAppStore.getState();
         const endedSession = state.sessions.find((x) => x.id === e.payload.id);

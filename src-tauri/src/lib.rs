@@ -3,6 +3,7 @@ mod device_identity;
 mod embed;
 pub mod kvm;
 mod phone_files;
+pub mod secure_watch;
 // --- SPEC-27a ---
 pub mod phone_hub;
 // --- end SPEC-27a ---

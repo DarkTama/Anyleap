@@ -1,6 +1,6 @@
 # SPEC-29: Secure Content and Screen-Wake While Mirroring
 
-> **Status:** Approved (2026-11-17)
+> **Status:** Implemented, Phases 1-3 (2026-11-17); Phase 4 open
 > **Scope:** Rust session layer (`src-tauri/src/commands.rs`), a new `secure_watch` backend module, the Transfer Bar notice path (`src-tauri/src/kvm/commands.rs`, `src/components/desktop/TransferBarWindow.tsx`), the control bar screen-off toggle (`src/components/ControlBar.tsx`), and one per-mode setting (SPEC-28 Phone mirroring tabs).
 > **Related:** SPEC-28 (per-mode settings), SPEC-25 (Continuity notices), GitHub issue #86.
 > **Plan:** `docs/superpowers/plans/2026-11-17-spec29-secure-content.md`
@@ -314,3 +314,21 @@ The hogs change no settings, files or apps.
 - Q4. Does the 1.5 s floor suit USB as well as wireless, or should it be 1 s on USB? (Measure stage-1 cost on USB; the formula already adapts above the floor.)
 - Q5. Wake investigation findings (§9): fill in after the user-assisted run.
 - Q6. Does the lock screen always change `mCurrentFocus` (so stage 1 sees it) on Android 14-16 and other OEMs? If not, lower K for the keyguard check.
+
+### Implementation findings (Phases 1-3, TECNO CM7, Android 16, scrcpy 5.0.1, wireless adb)
+
+- **Q6 (answered): yes.** Locking the phone (`KEYCODE_SLEEP`) changes `mCurrentFocus` on display 0 to `Window{... NotificationShade}` and `isKeyguardShowing=true`, so stage 1 sees a new identity and triggers stage 2 on the same tick. With a PIN set, after a swipe the bouncer shows `mCurrentFocus=null` (still `isKeyguardShowing=true`); the probe treats that as keyguard. K stays 10.
+- **Q1 (answered):** the focus line is printed per display and display 0 prints `null` while the Flex display has focus, so the implemented stage 1 reads every `mCurrentFocus` line (identity = all focused ids) and stage 2 checks each focused window.
+- **Q2 (answered):** the probe adds `mAwake` (policy awake flag). Not awake means `KEYCODE_WAKEUP`, else scrcpy power on.
+- **Q4:** stage-1 cost measured only over wireless adb (150-390 ms under scrcpy load, so the interval adapts to 1.5-3.9 s). USB not measured; formula already adapts.
+- **Open (new): the phone can still time out to Dozing and lock while `--turn-screen-off` is active** (observed on the CM7, 3 times, with no sleep or power key sent by AnyLeap). The mirror then shows the keyguard; detection sees `keyguard_showing` and Mirror wake turns the screen on, but a user who is away gets a locked phone. A wake-key keepalive every 25 s did not prevent it reliably. Affects Mirror wake behaviour; needs a decision (follow-up).
+- **FPS acceptance, TECNO CM7, Mirror + `--turn-screen-off`, scrcpy `--print-fps`, looping animation page, 60 s runs, first 5 s discarded:** detection off = scrcpy alone; detection on = scrcpy plus the real `run_poll` loop (`src-tauri/examples/secure_harness.rs`) polling the same phone. Script: `scripts/spec29-fps.sh`. Final batch (wake-key keepalive in both arms):
+
+| Pair | off mean / min | on mean / min | Note |
+|---|---|---|---|
+| 1 | 60.05 / 57 | 60.00 / 58 | valid; on: final EWMA 177 ms, interval 1.77 s, no auto-disable |
+| 2 | 60.05 / 58 | 55.23 / 0 | on arm had one 4 s stall (0 fps) around 45 s; cause not established (no wake action or state change in the detector log); counted as a failure, not excluded |
+| 3 | 60.05 / 58 | 59.79 / 52 | valid; final EWMA 169 ms, interval 1.69 s |
+
+Pairs 1 and 3: mean off 60.05, on 59.90 (0.25% drop, 0.15 fps), lowest second 57 vs 52 (5 fps, at the limit). Including pair 2 the mean drop is 2.85% (1.71 fps), which is over the 2% / 1 fps threshold, so **acceptance on the CM7 is not demonstrated**: it needs a clean re-run on a phone that does not lock itself. An earlier batch without keepalive had run 1 off 60.0 / on 59.9, and runs 2-3 invalid (the phone Dozed and locked; in the last batch run 2 off and run 3 both arms were invalid for the same reason and are not counted).
+- Slow-phone arm: **not run** (the phone kept locking itself, see above; device testing stopped by instruction). It remains required before shipping High fidelity detection on by default.

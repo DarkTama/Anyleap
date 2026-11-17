@@ -1,0 +1,11 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized)
+  mCurrentFocus=Window{e7f8091 u0 com.example.SECURE.notes/com.example.SECURE.notes.Main}
+
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{e7f8091 u0 com.example.SECURE.notes/com.example.SECURE.notes.Main}:
+    mDisplayId=0 mSession=Session{33a8aa9 9857:u0a10} mClient=android.os.BinderProxy@c3d9742
+    mOwnerUid=10100 showForAllUsers=false package=com.example.SECURE.notes appop=NONE
+    mAttrs={(0,0)(fillxfill) title= SECURE ty=BASE_APPLICATION
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SPLIT_TOUCH
+      pfl=SECURE_LOOKALIKE

@@ -4,6 +4,7 @@ use crate::kvm::hooks::HookController;
 use crate::kvm::identity::{Identity, TrustStore};
 use crate::kvm::protocol::TopologyConfig;
 use crate::kvm::server::KvmServerHandle;
+use crate::secure_watch::{SessionWake, WatchHandle};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -39,6 +40,10 @@ pub struct Session {
     /// window; refreshed from `dumpsys display`).
     pub virtual_size: Option<(u32, u32)>,
     pub mode: String, // "display" or "camera"
+    /// SPEC-29: screen and wake state shared by the ControlBar toggle and the detector.
+    pub wake: SessionWake,
+    /// SPEC-29: detector task. Dropping the session aborts it.
+    pub watch: Option<WatchHandle>,
 }
 
 /// App-wide state held in Tauri's managed state.

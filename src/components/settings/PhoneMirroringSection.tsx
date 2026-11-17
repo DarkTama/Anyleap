@@ -15,6 +15,7 @@ import {
   segmentForBitrate,
   segmentForFps,
   segmentForResolution,
+  wakeOnSecureDisabledReason,
   type BitrateSegment,
   type DisplayMode,
   type MirrorMode,
@@ -92,6 +93,7 @@ function DisplayModePanel({ mode }: { mode: DisplayMode }) {
   const fpsSeg = segmentForFps(s.maxFps);
   const bitSeg = segmentForBitrate(s.videoBitRate);
   const set = (patch: Partial<ModeSettings>) => editMode(mode, patch);
+  const wakeDisabledReason = wakeOnSecureDisabledReason(s);
 
   return (
     <div className="space-y-4">
@@ -206,6 +208,22 @@ function DisplayModePanel({ mode }: { mode: DisplayMode }) {
           checked={s.showTouches}
           onChange={(v) => set({ showTouches: v })}
         />
+        <SwitchRow
+          label="Detect secure screens"
+          hint="Checks the phone now and then for a lock screen or a protected screen. Uses a little adb time. Turn off if the phone is slow."
+          checked={s.secureDetection ?? true}
+          onChange={(v) => set({ secureDetection: v })}
+        />
+        {mode !== "flex" && (
+          <SwitchRow
+            label="Turn the phone screen on for secure screens"
+            hint="When the phone shows a lock screen or a protected screen (for example a private browser tab), AnyLeap turns the phone screen on so you can see it, then turns it off again."
+            checked={s.wakeOnSecure ?? true}
+            disabled={wakeDisabledReason !== null}
+            disabledReason={wakeDisabledReason ?? undefined}
+            onChange={(v) => set({ wakeOnSecure: v })}
+          />
+        )}
       </Group>
 
       <Group title="Window options">

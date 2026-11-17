@@ -1,0 +1,18 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized)
+  mCurrentFocus=Window{a1b2c3d u0 com.example.browser/org.example.browser.MainActivity}
+  mFocusedApp=ActivityRecord{83291840 u0 com.example.browser/org.example.browser.MainActivity t100}
+
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{a1b2c3d u0 com.example.browser/org.example.browser.MainActivity}:
+    mDisplayId=0 mSession=Session{33a8aa9 9857:u0a10} mClient=android.os.BinderProxy@c3d9742
+    mOwnerUid=10100 showForAllUsers=false package=com.example.browser appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize} ty=BASE_APPLICATION wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=EDGE_TO_EDGE_ENFORCED
+    Requested w=1080 h=2436 mLayoutSeq=1091151
+  Window #1 Window{b2c3d4e u0 NotificationShade}:
+    mDisplayId=0 mSession=Session{c2c280d 3968:u0a11} mClient=android.os.BinderProxy@353665c
+    mAttrs={(0,0)(fillxfill) gr=TOP CENTER_VERTICAL ty=NOTIFICATION_SHADE fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE TOUCHABLE_WHEN_WAKING WATCH_OUTSIDE_TOUCH HARDWARE_ACCELERATED
+    isKeyguardShowing=false

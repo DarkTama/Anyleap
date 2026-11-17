@@ -1,0 +1,14 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized)
+  mCurrentFocus=Window{c6c09e8 u0 com.example.browser/org.example.browser.MainActivity}
+  mFocusedApp=ActivityRecord{83291840 u0 com.example.browser/org.example.browser.MainActivity t100}
+
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{c6c09e8 u0 com.example.browser/org.example.browser.MainActivity}:
+    mDisplayId=0 mSession=Session{33a8aa9 9857:u0a10} mClient=android.os.BinderProxy@c3d9742
+    mOwnerUid=10100 showForAllUsers=false package=com.example.browser appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize} ty=BASE_APPLICATION wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN SECURE LAYOUT_INSET_DECOR SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=EDGE_TO_EDGE_ENFORCED
+    Requested w=1080 h=2436 mLayoutSeq=1091151
+  mDisableSecureWindows=false
