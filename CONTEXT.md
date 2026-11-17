@@ -90,3 +90,13 @@ Flat, high-contrast workstation theme replacing the Graphite palette (`SPEC-17`)
 - **Accents**: `--gold-400` (`#D8B46A`, used sparingly for primary CTAs, active/selected states, focus rings, active KVM edge highlight, and brand moments), `--gold-600` (`#A9822F` pressed/light accent), `--mist-300` (`#B7C9D6` info/secondary highlight).
 - **Status Tokens**: `--status-success` / `--status-warning` / `--status-danger` (non-neon, `>= 4.5:1` contrast).
 - **Motion Curve**: `--ease-out` (`cubic-bezier(0.23, 1, 0.32, 1)`), 160ms press feedback (`scale(0.97)`), zero gradients or backdrop-blur, zero animation on keyboard-initiated actions (`Ctrl+K`).
+
+### Secure Content and Screen-Wake (`SPEC-29`)
+| Term | Meaning |
+|---|---|
+| **Secure window** | A window carrying the secure flag (`FLAG_SECURE`; token `SECURE` in the `fl=` line of `dumpsys window windows`). Android blanks it in any capture. AnyLeap detects it, never bypasses it. |
+| **Secure probe** | One `adb shell` round (about 0.2 s) returning `{ secureFocused, keyguardShowing, focusedDisplayId }`. |
+| **Secure watch** | Backend poller (`secure_watch`) running the probe per active display session while its window is visible. Emits `secure-state` on change. |
+| **Keyguard** | The phone lock screen. Shown on display 0 only, never on the Flex virtual display. |
+| **Wake on secure** | Per-mode setting "Turn the phone screen on for secure screens" (`wakeOnSecure`, default on). Turns the phone panel on via the scrcpy screen-power toggle when a secure window or keyguard needs the user. |
+| **Woke by us** | Session state recording that AnyLeap, not the user, turned the screen on. Screen-off is restored only when it is set. |
