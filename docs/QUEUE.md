@@ -28,6 +28,7 @@ spec drafted → spec approved → implementation (Orca worker) → verified (te
 | — | OSS readiness — `rustfmt` & `clippy` baseline | — | shipped | No version bump needed (#44). Crate-wide formatting and CI enforcement. |
 | — | OSS readiness — Dependency policy & Tauri version guard | — | shipped | No version bump needed (#43, #48). Dependabot grouping/policy, `scripts/check-tauri-versions.mjs`, crate/npm alignment. |
 | — | Security & dependency patches (`undici`, `rustls`, `zip`, Tauri alignment, npm advisories) | — | shipped | Released in v1.1.1 (#42, #48, #54). |
+| — | **Release v1.2.0 (Phone Hub, pinned apps, open apps in Flex/Mirror, per-mode Settings redesign and new mirror control bar, scrcpy 5.0.1, wireless auto-reconnect, KVM fixes: cursor return, monitor hot-plug, taskbar hover, admin/UAC input-blocked notices)** | — | shipped | Minor release. |
 | — | **Release v1.1.1 (security & dependency patch: zip 9.5 in updater, rustls 0.23.46, Tauri plugins aligned, npm toolchain advisories)** | — | shipped | Version bump + security & dependency patch release (#56). |
 | 11 | Phone hub | SPEC-27 | in-progress | In progress (27a backend data service; 27b/27c UI). |
 | 5 | Native virtual webcam (Media Foundation) | SPEC-15 | queued | Windows 11 only; phone camera AND Linked PC webcam. Existing spec. |
