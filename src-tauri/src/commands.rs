@@ -652,6 +652,13 @@ fn stderr_suggests_encoder_failure(s: &str) -> bool {
         || low.contains("failed to start")
 }
 
+/// scrcpy 5.0 `Size.constrain` crash when the Flex window is tiny/extreme. The
+/// embedded window is now clamped, so a plain restart (same args) recovers.
+fn stderr_is_size_constrain_failure(s: &str) -> bool {
+    let low = s.to_lowercase();
+    low.contains("unsupported width") || low.contains("unsupported height")
+}
+
 /// Conservative arg set for a one-shot retry: drop --max-fps, force h264, no audio.
 fn degrade_args(args: &[String]) -> Vec<String> {
     let mut out: Vec<String> = args
@@ -1057,6 +1064,29 @@ pub(crate) fn spawn_session_inner<'a>(
                         }
                         let failed = payload.code.map(|c| c != 0).unwrap_or(true);
                         let early = now_ms() - started_at < 3000;
+                        if !retried && failed && stderr_is_size_constrain_failure(&stderr_buf) {
+                            let _ = app2.emit(
+                                "session-exited",
+                                SessionExited {
+                                    id: id2.clone(),
+                                    serial: serial2.clone(),
+                                    code: payload.code,
+                                    signal: payload.signal,
+                                    last_error: String::new(),
+                                    stderr: stderr_buf.clone(),
+                                },
+                            );
+                            let _ = spawn_session_inner(
+                                &app2,
+                                serial2.clone(),
+                                args2.clone(),
+                                true,
+                                &mode2,
+                                true,
+                            )
+                            .await;
+                            break;
+                        }
                         if !retried
                             && failed
                             && early
@@ -2379,6 +2409,17 @@ pub(crate) fn query_virtual_display(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn size_constrain_failure_classified() {
+        use super::stderr_is_size_constrain_failure as f;
+        assert!(f(
+            "ERROR: java.lang.IllegalArgumentException: unsupported height"
+        ));
+        assert!(f("[server] ERROR: Unsupported Width at Size.constrain"));
+        assert!(!f("ERROR: Could not create encoder"));
+        assert!(!f(""));
+    }
+
     #[test]
     fn summarizer_ignores_adb_push_lines() {
         let push = "scrcpy-server: 1 file pushed, 0 skipped. 13.3 MB/s (733930 bytes in 0.052s)";

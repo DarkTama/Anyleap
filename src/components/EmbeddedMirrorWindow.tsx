@@ -12,6 +12,7 @@ import {
 import { ControlBar, type ControlBarNotice } from "./ControlBar";
 import { logActivity } from "@/stores/activityStore";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
+import { createEmbedResizeScheduler } from "@/lib/embedResize";
 import type { SessionInfo, SessionMode } from "@/lib/types";
 
 export function EmbeddedMirrorWindow({
@@ -111,6 +112,14 @@ export function EmbeddedMirrorWindow({
       }
     };
     attemptEmbed();
+    let minimized = false;
+    const scheduler = createEmbedResizeScheduler(
+      (r) => {
+        resizeEmbeddedMirror(label, serial, r.w, r.h, r.x, r.y).catch(() => {});
+      },
+      () => minimized,
+      100,
+    );
     const updateSize = () => {
       if (!active || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
@@ -119,7 +128,7 @@ export function EmbeddedMirrorWindow({
       const h = Math.round(rect.height * scale);
       const x = Math.round(rect.left * scale);
       const y = Math.round(rect.top * scale);
-      resizeEmbeddedMirror(label, serial, w, h, x, y).catch(() => {});
+      scheduler.push({ w, h, x, y });
     };
 
     const ro = new ResizeObserver(() => {
@@ -130,12 +139,21 @@ export function EmbeddedMirrorWindow({
       ro.observe(containerRef.current);
     }
 
-    const interval = setInterval(updateSize, 300);
+    const interval = setInterval(() => {
+      win
+        .isMinimized()
+        .then((m) => {
+          minimized = m;
+        })
+        .catch(() => {});
+      updateSize();
+    }, 300);
 
     return () => {
       active = false;
       ro.disconnect();
       clearInterval(interval);
+      scheduler.cancel();
     };
   }, [serial, win.label]);
 

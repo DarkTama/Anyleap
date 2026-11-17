@@ -1,5 +1,27 @@
 use tauri::AppHandle;
 
+/// Smallest side (px) the embedded scrcpy window may get. Smaller sizes make the
+/// Flex virtual display request a size no encoder supports (scrcpy 5.0 crash).
+pub const MIN_EMBED_SIDE: i32 = 320;
+/// Largest allowed long:short aspect ratio.
+pub const MAX_EMBED_ASPECT: i32 = 4;
+
+/// Single choke point for sizing the embedded child window. `None` = skip resize
+/// (keep the last good size): non-positive size or minimized wrapper.
+pub fn safe_embed_size(w: i32, h: i32, minimized: bool) -> Option<(i32, i32)> {
+    if minimized || w <= 0 || h <= 0 {
+        return None;
+    }
+    let mut w = w.max(MIN_EMBED_SIDE);
+    let mut h = h.max(MIN_EMBED_SIDE);
+    if w > h.saturating_mul(MAX_EMBED_ASPECT) {
+        h = (w + MAX_EMBED_ASPECT - 1) / MAX_EMBED_ASPECT;
+    } else if h > w.saturating_mul(MAX_EMBED_ASPECT) {
+        w = (h + MAX_EMBED_ASPECT - 1) / MAX_EMBED_ASPECT;
+    }
+    Some((w, h))
+}
+
 #[cfg(windows)]
 mod win_embed {
     use crate::state::AppState;
@@ -10,10 +32,10 @@ mod win_embed {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindowVisible,
-        SetParent, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_POPUP,
-        WS_THICKFRAME, WS_VISIBLE,
+        EnumWindows, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, SetParent, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, HWND_TOP,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_CAPTION, WS_CHILD,
+        WS_CLIPCHILDREN, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
     };
 
     static EMBEDDED_HWNDS: OnceLock<Arc<Mutex<HashMap<String, isize>>>> = OnceLock::new();
@@ -124,17 +146,22 @@ mod win_embed {
             let scale = win.scale_factor().unwrap_or(1.0);
             let title_h = (36.0 * scale) as i32;
             let sidebar_w = (44.0 * scale) as i32;
-            let width = (rect.right - rect.left - sidebar_w).max(1);
-            let height = (rect.bottom - rect.top - title_h).max(1);
+            let width = rect.right - rect.left - sidebar_w;
+            let height = rect.bottom - rect.top - title_h;
 
+            let minimized = IsIconic(tauri_hwnd).as_bool();
+            let (flags, size) = match super::safe_embed_size(width, height, minimized) {
+                Some(sz) => (SWP_FRAMECHANGED | SWP_SHOWWINDOW, sz),
+                None => (SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOSIZE, (0, 0)),
+            };
             let _ = SetWindowPos(
                 scrcpy_hwnd,
                 Some(HWND_TOP),
                 0,
                 title_h,
-                width,
-                height,
-                SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+                size.0,
+                size.1,
+                flags,
             );
         }
 
@@ -187,8 +214,14 @@ mod win_embed {
         let scale = win.scale_factor().unwrap_or(1.0);
         let pos_x = x.unwrap_or(0);
         let pos_y = y.unwrap_or((36.0 * scale) as i32);
-        let w = (width as i32).max(1);
-        let h = (height as i32).max(1);
+        let minimized = unsafe { IsIconic(HWND(tauri_hwnd_raw as *mut _)) }.as_bool();
+        let Some((w, h)) = super::safe_embed_size(
+            i32::try_from(width).unwrap_or(i32::MAX),
+            i32::try_from(height).unwrap_or(i32::MAX),
+            minimized,
+        ) else {
+            return Ok(());
+        };
 
         unsafe {
             let _ = SetWindowPos(
@@ -264,5 +297,37 @@ pub fn remove_embedded_scrcpy_hwnd(serial: &str) {
     #[cfg(not(windows))]
     {
         let _ = serial;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_zero_negative_and_minimized() {
+        assert_eq!(safe_embed_size(0, 500, false), None);
+        assert_eq!(safe_embed_size(500, 0, false), None);
+        assert_eq!(safe_embed_size(-5, 500, false), None);
+        assert_eq!(safe_embed_size(800, 600, true), None);
+    }
+
+    #[test]
+    fn clamps_tiny_to_min() {
+        assert_eq!(safe_embed_size(150, 150, false), Some((320, 320)));
+        assert_eq!(safe_embed_size(1, 1, false), Some((320, 320)));
+    }
+
+    #[test]
+    fn clamps_extreme_aspect_by_growing_short_side() {
+        assert_eq!(safe_embed_size(1919, 99, false), Some((1919, 480)));
+        assert_eq!(safe_embed_size(333, 1777, false), Some((445, 1777)));
+        assert_eq!(safe_embed_size(2000, 500, false), Some((2000, 500)));
+    }
+
+    #[test]
+    fn normal_unchanged() {
+        assert_eq!(safe_embed_size(1001, 601, false), Some((1001, 601)));
+        assert_eq!(safe_embed_size(1859, 1043, false), Some((1859, 1043)));
     }
 }
