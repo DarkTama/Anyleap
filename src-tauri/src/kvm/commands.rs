@@ -1884,11 +1884,24 @@ async fn start_server_inner(
     let pkt_out_tx = outgoing_tx.clone();
     {
         let blocked_tx = outgoing_tx.clone();
+        let blocked_app = app_handle.clone();
         injector::set_input_blocked_sink(move |proc_name, reason| {
-            let _ = blocked_tx.send(Outbound::Packet(KvmPacket::InputBlocked {
-                foreground_process: proc_name,
-                reason,
-            }));
+            match super::blocked_notice::surface_for(&reason) {
+                super::blocked_notice::NoticeSurface::Local => {
+                    if super::blocked_notice::should_show(&reason, &proc_name) {
+                        emit_continuity_notice(
+                            &blocked_app,
+                            &super::blocked_notice::message_for(&reason, &proc_name),
+                        );
+                    }
+                }
+                super::blocked_notice::NoticeSurface::Main => {
+                    let _ = blocked_tx.send(Outbound::Packet(KvmPacket::InputBlocked {
+                        foreground_process: proc_name,
+                        reason,
+                    }));
+                }
+            }
         });
     }
 
@@ -2484,6 +2497,7 @@ async fn start_server_inner(
                         },
                     }
 
+                    let mut cursor_unavailable = false;
                     let action = {
                         let Ok(mut st) = rx_state.lock() else {
                             continue;
@@ -2622,9 +2636,14 @@ async fn start_server_inner(
                                 }
                             }
                         } else {
+                            cursor_unavailable = true;
                             DeltaAction::Ignore
                         }
                     };
+                    if cursor_unavailable {
+                        // GetCursorPos fails off the input desktop (UAC): no inject, no precheck.
+                        injector::report_if_secure_desktop("move");
+                    }
 
                     match action {
                         DeltaAction::Ignore => {}
@@ -3093,10 +3112,15 @@ pub async fn kvm_connect_peer(
                             "INPUT_BLOCKED_RECV side=main reason={reason} fg_process={foreground_process}"
                         )
                     });
-                    let _ = app_h.emit(
-                        "kvm-input-blocked",
-                        serde_json::json!({ "proc": foreground_process, "reason": reason }),
-                    );
+                    if super::blocked_notice::surface_for(&reason)
+                        == super::blocked_notice::NoticeSurface::Main
+                        && super::blocked_notice::should_show(&reason, &foreground_process)
+                    {
+                        emit_continuity_notice(
+                            &app_h,
+                            &super::blocked_notice::message_for(&reason, &foreground_process),
+                        );
+                    }
                 }
                 // --- SPEC-25b ---
                 KvmPacket::AudioActivity { active } => {

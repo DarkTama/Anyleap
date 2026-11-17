@@ -55,13 +55,9 @@ export function ComputersView() {
   const [manualIp, setManualIp] = useState("");
 
   useEffect(() => {
-    const { syncClipboardText, syncClipboardImage, syncFileTransfer } =
-      useKvmStore.getState().settings;
-    void kvmSetSyncSettings(
-      syncClipboardText,
-      syncClipboardImage,
-      syncFileTransfer
-    ).catch(() => {});
+    const { syncClipboardText, syncClipboardImage } = useKvmStore.getState().settings;
+    // Retired file gate (SPEC-28 §9.3): always on.
+    void kvmSetSyncSettings(syncClipboardText, syncClipboardImage, true).catch(() => {});
     void init();
     void refreshDiscovered();
     void refreshTrusted();

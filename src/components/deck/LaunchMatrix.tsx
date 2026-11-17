@@ -1,6 +1,4 @@
 import { Monitor, Smartphone, Video, Zap, Check } from "lucide-react";
-import { useAppStore } from "@/store/useAppStore";
-import type { CoreSettings } from "@/lib/types";
 
 export type StudioMode = "flex" | "mirror" | "camera" | "hifi";
 
@@ -10,47 +8,8 @@ interface LaunchMatrixProps {
 }
 
 export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
-  const settings = useAppStore((s) => s.settings);
-  const setSettings = useAppStore((s) => s.setSettings);
-
-  const handleSelect = (mode: StudioMode) => {
-    onSelectMode(mode);
-
-    // Apply smart preset defaults according to profile
-    let updated: Partial<CoreSettings> = {};
-    if (mode === "flex") {
-      updated = {
-        flexDisplay: true,
-        embedded: true,
-        noWindowAspectRatioLock: true,
-        renderFit: "unscaled",
-      };
-    } else if (mode === "mirror") {
-      updated = {
-        flexDisplay: false,
-        embedded: true,
-        noWindowAspectRatioLock: false,
-        renderFit: "letterbox",
-      };
-    } else if (mode === "camera") {
-      updated = {
-        flexDisplay: false,
-        embedded: true,
-        noAudio: true,
-        stayAwake: true,
-      };
-    } else if (mode === "hifi") {
-      updated = {
-        flexDisplay: settings.flexDisplay,
-        embedded: true,
-        maxFps: 60,
-        videoBitRate: 20_000_000,
-        videoCodec: "av1",
-      };
-    }
-
-    setSettings({ ...settings, ...updated });
-  };
+  // Selecting a mode only changes the selected mode. It writes no settings (SPEC-28 §5.1).
+  const handleSelect = (mode: StudioMode) => onSelectMode(mode);
 
   const PROFILES: {
     id: StudioMode;
@@ -63,7 +22,7 @@ export function LaunchMatrix({ currentMode, onSelectMode }: LaunchMatrixProps) {
     {
       id: "flex",
       title: "Desktop Flex",
-      badge: "DeX Workspace",
+      badge: "Desktop Workspace",
       description: "Secondary independent virtual display with custom DPI scaling & app multi-windowing.",
       features: ["Custom DPI scaling", "Multi-window apps", "PC taskbar integration"],
       icon: Monitor,

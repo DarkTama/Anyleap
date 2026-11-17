@@ -83,6 +83,7 @@ pub fn run() {
             commands::stop_recording,
             commands::place_call,
             commands::end_call,
+            commands::get_call_active,
             wheel_swipe::set_wheel_swipe,
             embed::embed_mirror,
             embed::resize_embedded_mirror,
@@ -132,6 +133,8 @@ pub fn run() {
             phone_hub::poller::phone_get_overview,
             phone_hub::apps::phone_list_apps,
             phone_hub::apps::phone_open_app,
+            phone_hub::apps::phone_get_pinned_apps,
+            phone_hub::apps::phone_set_app_pinned,
             phone_hub::messages::phone_get_conversations,
             phone_hub::messages::phone_mark_conversation_read,
             phone_hub::media::phone_list_albums,
@@ -208,6 +211,7 @@ pub fn run() {
                                 .map(|(id, _)| id.clone())
                                 .collect();
                             for id in to_remove {
+                                state.mark_user_stopped(&id);
                                 if let Some(s) = sessions.remove(&id) {
                                     let _ = s.child.kill();
                                 }
@@ -226,7 +230,8 @@ pub fn run() {
                 if let Some(state) = app.try_state::<AppState>() {
                     match state.sessions.lock() {
                         Ok(mut sessions) => {
-                            for (_, session) in sessions.drain() {
+                            for (id, session) in sessions.drain() {
+                                state.mark_user_stopped(&id);
                                 let _ = session.child.kill();
                             }
                         }

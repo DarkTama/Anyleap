@@ -1,3 +1,4 @@
+import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import { useCallback, useEffect, useState } from "react";
 import {
   Battery,
@@ -145,7 +146,6 @@ export function OverviewView({ serial, isWireless }: OverviewViewProps) {
   const applyAudioState = usePhoneHubStore((s) => s.applyAudioState);
 
   const sessions = useAppStore((s) => s.sessions);
-  const settings = useAppStore((s) => s.settings);
   const activeSession = sessions.find((s) => s.serial === serial);
 
   const [toggles, setToggles] = useState<PhoneToggles | null>(null);
@@ -193,12 +193,12 @@ export function OverviewView({ serial, isWireless }: OverviewViewProps) {
       if (activeSession) {
         await stopMirror(activeSession.id);
       } else {
-        await startMirror(serial, settings);
+        await startMirror(serial, resolveSelectedLaunchSettings());
       }
     } catch (e) {
       setActionError(String(e));
     }
-  }, [activeSession, serial, settings]);
+  }, [activeSession, serial]);
 
   const handleAudioToggle = useCallback(async () => {
     setAudioBusy(true);

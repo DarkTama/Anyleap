@@ -1,3 +1,4 @@
+import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import { useState } from "react";
 import { Camera, Check, Gamepad2, Pencil, Smartphone, Square, Stethoscope, Unplug, Usb, Wifi, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -64,7 +65,6 @@ function splitSerial(serial: string): [string, number] {
 
 /** A connected device that is not a saved wireless device (USB or ad-hoc wireless). */
 export function DeviceRow({ device }: { device: DeviceInfo }) {
-  const settings = useAppStore((s) => s.settings);
   const sessions = useAppStore((s) => s.sessions);
   const setError = useAppStore((s) => s.setError);
   const controlConfig = useAppStore((s) => s.controlConfig);
@@ -113,7 +113,7 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
     setBusy(true);
     setError(null);
     try {
-      await startMirror(device.serial, settings);
+      await startMirror(device.serial, resolveSelectedLaunchSettings());
     } catch (e) {
       const msg = String(e);
       setError(msg);
@@ -287,7 +287,6 @@ export function DeviceRow({ device }: { device: DeviceInfo }) {
 /** A saved wireless device (may be offline, connected, or mirroring). */
 export function SavedDeviceRow({ row }: { row: SavedRow }) {
   const { saved, device, status } = row;
-  const settings = useAppStore((s) => s.settings);
   const sessions = useAppStore((s) => s.sessions);
   const setSavedDevices = useAppStore((s) => s.setSavedDevices);
   const setError = useAppStore((s) => s.setError);
@@ -350,7 +349,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
     setBusy(true);
     setError(null);
     try {
-      await startMirror(serial, settings);
+      await startMirror(serial, resolveSelectedLaunchSettings());
     } catch (e) {
       if (isWifiSerial(serial)) {
         const res = await reconnectSavedDevice(saved, { silent: false });
@@ -359,7 +358,7 @@ export function SavedDeviceRow({ row }: { row: SavedRow }) {
           res.serial
         ) {
           try {
-            await startMirror(res.serial, settings);
+            await startMirror(res.serial, resolveSelectedLaunchSettings());
             return;
           } catch (retryErr) {
             setError(String(retryErr));

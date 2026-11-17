@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { SessionInfo } from "@/lib/types";
+import type { OpenAppResult } from "@/lib/types";
+import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import type {
   Album,
   Conversation,
@@ -30,8 +31,19 @@ export const phoneHubSetSettings = (notificationPollSecs: number) =>
 export const phoneListApps = (serial: string, refresh = false) =>
   invoke<PhoneApp[]>("phone_list_apps", { serial, refresh });
 
+export const phoneGetPinnedApps = (serial: string) =>
+  invoke<string[]>("phone_get_pinned_apps", { serial });
+
+export const phoneSetAppPinned = (serial: string, packageName: string, pinned: boolean) =>
+  invoke<string[]>("phone_set_app_pinned", { serial, package: packageName, pinned });
+
+/** Opens in the running Flex/Mirror session, else a new window built from the Devices preset. */
 export const phoneOpenApp = (serial: string, packageName: string) =>
-  invoke<SessionInfo>("phone_open_app", { serial, package: packageName });
+  invoke<OpenAppResult>("phone_open_app", {
+    serial,
+    package: packageName,
+    settings: resolveSelectedLaunchSettings(),
+  });
 
 export const phoneGetConversations = (serial: string) =>
   invoke<Conversation[]>("phone_get_conversations", { serial });

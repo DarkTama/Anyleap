@@ -9,7 +9,7 @@ import {
   listSessions,
   onSessionExited,
 } from "@/lib/tauri";
-import { ControlBar } from "./ControlBar";
+import { ControlBar, type ControlBarNotice } from "./ControlBar";
 import { logActivity } from "@/stores/activityStore";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
 import type { SessionInfo, SessionMode } from "@/lib/types";
@@ -24,9 +24,16 @@ export function EmbeddedMirrorWindow({
   const containerRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
   const [toast, setToast] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ControlBarNotice | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [mode, setMode] = useState<SessionMode>(initialMode);
   const win = getCurrentWebviewWindow();
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 8000);
+    return () => clearTimeout(id);
+  }, [notice]);
 
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
@@ -195,14 +202,14 @@ export function EmbeddedMirrorWindow({
           )}
         </div>
         <div
-          className="flex items-center gap-1"
+          className="flex items-center gap-0.5"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
           <button
             type="button"
             onClick={() => win.minimize().catch(console.error)}
-            className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
+            className="btn-tactile inline-flex h-7 w-9 items-center justify-center rounded text-text-muted hover:bg-ink-800 hover:text-text-strong"
             aria-label="Minimize"
           >
             <Minus className="h-3 w-3" />
@@ -210,7 +217,7 @@ export function EmbeddedMirrorWindow({
           <button
             type="button"
             onClick={() => win.toggleMaximize().catch(console.error)}
-            className="btn-tactile rounded p-1 text-text-muted hover:bg-ink-800 hover:text-text-strong"
+            className="btn-tactile inline-flex h-7 w-9 items-center justify-center rounded text-text-muted hover:bg-ink-800 hover:text-text-strong"
             aria-label="Maximize"
           >
             <Square className="h-3 w-3" />
@@ -230,7 +237,7 @@ export function EmbeddedMirrorWindow({
               }
               win.destroy().catch(() => win.close().catch(() => {}));
             }}
-            className="btn-tactile rounded p-1 text-text-muted hover:bg-status-danger-bg hover:text-status-danger cursor-pointer"
+            className="btn-tactile inline-flex h-7 w-9 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-status-danger-solid hover:text-text-strong"
             aria-label="Close"
           >
             <X className="h-3.5 w-3.5" />
@@ -248,7 +255,7 @@ export function EmbeddedMirrorWindow({
         />
 
         {/* Flush Right Toolbar Sidebar */}
-        <div className="w-12 shrink-0 border-l border-ink-700 bg-ink-900 flex flex-col items-center overflow-y-auto py-1.5">
+        <div className="w-[60px] shrink-0 border-l border-ink-700 bg-ink-900 flex flex-col items-stretch overflow-y-auto overflow-x-hidden">
           <ControlBar
             serial={serial}
             config={config}
@@ -256,9 +263,31 @@ export function EmbeddedMirrorWindow({
             showOrientToggle={true}
             showSwipeScroll={mode !== "camera"}
             sessionMode={mode}
+            onNotice={setNotice}
           />
         </div>
       </div>
+      {notice && (
+        <div
+          role="status"
+          className="popover-panel absolute bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-gold-400/50 bg-ink-800 px-3 py-1.5 text-xs text-gold-400 shadow-elevated"
+          style={{ "--transform-origin": "bottom center" } as React.CSSProperties}
+        >
+          <span>{notice.text}</span>
+          {notice.onAction && (
+            <button
+              type="button"
+              onClick={() => {
+                notice.onAction?.();
+                setNotice(null);
+              }}
+              className="btn-tactile cursor-pointer rounded border border-gold-400/60 px-2 py-0.5 font-semibold text-gold-400 hover:bg-ink-700"
+            >
+              {notice.actionLabel}
+            </button>
+          )}
+        </div>
+      )}
       {toast && (
         <div
           className="popover-panel absolute bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-ink-800 border border-gold-400/50 px-3 py-1.5 text-xs text-gold-400 shadow-elevated"

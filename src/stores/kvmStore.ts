@@ -1025,13 +1025,13 @@ export const useKvmStore = create<KvmState>((set, get) => ({
 
     if (
       partial.syncClipboardText !== undefined ||
-      partial.syncClipboardImage !== undefined ||
-      partial.syncFileTransfer !== undefined
+      partial.syncClipboardImage !== undefined
     ) {
+      // The file gate is retired (SPEC-28 §9.3): always sent as true.
       void kvmSetSyncSettings(
         next.syncClipboardText,
         next.syncClipboardImage,
-        next.syncFileTransfer
+        true
       ).catch(() => {});
     }
 

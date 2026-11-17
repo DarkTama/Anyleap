@@ -677,11 +677,42 @@ fn degrade_args(args: &[String]) -> Vec<String> {
 /// Pick a human-useful one-liner from scrcpy stderr. scrcpy prints the real cause
 /// as an `ERROR:` line, then a terse final "killed"/"aborted" — so we surface the
 /// ERROR (or a device WARN), not the last line.
+/// adb push/progress output (success noise), e.g. "1 file pushed, 0 skipped. 13.3 MB/s".
+fn is_adb_progress_line(line: &str) -> bool {
+    let low = line.to_lowercase();
+    if low.contains("file pushed") || low.contains("files pushed") {
+        return true;
+    }
+    let mut from = 0;
+    while let Some(i) = low[from..].find("mb/s") {
+        let pos = from + i;
+        if low[..pos]
+            .trim_end()
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
+        from = pos + 4;
+    }
+    false
+}
+
+/// Error text for a session exit: empty when the user stopped it on purpose.
+fn exit_error_summary(user_stopped: bool, stderr: &str, command_error: Option<&str>) -> String {
+    if user_stopped {
+        String::new()
+    } else {
+        summarize_scrcpy_error(stderr, command_error)
+    }
+}
+
 fn summarize_scrcpy_error(stderr: &str, command_error: Option<&str>) -> String {
     let lines: Vec<&str> = stderr
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && !is_adb_progress_line(l))
         .collect();
     if let Some(err) = lines.iter().find(|l| l.contains("ERROR:")) {
         return err.to_string();
@@ -808,6 +839,7 @@ async fn stop_stale_sessions_for_serial(app: &AppHandle, serial: &str) -> bool {
                 .collect();
             for sid in stale_ids {
                 if let Some(old) = map.remove(&sid) {
+                    st.mark_user_stopped(&sid);
                     stale.push(old);
                 }
             }
@@ -851,7 +883,7 @@ fn recording_path_from_args(args: &[String]) -> Option<String> {
         .find_map(|a| a.strip_prefix("--record=").map(|s| s.to_string()))
 }
 
-fn spawn_session_inner<'a>(
+pub(crate) fn spawn_session_inner<'a>(
     app: &'a AppHandle,
     serial: String,
     args: Vec<String>,
@@ -950,6 +982,10 @@ fn spawn_session_inner<'a>(
                     }
                     CommandEvent::Error(e) => command_error = Some(e),
                     CommandEvent::Terminated(payload) => {
+                        let user_stopped = app2
+                            .try_state::<AppState>()
+                            .map(|st| st.take_user_stopped(&id2))
+                            .unwrap_or(false);
                         if let Some(st) = app2.try_state::<AppState>() {
                             match st.sessions.lock() {
                                 Ok(mut s) => {
@@ -1049,7 +1085,8 @@ fn spawn_session_inner<'a>(
                             .await;
                             break;
                         }
-                        let summary = summarize_scrcpy_error(&stderr_buf, command_error.as_deref());
+                        let summary =
+                            exit_error_summary(user_stopped, &stderr_buf, command_error.as_deref());
                         let _ = app2.emit(
                             "session-exited",
                             SessionExited {
@@ -1397,7 +1434,10 @@ pub async fn restart_with_screen_off(
             .iter()
             .find(|(_, s)| s.serial == serial)
             .map(|(k, _)| k.clone());
-        key.and_then(|k| map.remove(&k))
+        key.and_then(|k| {
+            state.mark_user_stopped(&k);
+            map.remove(&k)
+        })
     };
     let old = old.ok_or_else(|| "no active mirror for this device".to_string())?;
     let args = restart_screen_off_args(&old.args, off);
@@ -1498,6 +1538,7 @@ pub async fn stop_mirror(
         .map_err(poison_error)?
         .remove(&session_id);
     if let Some(s) = session {
+        state.mark_user_stopped(&session_id);
         let serial = s.serial.clone();
         let pid = s.pid;
         let is_flex = s.display_id.is_some()
@@ -2338,6 +2379,44 @@ pub(crate) fn query_virtual_display(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn summarizer_ignores_adb_push_lines() {
+        let push = "scrcpy-server: 1 file pushed, 0 skipped. 13.3 MB/s (733930 bytes in 0.052s)";
+        assert_eq!(
+            summarize_scrcpy_error(push, None),
+            "scrcpy exited without output"
+        );
+        let mixed = format!(
+            "{push}
+ERROR: Device disconnected
+{push}"
+        );
+        assert_eq!(
+            summarize_scrcpy_error(&mixed, None),
+            "ERROR: Device disconnected"
+        );
+        assert!(is_adb_progress_line("3 files pushed, 0 skipped"));
+        assert!(is_adb_progress_line("5 MB/s"));
+        assert!(!is_adb_progress_line("MB/s unknown"));
+    }
+
+    #[test]
+    fn user_stop_suppresses_error() {
+        let stderr = "x: 1 file pushed, 0 skipped. 13.3 MB/s
+ERROR: boom";
+        assert_eq!(exit_error_summary(true, stderr, None), "");
+        assert_eq!(exit_error_summary(false, stderr, None), "ERROR: boom");
+    }
+
+    #[test]
+    fn user_stopped_flag_is_consumed_once() {
+        let st = AppState::default();
+        assert!(!st.take_user_stopped("a"));
+        st.mark_user_stopped("a");
+        assert!(st.take_user_stopped("a"));
+        assert!(!st.take_user_stopped("a"));
+    }
+
     use super::*;
 
     #[test]
@@ -2397,6 +2476,26 @@ other _weird._tcp 10.0.0.6:1234\n";
         assert_eq!(
             parse_new_display_line("[server] INFO: New display: 1920x1080 (id=5)"),
             Some((5, (1920, 1080)))
+        );
+        // Real scrcpy 5.0.1 output, CRLF, no prefix, and multi-line chunks.
+        assert_eq!(
+            parse_new_display_line(
+                "[server] INFO: New display: 1280x720/240 (id=20)
+"
+            ),
+            Some((20, (1280, 720)))
+        );
+        assert_eq!(
+            parse_new_display_line("INFO: New display: 1920x1080/240 (id=7)"),
+            Some((7, (1920, 1080)))
+        );
+        assert_eq!(
+            parse_new_display_line(
+                "[server] INFO: Device: x
+[server] INFO: New display: 800x600/160 (id=31)
+INFO: Texture: 1x1"
+            ),
+            Some((31, (800, 600)))
         );
         assert!(parse_new_display_line("INFO: Texture: 956x2160").is_none());
         assert!(parse_new_display_line("New display: garbage (id=)").is_none());
@@ -3569,28 +3668,6 @@ pub(crate) fn validate_package_name(pkg: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn default_app_window_settings() -> CoreSettings {
-    CoreSettings {
-        max_size: 1280,
-        video_bit_rate: 8_000_000,
-        max_fps: 60,
-        video_codec: "h264".into(),
-        stay_awake: true,
-        turn_screen_off: false,
-        fullscreen: false,
-        show_touches: false,
-        no_audio: false,
-        no_control: false,
-        no_keyboard_ime: false,
-        flex_display: false,
-        flex_display_size: String::new(),
-        no_window_aspect_ratio_lock: false,
-        render_fit: "letterbox".into(),
-        embedded: false,
-        hide_virtual_taskbar: false,
-    }
-}
-
 pub(crate) fn build_app_window_args(
     serial: &str,
     settings: &CoreSettings,
@@ -3638,12 +3715,29 @@ pub async fn launch_app_window(
     app: AppHandle,
     serial: String,
     package: String,
-) -> Result<SessionInfo, String> {
+    settings: CoreSettings,
+) -> Result<crate::phone_hub::apps::OpenAppResult, String> {
     validate_package_name(&package)?;
-    let device_label = query_device_model(&app, &serial).await;
-    let settings = default_app_window_settings();
-    let args = build_app_window_args(&serial, &settings, &package, &device_label);
-    spawn_session_inner(&app, serial, args, false, "display", false).await
+    crate::phone_hub::apps::open_app(&app, serial, package, settings).await
+}
+
+pub(crate) async fn spawn_app_window(
+    app: &AppHandle,
+    serial: String,
+    package: &str,
+    mut settings: CoreSettings,
+) -> Result<SessionInfo, String> {
+    // A per-app window is never an embedded host pane.
+    settings.embedded = false;
+    let device_label = query_device_model(app, &serial).await;
+    let args = build_app_window_args(&serial, &settings, package, &device_label);
+    if !args
+        .iter()
+        .any(|a| a == "--no-audio" || a == "--no-audio-playback")
+    {
+        crate::phone_hub::audio_only::stop_for_serial(app, &serial);
+    }
+    spawn_session_inner(app, serial, args, false, "display", false).await
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -3977,6 +4071,52 @@ pub async fn end_call(app: AppHandle, serial: String) -> Result<(), String> {
     send_keyevent(app, serial, 6).await
 }
 
+/// True when any telephony call-state field in a `dumpsys telephony.registry`
+/// dump is non-zero (1 = ringing, 2 = off-hook).
+pub(crate) fn parse_call_active(dump: &str) -> bool {
+    dump.lines().any(|line| {
+        line.trim()
+            .strip_prefix("mCallState=")
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .is_some_and(|v| v != 0)
+    })
+}
+
+#[tauri::command]
+pub async fn get_call_active(app: AppHandle, serial: String) -> Result<bool, String> {
+    let out = adb_cmd(&app)
+        .await?
+        .args(["-s", &serial, "shell", "dumpsys", "telephony.registry"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(parse_call_active(&String::from_utf8_lossy(&out.stdout)))
+}
+
+#[cfg(test)]
+mod call_state_tests {
+    use super::parse_call_active;
+
+    #[test]
+    fn detects_active_call_state() {
+        assert!(!parse_call_active(
+            "  mCallState=0
+  mCallState=0
+"
+        ));
+        assert!(parse_call_active(
+            "  mCallState=0
+  mCallState=2
+"
+        ));
+        assert!(parse_call_active("mCallState=1"));
+        assert!(!parse_call_active("garbage"));
+    }
+}
+
 // --- SPEC-27a ---
 pub(crate) async fn spec27_adb_cmd(
     app: &AppHandle,
@@ -4067,7 +4207,25 @@ mod spec20_tests {
 
     #[test]
     fn scrcpy_arg_builders_app_window_and_recording() {
-        let s = default_app_window_settings();
+        let s = CoreSettings {
+            max_size: 1280,
+            video_bit_rate: 8_000_000,
+            max_fps: 60,
+            video_codec: "h264".into(),
+            stay_awake: true,
+            turn_screen_off: false,
+            fullscreen: false,
+            show_touches: false,
+            no_audio: false,
+            no_control: false,
+            no_keyboard_ime: false,
+            flex_display: false,
+            flex_display_size: String::new(),
+            no_window_aspect_ratio_lock: false,
+            render_fit: "letterbox".into(),
+            embedded: false,
+            hide_virtual_taskbar: false,
+        };
         let app_args = build_app_window_args("SER123", &s, "com.example.app", "Pixel 9");
         assert!(app_args.contains(&"--new-display".to_string()));
         assert!(app_args.contains(&"--start-app=com.example.app".to_string()));

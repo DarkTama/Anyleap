@@ -1,14 +1,18 @@
 import { create } from "zustand";
 import type {
   BatteryInfo,
-  CoreSettings,
   DeviceDetails,
   DeviceInfo,
-  QualityPreset,
   SavedDevice,
   SessionInfo,
 } from "@/lib/types";
-import { DEFAULT_SETTINGS } from "@/lib/types";
+import {
+  defaultModeDefaults,
+  type MirrorMode,
+  type ModeDefaultsV2,
+  type ModeSettings,
+  type CameraModeSettings,
+} from "@/lib/modeSettings";
 import type { ControlConfig } from "@/lib/controlConfig";
 import { DEFAULT_CONTROL_CONFIG } from "@/lib/controlConfig";
 import type { AppPrefs } from "@/lib/persist";
@@ -19,8 +23,12 @@ interface AppStore {
   devices: DeviceInfo[];
   sessions: SessionInfo[];
   savedDevices: SavedDevice[];
-  settings: CoreSettings;
-  preset: QualityPreset;
+  /** Per-mode mirroring defaults (SPEC-28). Launch settings are resolved from these. */
+  modeDefaults: ModeDefaultsV2;
+  /** One-time "audio is now on" notice from the migration is pending. */
+  modeDefaultsNotice: boolean;
+  /** Mode each running session was launched from, keyed by session id (SPEC-28 task 1.6). */
+  sessionModes: Record<string, MirrorMode>;
   controlConfig: ControlConfig;
   appPrefs: AppPrefs;
   error: string | null;
@@ -54,8 +62,13 @@ interface AppStore {
   upsertSession: (s: SessionInfo) => void;
   removeSession: (id: string) => void;
   setSavedDevices: (d: SavedDevice[]) => void;
-  setSettings: (s: CoreSettings) => void;
-  setPreset: (p: QualityPreset) => void;
+  setModeDefaults: (d: ModeDefaultsV2, notice?: boolean) => void;
+  setModeDefaultsNotice: (pending: boolean) => void;
+  /** Edit only the given mode's object. Never touches another mode. */
+  updateMode: <M extends MirrorMode>(
+    mode: M,
+    patch: Partial<M extends "camera" ? CameraModeSettings : ModeSettings>,
+  ) => void;
   setControlConfig: (c: ControlConfig) => void;
   setAppPrefs: (p: AppPrefs) => void;
   setError: (e: string | null) => void;
@@ -66,8 +79,9 @@ export const useAppStore = create<AppStore>((set) => ({
   devices: [],
   sessions: [],
   savedDevices: [],
-  settings: DEFAULT_SETTINGS,
-  preset: "medium",
+  modeDefaults: defaultModeDefaults(),
+  modeDefaultsNotice: false,
+  sessionModes: {},
   controlConfig: DEFAULT_CONTROL_CONFIG,
   appPrefs: DEFAULT_APP_PREFS,
   error: null,
@@ -131,16 +145,41 @@ export const useAppStore = create<AppStore>((set) => ({
   setDevices: (devices) => set({ devices }),
   setSessions: (sessions) => set({ sessions }),
   upsertSession: (s) =>
-    set((st) => ({
-      sessions: st.sessions.some((x) => x.id === s.id)
-        ? st.sessions.map((x) => (x.id === s.id ? s : x))
-        : [...st.sessions, s],
-    })),
+    set((st) => {
+      const known = st.sessions.some((x) => x.id === s.id);
+      return {
+        sessions: known
+          ? st.sessions.map((x) => (x.id === s.id ? s : x))
+          : [...st.sessions, s],
+        // Remember the selected mode at launch so later mode switches don't change it.
+        sessionModes:
+          known || st.sessionModes[s.id]
+            ? st.sessionModes
+            : {
+                ...st.sessionModes,
+                [s.id]: s.mode === "camera" ? "camera" : st.currentMode === "camera" ? "mirror" : st.currentMode,
+              },
+      };
+    }),
   removeSession: (id) =>
-    set((st) => ({ sessions: st.sessions.filter((x) => x.id !== id) })),
+    set((st) => {
+      const { [id]: _gone, ...rest } = st.sessionModes;
+      return { sessions: st.sessions.filter((x) => x.id !== id), sessionModes: rest };
+    }),
   setSavedDevices: (savedDevices) => set({ savedDevices }),
-  setSettings: (settings) => set({ settings }),
-  setPreset: (preset) => set({ preset }),
+  setModeDefaults: (modeDefaults, notice) =>
+    set((st) => ({
+      modeDefaults,
+      modeDefaultsNotice: notice ?? st.modeDefaultsNotice,
+    })),
+  setModeDefaultsNotice: (modeDefaultsNotice) => set({ modeDefaultsNotice }),
+  updateMode: (mode, patch) =>
+    set((st) => ({
+      modeDefaults: {
+        ...st.modeDefaults,
+        [mode]: { ...st.modeDefaults[mode], ...patch },
+      },
+    })),
   setControlConfig: (controlConfig) => set({ controlConfig }),
   setAppPrefs: (appPrefs) => set({ appPrefs }),
   setError: (error) => set({ error }),

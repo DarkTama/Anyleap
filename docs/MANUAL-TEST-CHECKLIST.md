@@ -100,3 +100,37 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
    ```
 4. Options: `--scenario` (`basic`, `hud` [<=50 ms while HUD toast appears], `reenter`, `after-click`, or `all`), `--repeat <N>`, `--delay-ms <MS>`, `--addr <IP:PORT>`. Prints per-step foreground HWND/process and a summary table; exits non-zero on any `FAIL`.
 
+
+---
+
+## F. Per-mode mirroring settings (SPEC-28 phase 1)
+
+- [ ] Upgrade a profile that had Camera residue (`noAudio: true`): Mirror and Flex have sound, and Settings > Phone mirroring shows the one-time audio notice; Dismiss removes it for good.
+- [ ] Launch each mode (Mirror, Flex, High fidelity) from the Devices rack, the Devices deck, the Command Palette and Phone Hub > Mirror: each uses its own tab's values.
+- [ ] Switching the mode in Devices changes no value on the Settings tabs; switching tabs in Settings changes nothing.
+- [ ] Flex size, Hide Android taskbar and the DPI preview appear on the Flex tab only; the deck toggles edit the selected mode's values.
+- [ ] Camera tab: microphone, bitrate and one-window toggles pre-fill the Camera launch dialog.
+- [ ] Keyboard only: Tab to the mode tabs, Left/Right/Home/End select; Space toggles a switch; every control has a visible label.
+- [ ] "File Transfer Drop Sync" is gone; a profile that had it off now has "Copy-paste files across PCs" off.
+- [ ] Control window hides Rotate for a Flex session and shows it for Mirror.
+
+## G. Sectioned Settings (SPEC-28 phase 2)
+
+- [ ] Rail lists seven sections in order; Tab enters it once, Up/Down/Home/End move, Enter opens a section and focus lands on its heading.
+- [ ] "Skip to settings" appears on focus after the filter box and jumps into the pane.
+- [ ] Filter: "mute" and "sound" find the audio switches; Escape clears; a nonsense query shows "No settings match" with Clear; the match count is announced; Advanced expands while it has a match; no value changes.
+- [ ] Shared mouse & keyboard: crossing delay and corner dead zone are read-only with "Edit in Computers", which opens the Computers tab. A stored value that is not a chip (for example 60 px) shows a "Custom: 60px" chip there.
+- [ ] Each relabelled switch still changes behaviour (clipboard text/images, file copy and drop, pointer style, audio bridge, lock/sleep together, Explorer menu, cursor badge).
+- [ ] Advanced: large-file limits and the diagnostics log toggle work; "Open log folder" opens the folder.
+- [ ] Contrast spot check: helper text readable on every surface; selected rail item is dark text on gold.
+
+## H. Mirror control bar (SPEC-28 phase 3)
+
+- [ ] Mirror and Flex: sidebar is 60 px; 40 px icon buttons grouped Navigate / Sound / Screen / Capture with dividers; More at the bottom.
+- [ ] Tab through the bar: each button shows a tooltip on keyboard focus; More opens with Enter, arrows move, Escape closes and focus returns to More.
+- [ ] Volume down shows the volume-down icon; no Sleep button; Rotate hidden in Flex.
+- [ ] Screen-off, Record, Wi-Fi, Bluetooth, Do Not Disturb, Mouse wheel swipes show `aria-pressed` and a gold outline when on; Record is red while recording.
+- [ ] Stopping a recording shows a toast with "Open recording folder".
+- [ ] End call appears (red) only during a call.
+- [ ] Camera mode: torch, zoom, stop camera group; help text names no third-party apps.
+- [ ] Title-bar buttons are 36 x 28 px; Close turns red on hover.

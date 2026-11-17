@@ -4,8 +4,8 @@ import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { Gamepad2, GripHorizontal, Minimize2, X } from "lucide-react";
 import { ControlBar } from "@/components/ControlBar";
+import { controlBarGroups, DEFAULT_CONTROL_BAR_STATE } from "@/lib/controlBarModel";
 import { mirrorRect } from "@/lib/tauri";
-import { loadQuality } from "@/lib/persist";
 import {
   DEFAULT_CONTROL_CONFIG,
   loadControlConfig,
@@ -13,27 +13,42 @@ import {
   type ControlConfig,
 } from "@/lib/controlConfig";
 
-const THICKNESS: Record<ControlConfig["size"], number> = { sm: 80, md: 92, lg: 112 };
-const STEP: Record<ControlConfig["size"], number> = { sm: 56, md: 64, lg: 76 };
+/** Fixed 40 px icon buttons (SPEC-28 phase 3): the strip is 40 + paddings thick. */
+const THICKNESS = 76;
+const BTN_STEP = 46;
+const DIVIDER_STEP = 8;
 /** Logical size of the collapsed round button window. */
 const COLLAPSED = 44;
 
-const countButtons = (c: ControlConfig) => Object.values(c.buttons).filter(Boolean).length;
+/** Length of the strip along its dock axis, from the grouped model (worst case: in a call). */
+function stripLength(c: ControlConfig, flexDisplay: boolean): number {
+  const model = controlBarGroups({ ...c, collapsed: false }, "display", {
+    ...DEFAULT_CONTROL_BAR_STATE,
+    inCall: true,
+    showOrient: !flexDisplay,
+  });
+  const items = model.groups.reduce((n, g) => n + g.items.length, 0) + (model.more.length > 0 ? 1 : 0);
+  const dividers = Math.max(0, model.groups.length - 1) + (model.more.length > 0 ? 1 : 0);
+  return 48 + items * BTN_STEP + dividers * DIVIDER_STEP;
+}
 
 /** Floating, always-on-top control window. Reads the user's control-bar config
  *  (dock side / size / buttons) and docks itself to the scrcpy mirror window. */
-export function ControlWindow({ serial }: { serial: string }) {
+export function ControlWindow({
+  serial,
+  flexDisplay = false,
+}: {
+  serial: string;
+  /** True when the running session was launched from the Flex mode (SPEC-28). */
+  flexDisplay?: boolean;
+}) {
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
-  // Rotate only affects the physical display, so hide it while mirroring a
+  // Rotate only affects the physical display, so it is hidden while mirroring a
   // flex (virtual) display.
-  const [flexDisplay, setFlexDisplay] = useState(false);
 
   // Load config + live updates from the main window.
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
-    loadQuality()
-      .then((q) => setFlexDisplay(q?.settings.flexDisplay ?? false))
-      .catch(() => {});
     const un = listen<ControlConfig>("control-config", (e) => setConfig(e.payload));
     return () => {
       un.then((f) => f());
@@ -59,12 +74,12 @@ export function ControlWindow({ serial }: { serial: string }) {
 
   // Size the window from the config (logical px so it matches the CSS layout).
   useEffect(() => {
-    const long = 48 + countButtons(config) * STEP[config.size];
-    const thick = THICKNESS[config.size];
+    const long = stripLength(config, flexDisplay);
+    const thick = THICKNESS;
     const w = collapsed ? COLLAPSED : vertical ? thick : long;
     const h = collapsed ? COLLAPSED : vertical ? long : thick + 28;
     getCurrentWindow().setSize(new LogicalSize(w, h)).catch(() => {});
-  }, [config, vertical, collapsed]);
+  }, [config, vertical, collapsed, flexDisplay]);
 
   // Dock to the mirror window and follow it (skip when undocked = free-floating).
   useEffect(() => {
@@ -202,6 +217,8 @@ export function ControlWindow({ serial }: { serial: string }) {
           orientation={orientation}
           showOrientToggle={!flexDisplay}
           showSwipeScroll
+          sessionMode="display"
+          surface="floating"
         />
       </div>
     </div>
