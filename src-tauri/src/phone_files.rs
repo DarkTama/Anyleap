@@ -404,6 +404,15 @@ fn parse_timestamp_secs(raw: &str) -> Option<i64> {
     }
 }
 
+const MAX_MULTILINE_BYTES: usize = 8 * 1024;
+
+fn is_message_item_line(trimmed: &str) -> bool {
+    trimmed.strip_prefix('[').is_some_and(|r| {
+        r.split_once("] Bundle[")
+            .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
 fn is_extras_key_line(trimmed: &str) -> Option<(&str, &str)> {
     let eq = trimmed.find('=')?;
     let key = &trimmed[..eq];
@@ -459,12 +468,14 @@ fn parse_message_bundle(
         let after = &inner[t_idx + 7..];
         let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(val) = digits.parse::<i64>() {
-            if val > 0 {
-                timestamp_ms = if val > 1_000_000_000_000 {
-                    val
-                } else {
-                    val * 1000
-                };
+            if after[digits.len()..].trim().is_empty() {
+                if val > 0 {
+                    timestamp_ms = if val > 1_000_000_000_000 {
+                        val
+                    } else {
+                        val.saturating_mul(1000)
+                    };
+                }
                 before_time = &inner[..t_idx];
             }
         }
@@ -725,28 +736,24 @@ pub(crate) fn parse_dumpsys_notifications_rich(output: &str) -> Vec<ParsedNotifi
         };
 
         if let Some((msg_indent, mut buf)) = rec.in_messages.take() {
-            let closes_extras = rec.in_extras && trimmed == "}" && indent <= rec.extras_indent;
-            let next_extra_key = rec.in_extras
-                && indent <= msg_indent
-                && indent > rec.extras_indent
-                && is_extras_key_line(trimmed).is_some()
-                && buf.trim_end().ends_with("}]");
-
-            if closes_extras || next_extra_key {
-                rec.in_messages = Some((msg_indent, buf));
-                if closes_extras {
-                    rec.in_extras = false;
-                    continue;
+            // Only `[n] Bundle[` item lines (and continuation lines of an unterminated
+            // item) belong to the list; a vendor extras key, the extras `}` or the
+            // record body end it.
+            let continues = !buf.is_empty()
+                && !buf.trim_end().ends_with("}]")
+                && trimmed != "}"
+                && is_extras_key_line(trimmed).is_none();
+            if is_message_item_line(trimmed) || continues {
+                if buf.len() < MAX_MULTILINE_BYTES {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(line);
                 }
-                // Keep in_messages preserved, fall through to next extras key.
-            } else {
-                if !buf.is_empty() {
-                    buf.push('\n');
-                }
-                buf.push_str(line);
                 rec.in_messages = Some((msg_indent, buf));
                 continue;
             }
+            rec.in_messages = Some((msg_indent, buf));
         }
 
         if let Some((field, mut buf)) = rec.multiline.take() {
@@ -764,8 +771,10 @@ pub(crate) fn parse_dumpsys_notifications_rich(output: &str) -> Vec<ParsedNotifi
                 }
                 // Fall through to process the new extras key line.
             } else {
-                buf.push('\n');
-                buf.push_str(line);
+                if buf.len() < MAX_MULTILINE_BYTES {
+                    buf.push('\n');
+                    buf.push_str(line);
+                }
                 rec.multiline = Some((field, buf));
                 continue;
             }
@@ -1326,5 +1335,83 @@ regular empty file|0|1700000000|/storage/emulated/0/Download/*\n\
         let evict = select_evictions(&entries, 500);
         assert_eq!(evict, vec![PathBuf::from("a.jpg"), PathBuf::from("b.jpg")]);
         assert!(select_evictions(&entries, 900).is_empty());
+    }
+
+    #[test]
+    fn group_chat_bundle_with_vendor_keys_does_not_leak_dump() {
+        let fx = include_str!("../tests/fixtures/phone_hub/messaging_group_vendor_keys.txt");
+        let recs = parse_dumpsys_notifications_rich(fx);
+        assert_eq!(recs.len(), 1);
+        let r = &recs[0];
+        assert_eq!(r.conversation_title.as_deref(), Some("Group Chat"));
+        assert_eq!(r.messages.len(), 1);
+        assert_eq!(r.messages[0].sender, "Alex");
+        assert_eq!(r.messages[0].text, "2 new messages");
+        let mut fields = vec![
+            r.base.title.clone(),
+            r.base.text.clone(),
+            r.conversation_title.clone().unwrap_or_default(),
+        ];
+        for m in &r.messages {
+            fields.push(m.sender.clone());
+            fields.push(m.text.clone());
+        }
+        for f in fields {
+            for bad in [
+                "stats=",
+                "mImportance",
+                "effectiveNotificationChannel",
+                "time=",
+            ] {
+                assert!(!f.contains(bad), "{f:?} contains {bad}");
+            }
+        }
+    }
+
+    #[test]
+    fn message_bundle_text_with_commas_and_equals() {
+        let e =
+            parse_message_bundle("Bundle[{sender=Alex, text=a, b=c, time=5}]", "fb", 0).unwrap();
+        assert_eq!(e.text, "a, b=c");
+        assert_eq!(e.sender, "Alex");
+    }
+
+    #[test]
+    #[ignore]
+    fn real_dump_counts() {
+        let p = std::env::var("ANYLEAP_REAL_DUMP").unwrap();
+        let raw = std::fs::read_to_string(p).unwrap();
+        let recs = parse_dumpsys_notifications_rich(&raw);
+        let re_dump = |s: &str| {
+            s.contains("stats=")
+                || s.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+                    let b = w.as_bytes();
+                    b.len() > 1 && b[0] == b'm' && b[1].is_ascii_uppercase()
+                })
+        };
+        let mut bad = 0;
+        let mut convs = 0;
+        let mut msgs = 0;
+        for r in &recs {
+            if !r.messages.is_empty() {
+                convs += 1;
+            }
+            msgs += r.messages.len();
+            let mut f = vec![&r.base.title, &r.base.text];
+            for m in &r.messages {
+                f.push(&m.text);
+                f.push(&m.sender);
+            }
+            if f.iter().any(|s| re_dump(s)) {
+                bad += 1;
+            }
+        }
+        println!(
+            "COUNTS records={} conv={} msgs={} bad={}",
+            recs.len(),
+            convs,
+            msgs,
+            bad
+        );
     }
 }
