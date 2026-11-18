@@ -1,0 +1,48 @@
+  NotificationRecord(0x05f0eea9: pkg=com.example.social user=UserHandle{0} id=64278 tag=direct|111;thread_id:222 importance=4 key=0|com.example.social|64278|direct|111;thread_id:222|10519: Notification(channel=ex_direct shortcut=null contentView=null vibrate=null sound=null defaults=0x0 flags=0x10 color=0xff262626 category=msg groupKey=DIRECT vis=PRIVATE))
+      uid=10519 userId=0
+      opPkg=com.example.social
+      icon=Icon(typ=RESOURCE pkg=com.example.social id=0x7f080d6c)
+      flags=0x10
+      pri=1
+      key=0|com.example.social|64278|direct|111;thread_id:222|10519
+      seen=false
+      groupKey=0|com.example.social|g:DIRECT
+      notification=
+          pri=1 contentView=null vibrate=null sound=null defaults=0x0 flags=0x10 color=0xff262626 category=msg groupKey=DIRECT vis=PRIVATE
+            extras={
+                android.title=String (Group Chat: Alex)
+                android.hiddenConversationTitle=String (Group Chat)
+                android.reduced.images=Boolean (true)
+                android.conversationTitle=String (Group Chat)
+                com.example.social.logging.ig_action=String (direct_v2?id=12345)
+                android.subText=String (Group Chat)
+                com.example.social.logging.has_message=Boolean (false)
+                android.template=String (android.app.Notification$MessagingStyle)
+                com.example.social.logging.revoked_id=null
+                android.showChronometer=Boolean (false)
+                android.text=String (2 new messages)
+                android.progress=Integer (0)
+                android.selfDisplayName=String (Alex)
+                com.example.social.logging.push_infra_metadata=String ({"l":"4","ui":2,"pjid":"abc"})
+                android.conversationUnreadMessageCount=Integer (0)
+                android.appInfo=ApplicationInfo (ApplicationInfo{210377a com.example.social})
+                android.messages=Bundle[] (1)
+                  [0] Bundle[{extras=Bundle[{}], sender_person=android.app.Person@342f6fe6, sender=Alex, text=2 new messages, time=0}]
+                android.showWhen=Boolean (true)
+                android.largeIcon=Icon (Icon(typ=BITMAP size=102x102))
+                android.messagingStyleUser=Bundle (Bundle[mParcelledData.dataSize=500])
+                android.messagingUser=Person (android.app.Person@5a9939c3)
+                com.example.social.logging.channel_type=String (FBNS)
+                android.bigText=null
+                android.infoText=null
+                android.remoteInputHistory=null
+                android.title.big=null
+                com.example.social.logging.collapse_key=String (direct_v2_reply_reminder)
+                android.isGroupConversation=Boolean (true)
+            }
+      stats=SingleNotificationStats{posttimeElapsedMs=2981132471, posttimeToFirstClickMs=-1, airtimeCount=9, isNoisy=true}
+      mContactAffinity=0.0
+      mImportance=HIGH
+      mCreationTimeMs=1794962955845
+      effectiveNotificationChannel=NotificationChannel{mId='ex_direct', mName=Messages, mImportance=4, mGroup='DIRECT'}
+      shortcut=null found valid? false
