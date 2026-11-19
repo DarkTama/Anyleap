@@ -39,6 +39,10 @@ pub struct Session {
     /// window; refreshed from `dumpsys display`).
     pub virtual_size: Option<(u32, u32)>,
     pub mode: String, // "display" or "camera"
+    /// A Flex session without a known display id already ran its one `dumpsys` lookup.
+    pub display_lookup_done: bool,
+    /// The "phone blocks input from the PC" guidance was already shown for this session.
+    pub input_block_notified: bool,
 }
 
 /// App-wide state held in Tauri's managed state.
