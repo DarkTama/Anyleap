@@ -410,7 +410,19 @@ fn has_clipboard_files() -> bool {
 }
 // --- end SPEC-25a ---
 
-pub fn start_clipboard_sync(tx: mpsc::Sender<Outbound>, is_running: Arc<AtomicBool>) {
+/// Pure gate: clipboard content is offered only while a peer session is connected.
+pub fn should_offer_clip(peer_connected: bool) -> bool {
+    peer_connected
+}
+
+/// Evaluated at each clipboard change; true while a peer session is connected.
+pub type PeerConnectedFn = Arc<dyn Fn() -> bool + Send + Sync>;
+
+pub fn start_clipboard_sync(
+    tx: mpsc::Sender<Outbound>,
+    is_running: Arc<AtomicBool>,
+    peer_connected: PeerConnectedFn,
+) {
     tokio::spawn(async move {
         #[cfg(windows)]
         unsafe {
@@ -426,6 +438,12 @@ pub fn start_clipboard_sync(tx: mpsc::Sender<Outbound>, is_running: Arc<AtomicBo
                     last_seq = cur_seq;
 
                     if !should_suppress_echo() {
+                        if !should_offer_clip(peer_connected()) {
+                            super::debug_log::note(|| {
+                                "CLIP_OFFER_SKIPPED reason=no_peer".to_string()
+                            });
+                            continue;
+                        }
                         let tx_clone = tx.clone();
                         tokio::task::spawn_blocking(move || {
                             match choose_clipboard_action_v2(
@@ -581,6 +599,12 @@ mod tests {
             true,
             false
         ));
+    }
+
+    #[test]
+    fn should_offer_clip_requires_peer() {
+        assert!(!should_offer_clip(false));
+        assert!(should_offer_clip(true));
     }
 
     // --- SPEC-25a ---
