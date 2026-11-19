@@ -48,7 +48,6 @@ mod imp {
     const REFRESH_TICK: Duration = Duration::from_millis(300);
     /// Re-read dumpsys for flex display size every N refresher ticks (~1.5 s).
     const VD_REFRESH_TICKS: u32 = 5;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     struct SwipeTarget {
         serial: Arc<str>,
@@ -336,15 +335,15 @@ mod imp {
         serial: &str,
         shell_args: &[&str],
     ) -> Option<String> {
-        use std::os::windows::process::CommandExt;
-        let out = std::process::Command::new(adb)
-            .env("ADB_MDNS_OPENSCREEN", "0")
-            .env("ADB_MDNS_AUTO_CONNECT", "0")
-            .args(["-s", serial, "shell"])
-            .args(shell_args)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .ok()?;
+        let out = crate::proc_util::no_window(
+            std::process::Command::new(adb)
+                .env("ADB_MDNS_OPENSCREEN", "0")
+                .env("ADB_MDNS_AUTO_CONNECT", "0")
+                .args(["-s", serial, "shell"])
+                .args(shell_args),
+        )
+        .output()
+        .ok()?;
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
@@ -428,7 +427,6 @@ mod imp {
         (w, h): (u32, u32),
         wheel_down: bool,
     ) {
-        use std::os::windows::process::CommandExt;
         let x = (w / 2).to_string();
         let (y_from, y_to) = if wheel_down {
             (h * 60 / 100, h * 40 / 100)
@@ -451,7 +449,7 @@ mod imp {
             &y_to.to_string(),
             "100",
         ]);
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW).output();
+        let _ = crate::proc_util::no_window(&mut cmd).output();
     }
 
     #[cfg(test)]
