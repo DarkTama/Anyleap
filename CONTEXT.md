@@ -99,3 +99,12 @@ The per-mode mirroring settings persisted as `modeDefaults` in `settings.json`. 
 - **Settings rail**: seven sections (General, Phone mirroring, Control bar, Shared mouse & keyboard, Clipboard & files, Audio, media & power, Advanced) with a filter box.
 - **Control bar groups**: the mirror window sidebar is 60 px of 40 px icon buttons in groups Navigate, Sound, Screen, Capture (Camera mode: a camera group) plus a **More** popover (Notifications, Wi-Fi, Bluetooth, Do Not Disturb, Mouse wheel swipes). Model: `controlBarGroups` in `src/lib/controlBarModel.ts`. End call appears only during an active call (`get_call_active`); Sleep was removed and the stored `controlBar.buttons.sleep` is dropped on load.
 - **Single-source rule**: a setting has one editor; other places show it read-only with a link (for example dwell and deadzone are edited in the Computers tab).
+
+### Scroll feel (`SPEC-30`, Proposed)
+Per-mode scrolling settings inside `modeDefaults` that shape how the PC wheel or touchpad scrolls a mirrored phone screen. Implemented by re-posting scaled wheel messages from the `wheel_swipe.rs` hook thread to the scrcpy window; it needs scrcpy `sdk` mouse mode.
+- **Scroll style**: `Smooth (reading)` scrolls continuously; `Paged (short videos)` is the existing wheel swipe, one `adb shell input swipe` fling per cooldown. One style is active per session.
+- **Scroll speed**: `Auto` or a manual 1x to 5x multiplier on wheel delta. Android scrolls about 64 dp per notch, and dp follows display density, so low-density Flex displays scroll slowly while the UI stays small.
+- **Auto multiplier**: `clamp(native_density / session_density, 1, 4)` rounded to 0.25. Native density is the phone's physical density (`wm density`); session density is the mirrored display's.
+- **Smooth scrolling**: eases each notch into small steps over about 100 to 150 ms, merging consecutive notches, with the same total distance. Adds a little latency.
+- **Touchpad momentum (inertia)**: synthesized decaying scroll steps after touchpad input stops, with Low / Medium / High strength.
+- **Pending distance**: the not-yet-emitted scroll delta that smooth scrolling drains each tick.
