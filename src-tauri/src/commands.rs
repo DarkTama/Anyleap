@@ -716,6 +716,9 @@ fn exit_error_summary(user_stopped: bool, stderr: &str, command_error: Option<&s
 }
 
 fn summarize_scrcpy_error(stderr: &str, command_error: Option<&str>) -> String {
+    if is_input_blocked(stderr) {
+        return INPUT_BLOCKED_GUIDANCE.to_string();
+    }
     let lines: Vec<&str> = stderr
         .lines()
         .map(str::trim)
@@ -951,6 +954,8 @@ pub(crate) fn spawn_session_inner<'a>(
                     display_id: None,
                     virtual_size: None,
                     mode: mode.to_string(),
+                    display_lookup_done: false,
+                    input_block_notified: false,
                 },
             );
 
@@ -1991,41 +1996,106 @@ pub async fn disconnect_device(app: AppHandle, host: String, port: u16) -> Resul
 /// Volume/power/sleep/screenshot are global and stay untargeted.
 const DISPLAY_TARGETED_KEYCODES: [u32; 5] = [3, 4, 187, 82, 111];
 
-/// Send an Android key event to a device (`adb shell input keyevent`).
-/// For flex (virtual display) sessions, navigation keys are injected into the
-/// mirrored display via `input -d <id>` so they act on what the user sees.
-#[tauri::command]
-pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Result<(), String> {
-    let kc = keycode.to_string();
-    let display_id = if DISPLAY_TARGETED_KEYCODES.contains(&keycode) {
-        app.state::<AppState>()
-            .sessions
-            .lock()
-            .map_err(poison_error)?
-            .values()
-            .find(|s| s.serial == serial)
-            .and_then(|s| s.display_id)
-    } else {
-        None
-    };
-    let display_id = if display_id.is_none() && DISPLAY_TARGETED_KEYCODES.contains(&keycode) {
-        if let Some(adb) = adb_path() {
-            query_virtual_display(&adb, &serial).map(|(d, _)| d)
-        } else {
-            None
-        }
-    } else {
-        display_id
-    };
+/// Where a display-targeted key must be injected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NavTarget {
+    /// No `-d`: Mirror session, untargeted key, or Flex lookup already failed.
+    Default,
+    /// `input -d <id>`.
+    Display(u32),
+    /// Flex session, id unknown: do one `dumpsys` lookup and cache it.
+    Lookup,
+}
 
-    let mut args: Vec<String> = vec!["-s".into(), serial.clone(), "shell".into(), "input".into()];
+/// Pure decision for the `input -d` target. Mirror (no id, no Flex args) never
+/// gets `-d`; Flex with an id uses it; Flex without an id looks up once.
+pub(crate) fn nav_target(
+    targeted_key: bool,
+    display_id: Option<u32>,
+    flex_args: bool,
+    lookup_done: bool,
+) -> NavTarget {
+    if !targeted_key {
+        return NavTarget::Default;
+    }
+    match display_id {
+        Some(id) => NavTarget::Display(id),
+        None if flex_args && !lookup_done => NavTarget::Lookup,
+        None => NavTarget::Default,
+    }
+}
+
+pub(crate) const INPUT_BLOCKED_MARKER: &str = "Injecting input events requires the caller";
+
+pub(crate) const INPUT_BLOCKED_GUIDANCE: &str = "This phone blocks input from the PC. On Xiaomi/Redmi/POCO: Developer options \u{2192} turn on \"USB debugging (Security settings)\", then restart mirroring.";
+
+pub(crate) fn is_input_blocked(text: &str) -> bool {
+    text.contains(INPUT_BLOCKED_MARKER)
+}
+
+/// Build the adb args for a key event.
+pub(crate) fn keyevent_args(serial: &str, keycode: u32, display_id: Option<u32>) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-s".into(), serial.into(), "shell".into(), "input".into()];
     if let Some(did) = display_id {
         args.push("-d".into());
         args.push(did.to_string());
     }
     args.push("keyevent".into());
-    args.push(kc);
+    args.push(keycode.to_string());
+    args
+}
 
+/// Send an Android key event to a device (`adb shell input keyevent`).
+/// Only Flex (virtual display) sessions get `input -d <id>`; Mirror sessions
+/// send the key to the default display.
+#[tauri::command]
+pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Result<(), String> {
+    let targeted = DISPLAY_TARGETED_KEYCODES.contains(&keycode);
+    let target = if targeted {
+        let state = app.state::<AppState>();
+        let sessions = state.sessions.lock().map_err(poison_error)?;
+        match sessions.values().find(|s| s.serial == serial) {
+            Some(s) => nav_target(
+                true,
+                s.display_id,
+                s.args.iter().any(|a| {
+                    a == "--flex-display" || a == "--new-display" || a.starts_with("--new-display=")
+                }),
+                s.display_lookup_done,
+            ),
+            None => NavTarget::Default,
+        }
+    } else {
+        NavTarget::Default
+    };
+    let display_id = match target {
+        NavTarget::Default => None,
+        NavTarget::Display(id) => Some(id),
+        NavTarget::Lookup => {
+            let found = match adb_path() {
+                Some(adb) => {
+                    let serial_c = serial.clone();
+                    tokio::task::spawn_blocking(move || query_virtual_display(&adb, &serial_c))
+                        .await
+                        .map_err(|e| e.to_string())?
+                }
+                None => None,
+            };
+            if let Ok(mut sessions) = app.state::<AppState>().sessions.lock() {
+                if let Some(s) = sessions.values_mut().find(|s| s.serial == serial) {
+                    s.display_lookup_done = true;
+                    if let Some((id, size)) = found {
+                        s.display_id = Some(id);
+                        s.virtual_size = Some(size);
+                    }
+                }
+            }
+            found.map(|(d, _)| d)
+        }
+    };
+
+    let args = keyevent_args(&serial, keycode, display_id);
+    eprintln!("send_keyevent: adb {}", args.join(" "));
     let output = adb_cmd(&app)
         .await?
         .args(args)
@@ -2033,10 +2103,32 @@ pub async fn send_keyevent(app: AppHandle, serial: String, keycode: u32) -> Resu
         .await
         .map_err(|e| e.to_string())?;
     if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        return Ok(());
     }
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    if is_input_blocked(&text) {
+        let first = app
+            .state::<AppState>()
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|mut ss| {
+                ss.values_mut().find(|s| s.serial == serial).map(|s| {
+                    let first = !s.input_block_notified;
+                    s.input_block_notified = true;
+                    first
+                })
+            })
+            .unwrap_or(true);
+        if first {
+            return Err(INPUT_BLOCKED_GUIDANCE.to_string());
+        }
+    }
+    Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
 }
 
 /// Expand the notification shade on a device.
@@ -2397,10 +2489,11 @@ pub(crate) fn query_virtual_display(
     adb: &std::path::Path,
     serial: &str,
 ) -> Option<(u32, (u32, u32))> {
-    let out = std::process::Command::new(adb)
-        .args(["-s", serial, "shell", "dumpsys", "display"])
-        .output()
-        .ok()?;
+    let out = crate::proc_util::no_window(
+        std::process::Command::new(adb).args(["-s", serial, "shell", "dumpsys", "display"]),
+    )
+    .output()
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -2409,6 +2502,18 @@ pub(crate) fn query_virtual_display(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nav_target_cases() {
+        assert_eq!(nav_target(true, None, false, false), NavTarget::Default);
+        assert_eq!(
+            nav_target(true, Some(7), true, false),
+            NavTarget::Display(7)
+        );
+        assert_eq!(nav_target(true, None, true, false), NavTarget::Lookup);
+        assert_eq!(nav_target(true, None, true, true), NavTarget::Default);
+        assert_eq!(nav_target(false, Some(7), true, false), NavTarget::Default);
+    }
+
     #[test]
     fn size_constrain_failure_classified() {
         use super::stderr_is_size_constrain_failure as f;
