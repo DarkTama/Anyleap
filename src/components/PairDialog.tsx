@@ -10,7 +10,7 @@ import { connectDevice, discoverWireless, pairDevice } from "@/lib/tauri";
 import { upsertSaved } from "@/lib/savedDevices";
 import { resolveDeviceTarget } from "@/lib/deviceStatus";
 import { syncDevicesAndMigrate } from "@/lib/deviceSync";
-import { generatePairingChallenge, type PairingChallenge } from "@/lib/qr";
+import { useQrPairingSession, type QrPaired } from "@/lib/qrPairingSession";
 import type { MdnsService, SavedDevice } from "@/lib/types";
 
 type Mode = "qr" | "mdns" | "manual";
@@ -28,11 +28,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<string | null>(null);
 
   // QR mode
-  const [challenge, setChallenge] = useState<PairingChallenge | null>(() =>
-    generatePairingChallenge(),
-  );
-  const [qrStatus, setQrStatus] = useState<string | null>(null);
-  const [qrBusy, setQrBusy] = useState(false);
+  const [qrConnectStatus, setQrStatus] = useState<string | null>(null);
 
   // mDNS mode
   const [services, setServices] = useState<MdnsService[]>([]);
@@ -82,69 +78,21 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     if (mode === "mdns") void refreshServices();
   }, [mode]);
 
-  // QR pairing state machine: poll for the pairing service the phone advertises
-  // after scanning, pair with the embedded password, then discover + connect.
-  useEffect(() => {
-    if (mode !== "qr" || !challenge) return;
-    let cancelled = false;
-    (async () => {
-      setError(null);
-      setQrBusy(true);
-      setQrStatus("Waiting for the phone to scan the code…");
-      const scanDeadline = Date.now() + 120_000;
-      let pairing: MdnsService | undefined;
-      let connect: MdnsService | undefined;
-      while (!cancelled && Date.now() < scanDeadline) {
-        const found = await discoverWireless().catch(() => []);
-        if (cancelled) return;
-        const pairings = found.filter((s) => s.serviceType.includes("pairing"));
-        pairing =
-          pairings.find((s) => s.name === challenge.name) ??
-          (pairings.length === 1 ? pairings[0] : undefined);
-        if (pairing) {
-          // Grab the connect endpoint from the same round if it's already up,
-          // so we usually skip the separate connect-wait below.
-          connect = found.find(
-            (s) => s.host === pairing!.host && s.serviceType.includes("connect"),
-          );
-          break;
-        }
-        await sleep(POLL_MS);
-      }
-      if (cancelled) return;
-      if (!pairing) {
-        setQrBusy(false);
-        setQrStatus(null);
-        setError(
-          "Timed out waiting for a scan. Keep the phone on the same Wi-Fi, or try Manual.",
-        );
-        return;
-      }
-
-      setQrStatus("Scanned ✓ — pairing…");
-      try {
-        await pairDevice(pairing.host, pairing.port, challenge.password);
-      } catch (e) {
-        setQrBusy(false);
-        setQrStatus(null);
-        setError(`Pairing failed: ${String(e)}`);
-        return;
-      }
-      if (cancelled) return;
-
+  // After the session pairs, discover + connect the phone.
+  async function connectAfterPair({ pairing, connect: early }: QrPaired) {
+    try {
       setQrStatus("Paired ✓ — connecting (this can take a few seconds)…");
-      const host = pairing.host;
+      let connect = early;
       const connectDeadline = Date.now() + 30_000;
-      while (!cancelled && !connect && Date.now() < connectDeadline) {
+      while (!connect && Date.now() < connectDeadline) {
         const found = await discoverWireless().catch(() => []);
-        if (cancelled) return;
-        connect = found.find((s) => s.host === host && s.serviceType.includes("connect"));
+        connect = found.find(
+          (s) => s.host === pairing.host && s.serviceType.includes("connect"),
+        );
         if (connect) break;
         await sleep(POLL_MS);
       }
-      if (cancelled) return;
       if (!connect) {
-        setQrBusy(false);
         setQrStatus(null);
         setError("Paired, but no connect service appeared. Use Auto-discover/Manual to finish.");
         return;
@@ -152,22 +100,36 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
       try {
         await connectDevice(connect.host, connect.port);
       } catch (e) {
-        setQrBusy(false);
         setQrStatus(null);
         setError(`Connect failed: ${String(e)}`);
         return;
       }
-      if (cancelled) return;
       await finishConnected(connect.host, connect.port, connect.hwSerial);
       logActivity({
         kind: "device",
         title: `Paired & connected ${connect.host}:${connect.port}`,
       });
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, challenge]);
+    } catch (e) {
+      setQrStatus(null);
+      setError(String(e));
+    }
+  }
+
+  const qr = useQrPairingSession(mode === "qr", {
+    discover: () => discoverWireless().catch(() => []),
+    pair: pairDevice,
+    onPaired: (r) => void connectAfterPair(r),
+  });
+  const challenge = qr.challenge;
+  const qrBusy = qr.phase === "pairing" || qr.phase === "paired";
+  const qrStatus =
+    qrConnectStatus ??
+    (qr.phase === "listening"
+      ? "Waiting for the phone to scan the code…"
+      : qr.phase === "pairing"
+        ? "Scanned ✓ — pairing…"
+        : null);
+  const mmss = `${Math.floor(qr.secondsLeft / 60)}:${String(qr.secondsLeft % 60).padStart(2, "0")}`;
 
   async function pairViaMdns() {
     const pairing = services.find((s) => `${s.host}:${s.port}` === selected);
@@ -241,9 +203,7 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
     setError(null);
     setStatus(null);
     setQrStatus(null);
-    setQrBusy(false);
     setMode(next);
-    setChallenge(next === "qr" ? generatePairingChallenge() : null);
   }
 
   const pairingServices = services.filter((s) => s.serviceType.includes("pairing"));
@@ -287,32 +247,53 @@ export function PairDialog({ onClose }: { onClose: () => void }) {
               On your phone: Settings → Developer options → <b className="text-text-strong">Wireless debugging</b> →{" "}
               <b className="text-text-strong">Pair device with QR code</b>, then scan this:
             </p>
-            {challenge && (
-              <div className="flex justify-center rounded-md bg-white p-4">
+            <div className="relative flex justify-center rounded-md bg-white p-4">
+              {challenge ? (
                 <QRCodeSVG
                   value={challenge.payload}
                   size={208}
                   fgColor="#000000"
                   bgColor="#ffffff"
                 />
-              </div>
+              ) : (
+                <div className="flex h-[208px] w-[208px] items-center justify-center text-center text-sm text-neutral-500">
+                  {qr.phase === "expired"
+                    ? "Expired"
+                    : qr.phase === "failed"
+                      ? "Pairing failed"
+                      : "No active code"}
+                </div>
+              )}
+            </div>
+            {qr.phase === "listening" && (
+              <p className="text-center text-xs text-text-muted">Code refreshes in {mmss}</p>
+            )}
+            {qr.phase === "failed" && qr.error && (
+              <p className="text-xs text-red-400">Pairing failed: {qr.error}</p>
             )}
             <div className="flex items-center justify-between">
               <p className="flex items-center gap-2 text-xs text-text-muted">
                 {qrBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-gold-400" />}
-                {qrStatus ?? "Ready to scan."}
+                {qrStatus ?? (qr.phase === "expired" ? "Code expired." : "")}
               </p>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setError(null);
-                  setChallenge(generatePairingChallenge());
-                }}
-              >
-                <RefreshCw className="h-4 w-4" />
-                New code
-              </Button>
+              {(qr.phase === "expired" || qr.phase === "failed" || qr.phase === "listening") && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setError(null);
+                    setQrStatus(null);
+                    qr.restart();
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  {qr.phase === "expired"
+                    ? "Expired – Refresh"
+                    : qr.phase === "failed"
+                      ? "Try again"
+                      : "New code"}
+                </Button>
+              )}
             </div>
           </div>
         )}
