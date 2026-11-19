@@ -1,15 +1,16 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { LayoutGrid, Monitor } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { selectClass, optionClass } from "@/lib/styles";
-import { getSystemResolution } from "@/lib/tauri";
+import { getScrollMultiplier, getSystemResolution } from "@/lib/tauri";
 import { useAppStore } from "@/store/useAppStore";
-import { dismissModeNotice, editMode } from "@/lib/modeActions";
+import { dismissModeNotice, editMode, launchMode } from "@/lib/modeActions";
 import {
   BITRATE_VALUE,
   CAMERA_BITRATE_BPS,
   QUALITY_LABELS,
   RESOLUTION_VALUE,
+  SCROLL_SPEED_OPTIONS,
   applyQuality,
   deriveQuality,
   segmentForBitrate,
@@ -21,8 +22,10 @@ import {
   type ModeSettings,
   type QualityChoice,
   type ResolutionSegment,
+  type ScrollStyle,
 } from "@/lib/modeSettings";
 import type { Codec, CoreSettings } from "@/lib/types";
+import { entry } from "./registry";
 import { ModeTabs } from "./ModeTabs";
 import { SegmentedControl } from "./SegmentedControl";
 import { SwitchRow } from "./SwitchRow";
@@ -60,6 +63,14 @@ const FIT_LABELS: Record<CoreSettings["renderFit"], string> = {
   unscaled: "Unscaled",
   stretched: "Stretched",
 };
+const SCROLL_STYLE_SEGMENTS: { value: ScrollStyle; label: string }[] = [
+  { value: "smooth", label: "Smooth (reading)" },
+  { value: "paged", label: "Paged (short videos)" },
+];
+
+export function formatScrollMultiplier(m: number): string {
+  return Number(m.toFixed(2)).toString();
+}
 
 const mbps = (bps: number) => `${Math.round(bps / 1_000_000)} Mbps`;
 
@@ -233,8 +244,103 @@ function DisplayModePanel({ mode }: { mode: DisplayMode }) {
         <PictureFit mode={mode} value={s.renderFit} />
       </Group>
 
+      <ScrollingGroup mode={mode} s={s} />
+
       {mode === "flex" && <FlexDisplayGroup s={s} />}
     </div>
+  );
+}
+
+function ScrollingGroup({ mode, s }: { mode: DisplayMode; s: ModeSettings }) {
+  const id = useId();
+  const sessions = useAppStore((st) => st.sessions);
+  const sessionModes = useAppStore((st) => st.sessionModes);
+  const currentMode = useAppStore((st) => st.currentMode);
+  const runningSession = sessions.find(
+    (sess) =>
+      sess.mode !== "camera" && (sessionModes[sess.id] ?? launchMode(currentMode)) === mode,
+  );
+  const runningSerial = runningSession?.serial ?? null;
+  const [liveMultiplier, setLiveMultiplier] = useState<number | null>(null);
+
+  const isPaged = s.scroll.style === "paged";
+  const isAuto = s.scroll.speed === "auto";
+
+  useEffect(() => {
+    if (!runningSerial || isPaged || !isAuto) {
+      setLiveMultiplier(null);
+      return;
+    }
+    let cancelled = false;
+    const refresh = () => {
+      getScrollMultiplier(runningSerial)
+        .then((m) => {
+          if (!cancelled) setLiveMultiplier(m);
+        })
+        .catch(() => {
+          if (!cancelled) setLiveMultiplier(null);
+        });
+    };
+    refresh();
+    const timer = setInterval(refresh, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [runningSerial, isPaged, isAuto]);
+
+  const styleEntry = entry("M-21");
+  const speedEntry = entry("M-22");
+  const speedHint = isPaged
+    ? "Not used in Paged style."
+    : isAuto
+      ? runningSerial && liveMultiplier != null
+        ? `Auto matches the phone's normal feel. Currently ${formatScrollMultiplier(liveMultiplier)}x on this screen.`
+        : (speedEntry.helper ?? "Matches the phone's normal feel.")
+      : "Scrolls at a fixed speed on every screen.";
+
+  return (
+    <Group title="Scrolling">
+      <SegmentedControl<ScrollStyle>
+        label={styleEntry.label}
+        hint={styleEntry.helper}
+        segments={SCROLL_STYLE_SEGMENTS}
+        value={s.scroll.style}
+        onChange={(style) => editMode(mode, { scroll: { ...s.scroll, style } })}
+      />
+      <div className="space-y-1 py-1">
+        <label
+          htmlFor={`${id}-speed`}
+          className={`text-sm ${isPaged ? "text-text opacity-70" : "text-text-strong"}`}
+        >
+          {speedEntry.label}
+        </label>
+        <select
+          id={`${id}-speed`}
+          aria-describedby={`${id}-speed-hint`}
+          disabled={isPaged}
+          className={`${selectClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          value={isAuto ? "auto" : String(s.scroll.speed)}
+          onChange={(e) => {
+            const val = e.target.value;
+            const speed = val === "auto" ? "auto" : Number.parseFloat(val);
+            editMode(mode, { scroll: { ...s.scroll, speed } });
+          }}
+        >
+          <option value="auto" className={optionClass}>
+            Auto
+          </option>
+          {SCROLL_SPEED_OPTIONS.map((v) => (
+            <option key={v} value={String(v)} className={optionClass}>
+              {v}x
+            </option>
+          ))}
+        </select>
+        <p id={`${id}-speed-hint`} className="text-[11px] leading-snug text-text-muted">
+          {speedHint}
+        </p>
+      </div>
+    </Group>
   );
 }
 

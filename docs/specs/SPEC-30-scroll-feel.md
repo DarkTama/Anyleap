@@ -1,6 +1,6 @@
 # SPEC-30: Scroll feel (speed, smooth scrolling, inertia)
 
-> **Status:** Proposed (2026-11-19). No code yet.
+> **Status:** Phase 1 implemented (2026-11-19). Phases 2 and 3 remain proposed.
 > **Scope:** wheel and touchpad input over a mirror window (`src-tauri/src/wheel_swipe.rs` hook thread, new `scroll_feel` module beside it), per-mode persisted settings (`src/lib/modeSettings.ts`), the Phone mirroring section and the control bar **More** popover.
 > **Related:** SPEC-28 (per-mode `modeDefaults`, Phone mirroring tabs), ADR-0005, SPEC-24 (input hooks pattern). SPEC-29 is reserved by an open PR, hence the number.
 > **Plan:** `docs/superpowers/plans/2026-11-19-spec30-scroll-feel.md`
@@ -230,8 +230,8 @@ Each phase ends green: `npx tsc --noEmit`, `npx vitest run`, `cargo test`.
 
 ## 14. Open questions
 
-1. Does the bundled scrcpy use SDL precise scroll values, so a posted delta of 300 gives 2.5 notches, or does it round to integers? Verify with a one-off posted message before Phase 1.
-2. Does SDL accept a `PostMessageW`-posted `WM_MOUSEWHEEL` with screen coordinates in `lParam` and modifiers in `wParam`, or does it read `GetKeyState`? Affects Shift+wheel mapping.
+1. **Answered (2026-11-19, bundled scrcpy 5.0.1 / SDL3 on TECNO CM7 Flex `1920x1080/160` Settings list via `uiautomator dump`):** Yes — SDL3 uses precise scroll values. Posted `WM_MOUSEWHEEL` deltas `-120`, `-300` (2.5 notches), and `-60` (0.5 notch) scrolled `192 px`, `480 px` (`2.5x`), and `96 px` (`0.5x`, twice) respectively. Fractional multipliers work continuously; the per-axis `f32` accumulator carries sub-unit remainders into `i16` posted deltas.
+2. **Answered (2026-11-19, same spike):** `PostMessageW` to the `SDL_app` HWND with screen coordinates in `lParam` works even when the cursor is outside the window and without foreground focus. Setting `MK_SHIFT` (`0x0004`) in `wParam` alone without physical Shift held still scrolled vertically `192 px`, showing SDL3 reads keyboard modifier state (`GetKeyState`) rather than `wParam` `MK_SHIFT`; we still forward `MK_SHIFT` in `wParam` and handle `WM_MOUSEHWHEEL` directly.
 3. What does the user's touchpad driver emit after a lift (decaying tail or abrupt stop)? Decides Phase 3.
 4. Should Auto depend on the foreground app? Default no.
 5. Should the Auto upper clamp be user-visible?
