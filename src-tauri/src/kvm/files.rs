@@ -1357,6 +1357,14 @@ pub fn advance_outbound_progress(
     (pct_for_bytes(fallback_sent, fallback_total), done)
 }
 
+/// Drains all registered outbound totals as `(id, total_bytes)`.
+pub fn drain_outbound_totals() -> Vec<(String, u64)> {
+    match outbound_totals().lock() {
+        Ok(mut g) => g.drain().map(|(id, (_, total))| (id, total)).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 pub fn clear_outbound_total(id: &str) {
     if let Ok(mut g) = outbound_totals().lock() {
         g.remove(id);
