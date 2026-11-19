@@ -40,6 +40,12 @@ Items observed during M2 testing, to be sequenced into future milestones.
 - ~~**Phase 3:** mirror window control bar redesign~~ (SPEC-28 phase 3, done; live Mirror/Flex/Camera visual check still pending).
 - **Follow-ups:** remove `syncFileTransfer` from the type and the Rust `SYNC_FILES` gate; move KVM settings from `localStorage` to `settings.json`; optional per-phone mode defaults.
 
+## Scroll feel (SPEC-30)
+
+- ~~**Phase 0 & Phase 1:** SDL3 precise-scroll verification spike, density-independent scroll speed (`Auto` / `1x–5x`), per-mode Scrolling group, More popover **Paged scrolling** rename~~ (SPEC-30 phase 1, done).
+- **Phase 2:** optional smooth scrolling (eased step interpolation, touchpad bypass).
+- **Phase 3:** touchpad delta stream measurement and optional inertia.
+
 ## Dependencies
 
 Planned manual major upgrades (require two-PC testing and/or release verification):

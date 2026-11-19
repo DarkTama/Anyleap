@@ -54,7 +54,9 @@ describe("controlBarGroups", () => {
     const m = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st({ showOrient: false }));
     expect(m.groups.flatMap((g) => g.items).some((i) => i.id === "orientToggle")).toBe(false);
     expect(m.more.map((i) => i.id)).toEqual(["notifications", "wifi", "bluetooth", "dnd", "swipeScroll"]);
-    expect(m.more.find((i) => i.id === "swipeScroll")?.hint).toMatch(/short-video/);
+    const swipe = m.more.find((i) => i.id === "swipeScroll");
+    expect(swipe?.label).toBe("Paged scrolling");
+    expect(swipe?.hint).toMatch(/short-video/);
     const noSwipe = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st({ showSwipe: false }));
     expect(noSwipe.more.map((i) => i.id)).not.toContain("swipeScroll");
   });

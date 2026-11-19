@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BITRATE_VALUE,
+  DEFAULT_SCROLL,
   MIRROR_MODES,
   allowsControl,
   applyQuality,
@@ -17,6 +18,7 @@ import {
   segmentForFps,
   segmentForResolution,
   toCameraSettings,
+  toScrollConfig,
   usesOnScreenKeyboard,
   type ModeDefaultsV2,
 } from "./modeSettings";
@@ -337,5 +339,56 @@ describe("quality derivation and helpers", () => {
   });
   it("covers all four modes", () => {
     expect(MIRROR_MODES).toEqual(["mirror", "flex", "camera", "hifi"]);
+  });
+});
+
+describe("scroll settings (SPEC-30)", () => {
+  it("provides expected per-mode defaults", () => {
+    const d = defaultModeDefaults();
+    expect(d.mirror.scroll).toEqual({ style: "smooth", speed: "auto", smooth: true, inertia: "off" });
+    expect(d.flex.scroll).toEqual({ style: "smooth", speed: "auto", smooth: true, inertia: "off" });
+    expect(d.hifi.scroll).toEqual({ style: "smooth", speed: "auto", smooth: false, inertia: "off" });
+    expect(DEFAULT_SCROLL.camera).toEqual({ style: "smooth", speed: "auto", smooth: false, inertia: "off" });
+  });
+
+  it("fills missing scroll settings on older modeDefaults without version bump", () => {
+    const old = {
+      version: 2,
+      mirror: { maxFps: 30 },
+      flex: { renderFit: "unscaled" },
+      hifi: { maxSize: 0 },
+    };
+    const n = normalizeModeDefaults(old);
+    expect(n.version).toBe(2);
+    expect(n.mirror.maxFps).toBe(30);
+    expect(n.mirror.scroll).toEqual(DEFAULT_SCROLL.mirror);
+    expect(n.flex.scroll).toEqual(DEFAULT_SCROLL.flex);
+    expect(n.hifi.scroll).toEqual(DEFAULT_SCROLL.hifi);
+  });
+
+  it("clamps manual speed and normalizes invalid scroll values", () => {
+    const n = normalizeModeDefaults({
+      mirror: { scroll: { style: "bogus", speed: 99, smooth: "nope", inertia: "mega" } },
+      flex: { scroll: { style: "paged", speed: 0.25 } },
+    });
+    expect(n.mirror.scroll).toEqual({ style: "smooth", speed: 5, smooth: true, inertia: "off" });
+    expect(n.flex.scroll).toEqual({ style: "paged", speed: 1, smooth: true, inertia: "off" });
+  });
+
+  it("toScrollConfig maps auto and manual speeds for IPC", () => {
+    expect(toScrollConfig(DEFAULT_SCROLL.mirror)).toEqual({
+      style: "smooth",
+      speedMode: "auto",
+      manual: 1,
+      smooth: true,
+      inertia: "off",
+    });
+    expect(toScrollConfig({ style: "paged", speed: 2.5, smooth: false, inertia: "off" })).toEqual({
+      style: "paged",
+      speedMode: "manual",
+      manual: 2.5,
+      smooth: false,
+      inertia: "off",
+    });
   });
 });

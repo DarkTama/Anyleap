@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
+import type { ScrollConfigPayload, ScrollStyle } from "@/lib/modeSettings";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   CameraDeviceOption,
@@ -76,6 +77,15 @@ export const toggleDeviceOrientation = (serial: string) =>
 
 export const setWheelSwipe = (serial: string, enabled: boolean) =>
   invoke<void>("set_wheel_swipe", { serial, enabled });
+
+export const setScrollFeel = (serial: string, config: ScrollConfigPayload) =>
+  invoke<number | null>("set_scroll_feel", { serial, config });
+
+export const getScrollMultiplier = (serial: string) =>
+  invoke<number | null>("get_scroll_multiplier", { serial });
+
+export const getScrollStyle = (serial: string) =>
+  invoke<ScrollStyle | null>("get_scroll_style", { serial });
 
 // --- Camera ---
 

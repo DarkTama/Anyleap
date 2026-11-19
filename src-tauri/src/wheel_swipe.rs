@@ -1,29 +1,91 @@
-//! Wheel-to-swipe: converts mouse-wheel events over a mirror window into
-//! Android touch flings (`adb shell input swipe`).
+//! Wheel scroll scaling and wheel-to-swipe (SPEC-30 & Paged mode).
 //!
 //! Why: scrcpy's default `sdk` mouse mode forwards the wheel as Android
-//! ACTION_SCROLL, which feeds/lists handle but Reels/Shorts-style vertical
-//! pagers ignore — they only respond to touch flings. In `sdk` mode SDL reads
-//! the wheel via WM_MOUSEWHEEL (not raw input), so swallowing the message in a
-//! low-level hook reliably keeps it from scrcpy. If a `--mouse` mode setting
-//! is ever exposed, disable this feature for non-sdk sessions.
+//! ACTION_SCROLL (~64 dp per notch). On low-density Flex virtual displays
+//! (e.g. 160 dpi), scrolling feels ~2.5x slower than on the phone's native
+//! screen (~400+ dpi). Smooth style scales `WM_MOUSEWHEEL` / `WM_MOUSEHWHEEL`
+//! deltas by the effective multiplier and re-posts them via `PostMessageW`
+//! (which does not re-enter `WH_MOUSE_LL`), while Paged style converts wheel
+//! notches into `adb shell input swipe` touch flings for short-video feeds.
 //!
 //! Architecture (Windows only):
 //! - A dedicated hook thread runs WH_MOUSE_LL + a message loop. Never the
 //!   Tauri main thread: stalls there would delay all system mouse input, and
 //!   Windows silently removes hooks that repeatedly exceed the low-level hook
 //!   timeout.
-//! - The hook callback must stay cheap and non-blocking: AtomicBool fast
-//!   path, `try_lock` on the registry (fail open), `try_send` to the worker.
-//!   No cross-process calls (e.g. GetWindowText) — deadlock/timeout risk.
-//! - A refresher thread resolves mirror HWNDs by window title and caches the
-//!   device resolution; for flex (virtual display) sessions it re-reads
-//!   `dumpsys display` periodically since the display resizes with the window.
-//! - A single worker thread serializes swipes and coalesces wheel bursts.
+//! - The hook callback stays cheap and non-blocking: AtomicBool fast path,
+//!   `try_lock` on the registry (fail open), `try_send` to the worker, and
+//!   swallow only after `try_send` succeeds. No cross-process calls or adb
+//!   on the hook thread.
+//! - A refresher thread resolves mirror HWNDs (both standalone and embedded),
+//!   caches device resolution and display density from `wm density` / `dumpsys
+//!   display`, and computes effective multipliers outside the registry lock.
+//! - A single worker thread owns per-axis remainder accumulators (`PostMessageW`)
+//!   and serializes Paged touch flings.
+
+use crate::scroll_feel::ScrollStyle;
+
+/// Wheel axis for a mouse-wheel hook event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WheelAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// Decision returned by the pure hook classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookDecision {
+    Swallow,
+    PassThrough,
+}
+
+/// Keyboard modifier flags sampled non-blockingly at hook time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ModifierState {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub win: bool,
+    pub shift: bool,
+}
+
+impl ModifierState {
+    /// Ctrl, Alt, or Win + wheel must always pass through untouched (e.g. Ctrl+wheel zoom).
+    pub fn blocks_scaling(self) -> bool {
+        self.ctrl || self.alt || self.win
+    }
+}
+
+/// Pure hook decision: decide whether to swallow and enqueue a wheel event or pass through.
+pub fn decide(
+    modifiers: ModifierState,
+    axis: WheelAxis,
+    over_mirror: bool,
+    style: ScrollStyle,
+    multiplier: f32,
+    queue_ok: bool,
+) -> HookDecision {
+    if !over_mirror || modifiers.blocks_scaling() || !queue_ok {
+        return HookDecision::PassThrough;
+    }
+    match style {
+        ScrollStyle::Paged => match axis {
+            WheelAxis::Vertical => HookDecision::Swallow,
+            WheelAxis::Horizontal => HookDecision::PassThrough,
+        },
+        ScrollStyle::Smooth => {
+            if !multiplier.is_finite() || (multiplier - 1.0).abs() <= 1e-4 {
+                HookDecision::PassThrough
+            } else {
+                HookDecision::Swallow
+            }
+        }
+    }
+}
 
 #[cfg(windows)]
 mod imp {
     use std::collections::HashMap;
+    use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
@@ -35,48 +97,88 @@ mod imp {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, FindWindowW, GetAncestor, GetMessageW, SetWindowsHookExW, WindowFromPoint,
-        GA_ROOT, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEWHEEL,
+        CallNextHookEx, FindWindowW, GetAncestor, GetMessageW, IsWindow, PostMessageW,
+        SetWindowsHookExW, WindowFromPoint, GA_ROOT, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL,
+        WM_MOUSEHWHEEL, WM_MOUSEWHEEL,
     };
 
+    use super::{decide, HookDecision, ModifierState, WheelAxis};
     use crate::commands::{adb_path, parse_virtual_display};
+    use crate::scroll_feel::speed::{
+        parse_default_display_density, parse_virtual_display_density_for_id, parse_wm_density,
+        DEFAULT_NATIVE_DENSITY,
+    };
+    use crate::scroll_feel::{effective_multiplier, AxisAccumulator, ScrollConfig, ScrollStyle};
     use crate::state::{poison_error, AppState};
 
     const WHEEL_DELTA: i32 = 120;
     const SWIPE_COOLDOWN: Duration = Duration::from_millis(300);
     const REFRESH_TICK: Duration = Duration::from_millis(300);
-    /// Re-read dumpsys for flex display size every N refresher ticks (~1.5 s).
+    /// Re-read dumpsys for flex display size/density every N refresher ticks (~1.5 s).
     const VD_REFRESH_TICKS: u32 = 5;
+    /// Re-read `wm density` for Mirror sessions every N refresher ticks (~5.1 s).
+    const MIRROR_DENSITY_TICKS: u32 = 17;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const MK_SHIFT_FLAG: u16 = 0x0004;
 
     struct SwipeTarget {
         serial: Arc<str>,
-        enabled: bool,
+        hwnd: isize,
+        style: ScrollStyle,
+        multiplier: f32,
         /// `Some` for flex sessions: inject with `input -d <id>`.
         display_id: Option<u32>,
         w: u32,
         h: u32,
     }
 
+    #[derive(Clone, Copy, Default)]
+    struct DensityCache {
+        native: Option<u32>,
+        mirror_override: Option<u32>,
+        flex: Option<u32>,
+    }
+
     #[derive(Default)]
     struct Registry {
-        /// Per-serial user toggle; survives HWND churn / window recreation.
-        enabled: HashMap<String, bool>,
-        /// Resolved mirror windows, rebuilt by the refresher.
+        /// Per-serial scroll configuration (set on session start / edit).
+        configs: HashMap<String, ScrollConfig>,
+        /// Per-session More-popover override (`true` => Paged, `false` => Smooth).
+        paged_override: HashMap<String, bool>,
+        /// Cached display densities per serial.
+        densities: HashMap<String, DensityCache>,
+        /// Last computed multiplier per serial (for UI live display).
+        multipliers: HashMap<String, f32>,
+        /// Resolved mirror windows, keyed by scrcpy HWND.
         targets: HashMap<isize, SwipeTarget>,
     }
 
-    struct SwipeEvent {
-        serial: Arc<str>,
-        delta: i16,
-        at: Instant,
+    enum WheelEvent {
+        Paged {
+            serial: Arc<str>,
+            delta: i16,
+            at: Instant,
+        },
+        Smooth {
+            hwnd: isize,
+            axis: WheelAxis,
+            delta: i16,
+            key_state: u16,
+            screen_x: i32,
+            screen_y: i32,
+            multiplier: f32,
+            at: Instant,
+        },
     }
 
     /// Fast path for the system-wide hook: false ⇒ the callback costs ~nothing.
     static ANY_ENABLED: AtomicBool = AtomicBool::new(false);
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
-    static TX: OnceLock<mpsc::SyncSender<SwipeEvent>> = OnceLock::new();
+    static TX: OnceLock<mpsc::SyncSender<WheelEvent>> = OnceLock::new();
 
     fn registry() -> &'static Mutex<Registry> {
         REGISTRY.get_or_init(|| Mutex::new(Registry::default()))
@@ -86,9 +188,45 @@ mod imp {
         registry().lock().map_err(poison_error)
     }
 
+    fn effective_config_for(reg: &Registry, serial: &str) -> ScrollConfig {
+        let mut cfg = reg.configs.get(serial).copied().unwrap_or_default();
+        if let Some(&paged) = reg.paged_override.get(serial) {
+            cfg.style = if paged {
+                ScrollStyle::Paged
+            } else {
+                ScrollStyle::Smooth
+            };
+        }
+        cfg
+    }
+
+    fn compute_multiplier_for(
+        reg: &Registry,
+        serial: &str,
+        is_flex: bool,
+        cfg: &ScrollConfig,
+    ) -> f32 {
+        let dens = reg.densities.get(serial).copied().unwrap_or_default();
+        let native = dens.native.or(Some(DEFAULT_NATIVE_DENSITY));
+        let session = if is_flex {
+            dens.flex
+        } else {
+            dens.mirror_override.or(dens.native)
+        };
+        effective_multiplier(cfg, native, session)
+    }
+
+    fn sync_any_enabled(reg: &Registry) {
+        let any = reg
+            .targets
+            .values()
+            .any(|t| t.style == ScrollStyle::Paged || (t.multiplier - 1.0).abs() > 1e-4);
+        ANY_ENABLED.store(any, Ordering::Relaxed);
+    }
+
     /// Spawn the hook, worker, and refresher threads. Call once from setup.
     pub fn init(app: &AppHandle) {
-        let (tx, rx) = mpsc::sync_channel::<SwipeEvent>(64);
+        let (tx, rx) = mpsc::sync_channel::<WheelEvent>(64);
         let _ = TX.set(tx);
 
         let adb = adb_path();
@@ -109,25 +247,28 @@ mod imp {
             .expect("spawn wheel-swipe refresher");
     }
 
-    /// Toggle swipe mode for a serial. Resolves the mirror window inline so the
-    /// switch is effective immediately (not on the next refresher tick).
+    /// Toggle Paged mode for a running session (More popover toggle).
     pub fn set_enabled(app: &AppHandle, serial: &str, enabled: bool) -> Result<(), String> {
         let session = {
             let state = app.state::<AppState>();
             let sessions = state.sessions.lock().map_err(poison_error)?;
             sessions
                 .values()
-                .find(|s| s.serial == serial)
-                .map(|s| (s.display_id, s.virtual_size))
+                .find(|s| s.serial == serial && s.mode != "camera")
+                .map(|s| {
+                    (
+                        s.display_id,
+                        s.virtual_size,
+                        s.args.iter().any(|a| a.starts_with("--new-display")),
+                    )
+                })
         };
-        let Some((display_id, virtual_size)) = session else {
+        let Some((display_id, virtual_size, is_flex)) = session else {
             if !enabled {
                 let mut reg = lock_registry()?;
-                reg.enabled.remove(serial);
+                reg.paged_override.remove(serial);
                 reg.targets.retain(|_, t| t.serial.as_ref() != serial);
-                if reg.enabled.values().all(|&e| !e) {
-                    ANY_ENABLED.store(false, Ordering::Relaxed);
-                }
+                sync_any_enabled(&reg);
                 return Ok(());
             }
             return Err(format!("No running mirror for {serial}"));
@@ -147,25 +288,73 @@ mod imp {
         };
 
         let mut reg = lock_registry()?;
-        reg.enabled.insert(serial.to_string(), enabled);
+        reg.paged_override.insert(serial.to_string(), enabled);
+        let cfg = effective_config_for(&reg, serial);
+        let mult = compute_multiplier_for(&reg, serial, is_flex, &cfg);
+        reg.multipliers.insert(serial.to_string(), mult);
+
         if let Some((hwnd, size)) = resolved {
             reg.targets.insert(
                 hwnd,
                 SwipeTarget {
                     serial: Arc::from(serial),
-                    enabled: true,
+                    hwnd,
+                    style: ScrollStyle::Paged,
+                    multiplier: mult,
                     display_id,
                     w: size.0,
                     h: size.1,
                 },
             );
         } else if let Some(t) = reg.targets.values_mut().find(|t| &*t.serial == serial) {
-            t.enabled = false;
+            t.style = cfg.style;
+            t.multiplier = mult;
         }
 
-        let any = reg.enabled.values().any(|&e| e);
-        ANY_ENABLED.store(any, Ordering::Relaxed);
+        sync_any_enabled(&reg);
         Ok(())
+    }
+
+    /// Update scroll-feel settings for a running session (or pre-register on launch).
+    pub fn set_scroll_feel(
+        app: &AppHandle,
+        serial: &str,
+        config: ScrollConfig,
+    ) -> Result<Option<f32>, String> {
+        let is_flex = {
+            let state = app.state::<AppState>();
+            let sessions = state.sessions.lock().map_err(poison_error)?;
+            sessions
+                .values()
+                .find(|s| s.serial == serial && s.mode != "camera")
+                .map(|s| s.args.iter().any(|a| a.starts_with("--new-display")))
+                .unwrap_or(false)
+        };
+
+        let mut reg = lock_registry()?;
+        reg.configs.insert(serial.to_string(), config);
+        reg.paged_override.remove(serial);
+        let mult = compute_multiplier_for(&reg, serial, is_flex, &config);
+        reg.multipliers.insert(serial.to_string(), mult);
+
+        if let Some(t) = reg.targets.values_mut().find(|t| &*t.serial == serial) {
+            t.style = config.style;
+            t.multiplier = mult;
+        }
+        sync_any_enabled(&reg);
+        Ok(Some(mult))
+    }
+
+    pub fn get_scroll_multiplier(serial: &str) -> Option<f32> {
+        lock_registry()
+            .ok()
+            .and_then(|reg| reg.multipliers.get(serial).copied())
+    }
+
+    pub fn get_scroll_style(serial: &str) -> Option<ScrollStyle> {
+        lock_registry()
+            .ok()
+            .map(|reg| effective_config_for(&reg, serial).style)
     }
 
     // ---- hook side -------------------------------------------------------
@@ -183,26 +372,72 @@ mod imp {
         }
     }
 
+    #[inline]
+    unsafe fn is_vk_down(vk: VIRTUAL_KEY) -> bool {
+        (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0
+    }
+
     unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let msg = wparam.0 as u32;
+        let axis = match msg {
+            WM_MOUSEWHEEL => Some(WheelAxis::Vertical),
+            WM_MOUSEHWHEEL => Some(WheelAxis::Horizontal),
+            _ => None,
+        };
+
         // HC_ACTION only, wheel only, and the atomic gate before anything else.
-        if code >= 0 && wparam.0 as u32 == WM_MOUSEWHEEL && ANY_ENABLED.load(Ordering::Relaxed) {
-            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-            let hwnd = WindowFromPoint(info.pt);
-            let root = GetAncestor(hwnd, GA_ROOT);
-            // try_lock: if the refresher holds the lock, pass the event
-            // through rather than stall the system-wide hook.
-            if let Ok(reg) = registry().try_lock() {
-                if let Some(t) = reg.targets.get(&(root.0 as isize)) {
-                    if t.enabled {
-                        let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16;
-                        if let Some(tx) = TX.get() {
-                            let _ = tx.try_send(SwipeEvent {
-                                serial: t.serial.clone(),
-                                delta,
-                                at: Instant::now(),
-                            });
+        if code >= 0 && ANY_ENABLED.load(Ordering::Relaxed) {
+            if let Some(axis) = axis {
+                let modifiers = ModifierState {
+                    ctrl: is_vk_down(VK_CONTROL),
+                    alt: is_vk_down(VK_MENU),
+                    win: is_vk_down(VK_LWIN) || is_vk_down(VK_RWIN),
+                    shift: is_vk_down(VK_SHIFT),
+                };
+                if !modifiers.blocks_scaling() {
+                    let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+                    let hwnd = WindowFromPoint(info.pt);
+                    let root = GetAncestor(hwnd, GA_ROOT);
+
+                    // try_lock: if the refresher holds the lock, pass the event
+                    // through rather than stall the system-wide hook.
+                    let matched = registry().try_lock().ok().and_then(|reg| {
+                        reg.targets
+                            .get(&(hwnd.0 as isize))
+                            .or_else(|| reg.targets.get(&(root.0 as isize)))
+                            .map(|t| (t.serial.clone(), t.hwnd, t.style, t.multiplier))
+                    });
+
+                    if let Some((serial, target_hwnd, style, multiplier)) = matched {
+                        if decide(modifiers, axis, true, style, multiplier, true)
+                            == HookDecision::Swallow
+                        {
+                            let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16;
+                            let key_state = if modifiers.shift { MK_SHIFT_FLAG } else { 0 };
+                            let ev = match style {
+                                ScrollStyle::Paged => WheelEvent::Paged {
+                                    serial,
+                                    delta,
+                                    at: Instant::now(),
+                                },
+                                ScrollStyle::Smooth => WheelEvent::Smooth {
+                                    hwnd: target_hwnd,
+                                    axis,
+                                    delta,
+                                    key_state,
+                                    screen_x: info.pt.x,
+                                    screen_y: info.pt.y,
+                                    multiplier,
+                                    at: Instant::now(),
+                                },
+                            };
+                            // Swallow ONLY after try_send succeeds; if full, pass through (1x).
+                            if let Some(tx) = TX.get() {
+                                if tx.try_send(ev).is_ok() {
+                                    return LRESULT(1);
+                                }
+                            }
                         }
-                        return LRESULT(1); // swallow: scrcpy must not scroll too
                     }
                 }
             }
@@ -221,7 +456,7 @@ mod imp {
             std::thread::sleep(REFRESH_TICK);
             tick = tick.wrapping_add(1);
 
-            // Snapshot sessions (tiny lock scope — see state.rs).
+            // Snapshot display sessions (tiny lock scope — see state.rs).
             type SessionSnapshot = (String, Option<u32>, Option<(u32, u32)>, bool);
             let sessions: Vec<SessionSnapshot> = {
                 let Some(state) = app.try_state::<AppState>() else {
@@ -230,6 +465,7 @@ mod imp {
                 let list = match state.sessions.lock() {
                     Ok(map) => map
                         .values()
+                        .filter(|s| s.mode != "camera")
                         .map(|s| {
                             (
                                 s.serial.clone(),
@@ -247,84 +483,179 @@ mod imp {
                 list
             };
 
-            let Ok(mut reg) = lock_registry() else {
-                continue;
-            };
-            if reg.enabled.values().all(|&e| !e) {
-                // Nothing enabled: drop stale targets and stand down.
-                reg.targets.clear();
-                reg.enabled
-                    .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
-                ANY_ENABLED.store(false, Ordering::Relaxed);
+            if sessions.is_empty() {
+                if let Ok(mut reg) = lock_registry() {
+                    reg.targets.clear();
+                    reg.configs.clear();
+                    reg.paged_override.clear();
+                    reg.densities.clear();
+                    reg.multipliers.clear();
+                    ANY_ENABLED.store(false, Ordering::Relaxed);
+                }
+                size_cache.clear();
                 continue;
             }
 
-            // Flex sessions: refresh virtual display id/size occasionally
-            // (flex resizes the display when the window resizes).
-            if tick.is_multiple_of(VD_REFRESH_TICKS) {
-                if let Some(adb) = &adb {
-                    for (serial, ..) in sessions.iter().filter(|s| s.3) {
-                        if let Some((did, size)) = query_virtual_display(adb, serial) {
-                            if let Some(state) = app.try_state::<AppState>() {
-                                match state.sessions.lock() {
-                                    Ok(mut map) => {
-                                        if let Some(s) =
-                                            map.values_mut().find(|s| &s.serial == serial)
-                                        {
-                                            s.display_id = Some(did);
-                                            s.virtual_size = Some(size);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Sessions mutex poisoned in flex display refresher: {e}");
-                                    }
+            // Snapshot which serials need density or size queries BEFORE doing adb I/O
+            // so the registry mutex is never held across cross-process adb calls.
+            let known_densities: HashMap<String, DensityCache> = lock_registry()
+                .map(|r| r.densities.clone())
+                .unwrap_or_default();
+
+            let mut updated_densities: HashMap<String, DensityCache> = HashMap::new();
+            let mut updated_vd: HashMap<String, (u32, (u32, u32))> = HashMap::new();
+
+            if let Some(adb) = &adb {
+                for (serial, display_id, _virtual_size, is_flex) in &sessions {
+                    let prev = known_densities.get(serial).copied();
+                    let is_new = prev.is_none();
+                    let mut cache = prev.unwrap_or_default();
+                    let mut changed = false;
+
+                    // Query `wm density` at session start, and periodically for Mirror sessions.
+                    if is_new || (!is_flex && tick.is_multiple_of(MIRROR_DENSITY_TICKS)) {
+                        if let Some(raw) = adb_shell_output(adb, serial, &["wm", "density"]) {
+                            let wm = parse_wm_density(&raw);
+                            if wm.physical.is_some() {
+                                cache.native = wm.physical;
+                            }
+                            cache.mirror_override = wm.override_;
+                            changed = true;
+                        }
+                    }
+
+                    // Flex sessions: query `dumpsys display` at start and every VD_REFRESH_TICKS
+                    // for live virtual display id, size, and density.
+                    if *is_flex && (is_new || tick.is_multiple_of(VD_REFRESH_TICKS)) {
+                        if let Some(dump) = adb_shell_output(adb, serial, &["dumpsys", "display"]) {
+                            if let Some((did, size)) = parse_virtual_display(&dump) {
+                                updated_vd.insert(serial.clone(), (did, size));
+                                if let Some(dpi) =
+                                    parse_virtual_display_density_for_id(&dump, Some(did))
+                                {
+                                    cache.flex = Some(dpi);
+                                }
+                                changed = true;
+                            } else if let Some(dpi) =
+                                parse_virtual_display_density_for_id(&dump, *display_id)
+                            {
+                                cache.flex = Some(dpi);
+                                changed = true;
+                            }
+                            if cache.native.is_none() {
+                                if let Some(def_dpi) = parse_default_display_density(&dump) {
+                                    cache.native = Some(def_dpi);
+                                    changed = true;
                                 }
                             }
+                        }
+                    }
+
+                    // Fallback native density from `dumpsys display` if `wm density` lacked it.
+                    if !*is_flex && cache.native.is_none() {
+                        if let Some(dump) = adb_shell_output(adb, serial, &["dumpsys", "display"]) {
+                            if let Some(def_dpi) = parse_default_display_density(&dump) {
+                                cache.native = Some(def_dpi);
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    if !size_cache.contains_key(serial) && !is_flex {
+                        if let Some(sz) = query_device_size(adb, serial) {
+                            size_cache.insert(serial.clone(), sz);
+                        }
+                    }
+
+                    if changed || is_new {
+                        updated_densities.insert(serial.clone(), cache);
+                    }
+                }
+            }
+
+            // Apply updated Flex virtual display metadata to AppState.
+            if !updated_vd.is_empty() {
+                if let Some(state) = app.try_state::<AppState>() {
+                    match state.sessions.lock() {
+                        Ok(mut map) => {
+                            for (serial, (did, size)) in &updated_vd {
+                                if let Some(s) = map.values_mut().find(|s| &s.serial == serial) {
+                                    s.display_id = Some(*did);
+                                    s.virtual_size = Some(*size);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Sessions mutex poisoned in flex display refresher: {e}");
                         }
                     }
                 }
             }
 
+            // Resolve HWNDs outside the registry lock as well.
+            let resolved_hwnds: HashMap<String, isize> = sessions
+                .iter()
+                .filter_map(|(serial, ..)| resolve_mirror_hwnd(serial).map(|h| (serial.clone(), h)))
+                .collect();
+
+            let Ok(mut reg) = lock_registry() else {
+                continue;
+            };
+
+            for (serial, cache) in updated_densities {
+                reg.densities.insert(serial, cache);
+            }
+
             let mut targets: HashMap<isize, SwipeTarget> = HashMap::new();
-            for (serial, display_id, virtual_size, _is_flex) in &sessions {
-                let enabled = *reg.enabled.get(serial).unwrap_or(&false);
-                if !enabled {
-                    continue;
-                }
-                let Some(hwnd) = resolve_mirror_hwnd(serial) else {
+            for (serial, display_id, virtual_size, is_flex) in &sessions {
+                let cfg = effective_config_for(&reg, serial);
+                let mult = compute_multiplier_for(&reg, serial, *is_flex, &cfg);
+                reg.multipliers.insert(serial.clone(), mult);
+
+                let Some(&hwnd) = resolved_hwnds.get(serial) else {
                     continue;
                 };
-                let size = virtual_size.or_else(|| {
-                    if let Some(s) = size_cache.get(serial) {
-                        return Some(*s);
-                    }
-                    let s = adb.as_deref().and_then(|a| query_device_size(a, serial));
-                    if let Some(s) = s {
-                        size_cache.insert(serial.clone(), s);
-                    }
-                    s
-                });
-                let Some((w, h)) = size else { continue };
+                let (did, vsize) = updated_vd
+                    .get(serial)
+                    .map(|(d, sz)| (Some(*d), Some(*sz)))
+                    .unwrap_or((*display_id, *virtual_size));
+                let (w, h) = vsize
+                    .or_else(|| size_cache.get(serial).copied())
+                    .unwrap_or((1080, 1920));
                 targets.insert(
                     hwnd,
                     SwipeTarget {
                         serial: Arc::from(serial.as_str()),
-                        enabled: true,
-                        display_id: *display_id,
+                        hwnd,
+                        style: cfg.style,
+                        multiplier: mult,
+                        display_id: did,
                         w,
                         h,
                     },
                 );
             }
+
             reg.targets = targets;
-            reg.enabled
+            reg.configs
                 .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
-            let any = reg.enabled.values().any(|&e| e);
-            ANY_ENABLED.store(any, Ordering::Relaxed);
+            reg.paged_override
+                .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
+            reg.densities
+                .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
+            reg.multipliers
+                .retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
+            size_cache.retain(|serial, _| sessions.iter().any(|(s, ..)| s == serial));
+            sync_any_enabled(&reg);
         }
     }
 
     fn resolve_mirror_hwnd(serial: &str) -> Option<isize> {
+        if let Some(h) = crate::embed::get_embedded_scrcpy_hwnd(serial) {
+            if unsafe { IsWindow(Some(HWND(h as *mut _))).as_bool() } {
+                return Some(h);
+            }
+        }
         let title = format!("AnyLeap — {}", serial);
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let hwnd: HWND = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok()?;
@@ -336,7 +667,6 @@ mod imp {
         serial: &str,
         shell_args: &[&str],
     ) -> Option<String> {
-        use std::os::windows::process::CommandExt;
         let out = std::process::Command::new(adb)
             .env("ADB_MDNS_OPENSCREEN", "0")
             .env("ADB_MDNS_AUTO_CONNECT", "0")
@@ -377,46 +707,74 @@ mod imp {
         parse_wm_size(&adb_shell_output(adb, serial, &["wm", "size"])?)
     }
 
-    fn query_virtual_display(adb: &std::path::Path, serial: &str) -> Option<(u32, (u32, u32))> {
-        parse_virtual_display(&adb_shell_output(adb, serial, &["dumpsys", "display"])?)
-    }
-
     // ---- worker side -------------------------------------------------------
 
-    fn worker_thread(rx: mpsc::Receiver<SwipeEvent>, adb: Option<PathBuf>) {
-        // serial -> (last swipe start, wheel-delta accumulator)
+    fn worker_thread(rx: mpsc::Receiver<WheelEvent>, adb: Option<PathBuf>) {
+        // serial -> (last swipe start, wheel-delta accumulator) for Paged mode
         let mut per_serial: HashMap<Arc<str>, (Instant, i32)> = HashMap::new();
+        // (hwnd, axis) -> remainder accumulator for Smooth mode
+        let mut accumulators: HashMap<(isize, WheelAxis), AxisAccumulator> = HashMap::new();
 
         while let Ok(ev) = rx.recv() {
-            let Some(adb) = adb.as_deref() else { continue };
-            let entry = per_serial
-                .entry(ev.serial.clone())
-                .or_insert_with(|| (Instant::now() - SWIPE_COOLDOWN, 0));
-
-            // Events generated while a swipe was in flight are stale — the
-            // user was reacting to the previous state; don't replay them.
-            if ev.at < entry.0 {
-                continue;
-            }
-            entry.1 += ev.delta as i32;
-            if entry.1.abs() < WHEEL_DELTA {
-                continue; // free-spin wheels emit sub-notch deltas; accumulate
-            }
-            let wheel_down = entry.1 < 0;
-            entry.1 = 0;
-            if entry.0.elapsed() < SWIPE_COOLDOWN {
-                continue; // at most ~1 fling per cooldown, no backlog buildup
-            }
-
-            let (target, size) = {
-                let Ok(reg) = lock_registry() else { continue };
-                match reg.targets.values().find(|t| t.serial == ev.serial) {
-                    Some(t) => (t.display_id, (t.w, t.h)),
-                    None => continue,
+            match ev {
+                WheelEvent::Smooth {
+                    hwnd,
+                    axis,
+                    delta,
+                    key_state,
+                    screen_x,
+                    screen_y,
+                    multiplier,
+                    at,
+                } => {
+                    let acc = accumulators.entry((hwnd, axis)).or_default();
+                    let deltas = acc.push(delta, multiplier, at);
+                    let msg = match axis {
+                        WheelAxis::Vertical => WM_MOUSEWHEEL,
+                        WheelAxis::Horizontal => WM_MOUSEHWHEEL,
+                    };
+                    let lx = (screen_x as i16 as u16) as usize;
+                    let ly = (screen_y as i16 as u16) as usize;
+                    let lparam = LPARAM(((ly << 16) | lx) as isize);
+                    for d in deltas {
+                        let wparam = WPARAM((((d as u16) as usize) << 16) | (key_state as usize));
+                        unsafe {
+                            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, wparam, lparam);
+                        }
+                    }
                 }
-            };
-            run_swipe(adb, &ev.serial, target, size, wheel_down);
-            entry.0 = Instant::now();
+                WheelEvent::Paged { serial, delta, at } => {
+                    let Some(adb) = adb.as_deref() else { continue };
+                    let entry = per_serial
+                        .entry(serial.clone())
+                        .or_insert_with(|| (Instant::now() - SWIPE_COOLDOWN, 0));
+
+                    // Events generated while a swipe was in flight are stale — the
+                    // user was reacting to the previous state; don't replay them.
+                    if at < entry.0 {
+                        continue;
+                    }
+                    entry.1 += delta as i32;
+                    if entry.1.abs() < WHEEL_DELTA {
+                        continue; // free-spin wheels emit sub-notch deltas; accumulate
+                    }
+                    let wheel_down = entry.1 < 0;
+                    entry.1 = 0;
+                    if entry.0.elapsed() < SWIPE_COOLDOWN {
+                        continue; // at most ~1 fling per cooldown, no backlog buildup
+                    }
+
+                    let (target, size) = {
+                        let Ok(reg) = lock_registry() else { continue };
+                        match reg.targets.values().find(|t| t.serial == serial) {
+                            Some(t) => (t.display_id, (t.w, t.h)),
+                            None => continue,
+                        }
+                    };
+                    run_swipe(adb, &serial, target, size, wheel_down);
+                    entry.0 = Instant::now();
+                }
+            }
         }
     }
 
@@ -428,7 +786,6 @@ mod imp {
         (w, h): (u32, u32),
         wheel_down: bool,
     ) {
-        use std::os::windows::process::CommandExt;
         let x = (w / 2).to_string();
         let (y_from, y_to) = if wheel_down {
             (h * 60 / 100, h * 40 / 100)
@@ -480,9 +837,172 @@ mod imp {
     }
 }
 
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+
+    #[test]
+    fn passes_through_when_not_over_mirror_or_queue_full() {
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Vertical,
+                false,
+                ScrollStyle::Smooth,
+                2.5,
+                true,
+            ),
+            HookDecision::PassThrough
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Vertical,
+                true,
+                ScrollStyle::Smooth,
+                2.5,
+                false,
+            ),
+            HookDecision::PassThrough
+        );
+    }
+
+    #[test]
+    fn ctrl_alt_win_pass_through_shift_scales() {
+        for mods in [
+            ModifierState {
+                ctrl: true,
+                ..Default::default()
+            },
+            ModifierState {
+                alt: true,
+                ..Default::default()
+            },
+            ModifierState {
+                win: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                decide(
+                    mods,
+                    WheelAxis::Vertical,
+                    true,
+                    ScrollStyle::Smooth,
+                    2.5,
+                    true
+                ),
+                HookDecision::PassThrough
+            );
+            assert_eq!(
+                decide(
+                    mods,
+                    WheelAxis::Vertical,
+                    true,
+                    ScrollStyle::Paged,
+                    1.0,
+                    true
+                ),
+                HookDecision::PassThrough
+            );
+        }
+
+        assert_eq!(
+            decide(
+                ModifierState {
+                    shift: true,
+                    ..Default::default()
+                },
+                WheelAxis::Vertical,
+                true,
+                ScrollStyle::Smooth,
+                2.5,
+                true,
+            ),
+            HookDecision::Swallow
+        );
+    }
+
+    #[test]
+    fn smooth_1x_is_noop_and_higher_swallows_both_axes() {
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Vertical,
+                true,
+                ScrollStyle::Smooth,
+                1.0,
+                true,
+            ),
+            HookDecision::PassThrough
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Horizontal,
+                true,
+                ScrollStyle::Smooth,
+                1.0,
+                true,
+            ),
+            HookDecision::PassThrough
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Vertical,
+                true,
+                ScrollStyle::Smooth,
+                2.5,
+                true,
+            ),
+            HookDecision::Swallow
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Horizontal,
+                true,
+                ScrollStyle::Smooth,
+                2.5,
+                true,
+            ),
+            HookDecision::Swallow
+        );
+    }
+
+    #[test]
+    fn paged_swallows_vertical_and_passes_horizontal() {
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Vertical,
+                true,
+                ScrollStyle::Paged,
+                1.0,
+                true,
+            ),
+            HookDecision::Swallow
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Horizontal,
+                true,
+                ScrollStyle::Paged,
+                2.5,
+                true,
+            ),
+            HookDecision::PassThrough
+        );
+    }
+}
+
 use tauri::AppHandle;
 
-/// Enable/disable wheel-to-swipe for a device's mirror window.
+use crate::scroll_feel::ScrollConfig;
+
+/// Enable/disable wheel-to-swipe (Paged scrolling) for a device's mirror window.
 #[tauri::command]
 pub async fn set_wheel_swipe(app: AppHandle, serial: String, enabled: bool) -> Result<(), String> {
     #[cfg(windows)]
@@ -493,6 +1013,52 @@ pub async fn set_wheel_swipe(app: AppHandle, serial: String, enabled: bool) -> R
     {
         let _ = (app, serial, enabled);
         Err("Wheel-to-swipe is only supported on Windows".to_string())
+    }
+}
+
+/// Set scroll-feel configuration for a device's mirror session.
+#[tauri::command]
+pub async fn set_scroll_feel(
+    app: AppHandle,
+    serial: String,
+    config: ScrollConfig,
+) -> Result<Option<f32>, String> {
+    #[cfg(windows)]
+    {
+        imp::set_scroll_feel(&app, &serial, config)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, serial, config);
+        Ok(None)
+    }
+}
+
+/// Read the latest computed scroll multiplier for a running mirror session.
+#[tauri::command]
+pub async fn get_scroll_multiplier(serial: String) -> Result<Option<f32>, String> {
+    #[cfg(windows)]
+    {
+        Ok(imp::get_scroll_multiplier(&serial))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = serial;
+        Ok(None)
+    }
+}
+
+/// Read the active scroll style for a running mirror session.
+#[tauri::command]
+pub async fn get_scroll_style(serial: String) -> Result<Option<ScrollStyle>, String> {
+    #[cfg(windows)]
+    {
+        Ok(imp::get_scroll_style(&serial))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = serial;
+        Ok(None)
     }
 }
 

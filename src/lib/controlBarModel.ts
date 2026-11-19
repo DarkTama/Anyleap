@@ -164,7 +164,7 @@ export function controlBarGroups(
         b.swipeScroll &&
           state.showSwipe && {
             id: "swipeScroll",
-            label: "Mouse wheel swipes",
+            label: "Paged scrolling",
             kind: "toggle",
             pressed: state.swipeScroll,
             hint: SWIPE_HINT,
