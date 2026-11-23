@@ -80,6 +80,38 @@ struct SessionExited {
     stderr: String,
 }
 
+#[derive(Serialize, Clone)]
+struct SessionRestarting {
+    id: String,
+    serial: String,
+    reason: String,
+}
+
+pub(crate) fn mirror_label_for_serial(serial: &str) -> String {
+    format!(
+        "mirror-{}",
+        serial
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            })
+            .collect::<String>()
+    )
+}
+
+fn has_active_session_for_serial(app: &AppHandle, serial: &str) -> bool {
+    app.try_state::<AppState>()
+        .and_then(|st| {
+            st.sessions
+                .lock()
+                .ok()
+                .map(|map| map.values().any(|s| s.serial == serial))
+        })
+        .unwrap_or(false)
+}
+
 /// Core (Tier-1) settings, mirrored from the TypeScript `CoreSettings` type.
 /// Field names arrive camelCase over the IPC boundary.
 #[derive(Deserialize)]
@@ -360,6 +392,7 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
             a.push(format!("--new-display={}", s.flex_display_size));
         }
         a.push("--flex-display".into());
+        a.push("--print-fps".into());
         if s.hide_virtual_taskbar {
             a.push("--no-vd-system-decorations".into());
         }
@@ -896,23 +929,12 @@ pub(crate) fn spawn_session_inner<'a>(
     args: Vec<String>,
     retried: bool,
     mode: &'a str,
-    replace_existing: bool,
+    destroy_mirror_window: bool,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SessionInfo, String>> + Send + 'a>> {
     Box::pin(async move {
-        if replace_existing {
+        if destroy_mirror_window {
             crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-            crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-            let mirror_label = format!(
-                "mirror-{}",
-                serial
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                        c
-                    } else {
-                        '_'
-                    })
-                    .collect::<String>()
-            );
+            let mirror_label = mirror_label_for_serial(&serial);
             if let Some(w) = app.get_webview_window(&mirror_label) {
                 let _ = w.destroy();
             }
@@ -954,6 +976,18 @@ pub(crate) fn spawn_session_inner<'a>(
                 },
             );
 
+        let flex_watch_tx = if args.iter().any(|a| a == "--flex-display") {
+            let turn_screen_off = args.iter().any(|a| a == "--turn-screen-off");
+            Some(crate::flex_watch::spawn_flex_watcher(
+                app.clone(),
+                id.clone(),
+                serial.clone(),
+                turn_screen_off,
+            ))
+        } else {
+            None
+        };
+
         let _ = app.emit("session-started", info.clone());
 
         // Drain the child's event stream; accumulate stderr, clean up + notify on exit.
@@ -968,10 +1002,19 @@ pub(crate) fn spawn_session_inner<'a>(
             while let Some(ev) = rx.recv().await {
                 match ev {
                     CommandEvent::Stdout(bytes) => {
-                        // Flex mode: scrcpy announces its virtual display here.
+                        // Flex mode: scrcpy announces its virtual display and --print-fps here.
                         let text = String::from_utf8_lossy(&bytes);
                         if let Some((did, size)) = parse_new_display_line(&text) {
                             let _ = note_virtual_display(&app2, &id2, did, size);
+                        }
+                        if let Some(tx) = &flex_watch_tx {
+                            if crate::flex_watch::is_fps_counter_started(&text) {
+                                let _ =
+                                    tx.send(crate::flex_watch::FpsWatchEvent::FpsCounterStarted);
+                            }
+                            for fps in crate::flex_watch::parse_fps_samples(&text) {
+                                let _ = tx.send(crate::flex_watch::FpsWatchEvent::FpsSample(fps));
+                            }
                         }
                     }
                     CommandEvent::Stderr(bytes) => {
@@ -979,6 +1022,15 @@ pub(crate) fn spawn_session_inner<'a>(
                         // scrcpy logs may land on either stream depending on build.
                         if let Some((did, size)) = parse_new_display_line(&text) {
                             let _ = note_virtual_display(&app2, &id2, did, size);
+                        }
+                        if let Some(tx) = &flex_watch_tx {
+                            if crate::flex_watch::is_fps_counter_started(&text) {
+                                let _ =
+                                    tx.send(crate::flex_watch::FpsWatchEvent::FpsCounterStarted);
+                            }
+                            for fps in crate::flex_watch::parse_fps_samples(&text) {
+                                let _ = tx.send(crate::flex_watch::FpsWatchEvent::FpsSample(fps));
+                            }
                         }
                         stderr_buf.push_str(&text);
                         // Keep the tail; scrcpy's useful ERROR line is near the end.
@@ -1006,6 +1058,9 @@ pub(crate) fn spawn_session_inner<'a>(
                             .try_state::<AppState>()
                             .map(|st| st.take_user_stopped(&id2))
                             .unwrap_or(false);
+                        if user_stopped {
+                            crate::flex_watch::reset_backoff_for_serial(&serial2);
+                        }
                         if let Some(st) = app2.try_state::<AppState>() {
                             match st.sessions.lock() {
                                 Ok(mut s) => {
@@ -1016,32 +1071,30 @@ pub(crate) fn spawn_session_inner<'a>(
                                 }
                             }
                         }
-                        crate::embed::remove_embedded_scrcpy_hwnd(&serial2);
-                        let mirror_label = format!(
-                            "mirror-{}",
-                            serial2
-                                .chars()
-                                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                                    c
-                                } else {
-                                    '_'
-                                })
-                                .collect::<String>()
-                        );
-                        if let Some(w) = app2.get_webview_window(&mirror_label) {
-                            let _ = w.destroy();
-                        }
-                        let app_clean = app2.clone();
-                        let mirror_label_clean = mirror_label.clone();
-                        tauri::async_runtime::spawn(async move {
-                            for _ in 0..12 {
-                                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                                if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
-                                    let _ = w.destroy();
-                                    break;
-                                }
+                        crate::embed::remove_embedded_scrcpy_hwnd_for_pid(&serial2, pid);
+                        if !has_active_session_for_serial(&app2, &serial2) {
+                            let mirror_label = mirror_label_for_serial(&serial2);
+                            if let Some(w) = app2.get_webview_window(&mirror_label) {
+                                let _ = w.destroy();
                             }
-                        });
+                            let app_clean = app2.clone();
+                            let mirror_label_clean = mirror_label.clone();
+                            let serial_clean = serial2.clone();
+                            tauri::async_runtime::spawn(async move {
+                                for _ in 0..12 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                                    if has_active_session_for_serial(&app_clean, &serial_clean) {
+                                        break;
+                                    }
+                                    if let Some(w) =
+                                        app_clean.get_webview_window(&mirror_label_clean)
+                                    {
+                                        let _ = w.destroy();
+                                        break;
+                                    }
+                                }
+                            });
+                        }
                         let is_flex = args2.iter().any(|a| {
                             a == "--flex-display"
                                 || a == "--new-display"
@@ -1680,32 +1733,29 @@ pub async fn stop_mirror(
                 cleanup_flex_display(&app, &serial).await;
             }
         }
-        crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-        let mirror_label = format!(
-            "mirror-{}",
-            serial
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                    c
-                } else {
-                    '_'
-                })
-                .collect::<String>()
-        );
-        if let Some(w) = app.get_webview_window(&mirror_label) {
-            let _ = w.destroy();
-        }
-        let app_clean = app.clone();
-        let mirror_label_clean = mirror_label.clone();
-        tauri::async_runtime::spawn(async move {
-            for _ in 0..12 {
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
-                    let _ = w.destroy();
-                    break;
-                }
+        crate::flex_watch::reset_backoff_for_serial(&serial);
+        crate::embed::remove_embedded_scrcpy_hwnd_for_pid(&serial, pid);
+        if !has_active_session_for_serial(&app, &serial) {
+            let mirror_label = mirror_label_for_serial(&serial);
+            if let Some(w) = app.get_webview_window(&mirror_label) {
+                let _ = w.destroy();
             }
-        });
+            let app_clean = app.clone();
+            let mirror_label_clean = mirror_label.clone();
+            let serial_clean = serial.clone();
+            tauri::async_runtime::spawn(async move {
+                for _ in 0..12 {
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    if has_active_session_for_serial(&app_clean, &serial_clean) {
+                        break;
+                    }
+                    if let Some(w) = app_clean.get_webview_window(&mirror_label_clean) {
+                        let _ = w.destroy();
+                        break;
+                    }
+                }
+            });
+        }
         stop_child_gracefully(s.child, pid, &serial).await
     } else {
         Err("no such session".into())
@@ -2647,11 +2697,22 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         let args = build_scrcpy_args("SER", &s);
         assert!(args.contains(&"--new-display".to_string()));
         assert!(args.contains(&"--flex-display".to_string()));
+        assert!(args.contains(&"--print-fps".to_string()));
 
         s.flex_display_size = "1920x1080/240".into();
         let args = build_scrcpy_args("SER", &s);
         assert!(args.contains(&"--new-display=1920x1080/240".to_string()));
         assert!(!args.contains(&"--new-display".to_string()));
+        assert!(args.contains(&"--print-fps".to_string()));
+    }
+
+    #[test]
+    fn mirror_label_sanitizes_wireless_serials() {
+        assert_eq!(
+            mirror_label_for_serial("192.168.1.24:36431"),
+            "mirror-192_168_1_24_36431"
+        );
+        assert_eq!(mirror_label_for_serial("ABC-123_xyz"), "mirror-ABC-123_xyz");
     }
 
     #[test]
@@ -4068,6 +4129,14 @@ pub async fn start_recording(
         return Err("No active mirror session to record".into());
     };
     state.mark_restarting(&old.id);
+    let _ = app.emit(
+        "session-restarting",
+        SessionRestarting {
+            id: old.id.clone(),
+            serial: serial.clone(),
+            reason: "recording".into(),
+        },
+    );
 
     let model = query_device_model(&app, &serial).await;
     let now_secs = SystemTime::now()
@@ -4083,8 +4152,8 @@ pub async fn start_recording(
     let old_mode = old.mode.clone();
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
-    crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-    spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
+    crate::embed::remove_embedded_scrcpy_hwnd_for_pid(&serial, old.pid);
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, false).await
 }
 
 #[tauri::command]
@@ -4109,13 +4178,77 @@ pub async fn stop_recording(
         return Err("No active recording session".into());
     };
     state.mark_restarting(&old.id);
+    let _ = app.emit(
+        "session-restarting",
+        SessionRestarting {
+            id: old.id.clone(),
+            serial: serial.clone(),
+            reason: "recording".into(),
+        },
+    );
 
     let new_args = toggle_record_args(&old.args, None);
     let old_mode = old.mode.clone();
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
-    crate::embed::remove_embedded_scrcpy_hwnd(&serial);
-    spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
+    crate::embed::remove_embedded_scrcpy_hwnd_for_pid(&serial, old.pid);
+    spawn_session_inner(&app, serial, new_args, false, &old_mode, false).await
+}
+
+/// Restart a stalled Flex session in place without closing its embedded host window.
+pub(crate) async fn restart_flex_session_in_place(
+    app: &AppHandle,
+    session_id: &str,
+) -> Result<SessionInfo, String> {
+    let old = {
+        let state = app.state::<AppState>();
+        let mut map = state.sessions.lock().map_err(poison_error)?;
+        let removed = map.remove(session_id);
+        if let Some(ref s) = removed {
+            state.mark_restarting(&s.id);
+        }
+        removed
+    };
+
+    let Some(old) = old else {
+        return Err("Flex session already ended".into());
+    };
+
+    let serial = old.serial.clone();
+    let old_id = old.id.clone();
+    let old_pid = old.pid;
+    let old_mode = old.mode.clone();
+    let new_args = toggle_record_args(&old.args, None);
+
+    let _ = app.emit(
+        "session-restarting",
+        SessionRestarting {
+            id: old_id.clone(),
+            serial: serial.clone(),
+            reason: "flex-idle".into(),
+        },
+    );
+
+    let _ = stop_child_gracefully(old.child, old_pid, &serial).await;
+    crate::embed::remove_embedded_scrcpy_hwnd_for_pid(&serial, old_pid);
+
+    match spawn_session_inner(app, serial.clone(), new_args, false, &old_mode, false).await {
+        Ok(info) => Ok(info),
+        Err(err) => {
+            let _ = app.emit(
+                "session-exited",
+                SessionExited {
+                    id: old_id,
+                    serial,
+                    code: None,
+                    signal: None,
+                    last_error: err.clone(),
+                    stderr: String::new(),
+                },
+            );
+            Err(err)
+        }
+    }
 }
 
 pub(crate) fn validate_phone_number(raw: &str) -> Result<String, String> {

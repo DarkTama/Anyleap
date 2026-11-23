@@ -44,6 +44,15 @@ export const onSessionExited = (cb: EventCallback<SessionExited>): Promise<Unlis
 export const onSessionReplaced = (cb: EventCallback<string>): Promise<UnlistenFn> =>
   listen<string>("session-replaced", cb);
 
+export interface SessionRestarting {
+  id: string;
+  serial: string;
+  reason: string;
+}
+
+export const onSessionRestarting = (cb: EventCallback<SessionRestarting>): Promise<UnlistenFn> =>
+  listen<SessionRestarting>("session-restarting", cb);
+
 export interface MirrorClipboardImageResult {
   serial: string;
   dest?: string;

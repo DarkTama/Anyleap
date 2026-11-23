@@ -1,6 +1,7 @@
 mod commands;
 mod device_identity;
 mod embed;
+mod flex_watch;
 pub mod kvm;
 mod phone_files;
 // --- SPEC-27a ---
@@ -201,22 +202,29 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 let label = window.label();
                 if label.starts_with("mirror-") {
-                    let serial = label.trim_start_matches("mirror-");
                     let app = window.app_handle();
+                    let mut removed_sessions: Vec<(String, u32)> = Vec::new();
                     if let Some(state) = app.try_state::<AppState>() {
                         if let Ok(mut sessions) = state.sessions.lock() {
                             let to_remove: Vec<String> = sessions
                                 .iter()
-                                .filter(|(_, s)| s.serial == serial)
+                                .filter(|(_, s)| {
+                                    commands::mirror_label_for_serial(&s.serial) == label
+                                })
                                 .map(|(id, _)| id.clone())
                                 .collect();
                             for id in to_remove {
                                 state.mark_user_stopped(&id);
                                 if let Some(s) = sessions.remove(&id) {
+                                    removed_sessions.push((s.serial.clone(), s.pid));
                                     let _ = s.child.kill();
                                 }
                             }
                         }
+                    }
+                    for (serial, pid) in removed_sessions {
+                        flex_watch::reset_backoff_for_serial(&serial);
+                        embed::remove_embedded_scrcpy_hwnd_for_pid(&serial, pid);
                     }
                     return;
                 }

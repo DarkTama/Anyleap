@@ -14,6 +14,7 @@ import {
   listSessions,
   onSessionExited,
   onSessionReplaced,
+  onSessionRestarting,
   onSessionStarted,
   startMirror,
   stopMirror,
@@ -35,8 +36,13 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
-import { getNicknames, loadAppPrefs, loadModeDefaults, runFileSyncMigration } from "@/lib/persist";
-import { resolveLaunchSettings } from "@/lib/modeSettings";
+import { loadModeDefaults, getNicknames, loadAppPrefs, runFileSyncMigration } from "@/lib/persist";
+import { resolveLaunchSettings, type MirrorMode } from "@/lib/modeSettings";
+import {
+  mirrorLabelForSerial,
+  shouldCloseMirrorWindowOnExit,
+  shouldKeepMirrorWindowOpen,
+} from "@/lib/mirrorWindowPlan";
 import {
   onPhoneNotifications,
   phoneHubSetSettings,
@@ -94,6 +100,8 @@ function App() {
   const hudNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasHudNoticeRef = useRef(false);
   const hudOpIdRef = useRef(0);
+  const restartingSerialsRef = useRef<Set<string>>(new Set());
+  const restartingModesRef = useRef<Map<string, MirrorMode>>(new Map());
 
   const devices = useAppStore((s) => s.devices);
   const selectedSerial = useAppStore((s) => s.selectedSerial);
@@ -225,13 +233,29 @@ function App() {
   // Event listeners + initial hydrate.
   useEffect(() => {
     const unlisteners = [
-      onSessionStarted((e) => upsertSession(e.payload)),
+      onSessionRestarting((e) => {
+        restartingSerialsRef.current.add(e.payload.serial);
+        const prevMode = useAppStore.getState().sessionModes[e.payload.id];
+        if (prevMode) {
+          restartingModesRef.current.set(e.payload.serial, prevMode);
+        }
+      }),
+      onSessionStarted((e) => {
+        restartingSerialsRef.current.delete(e.payload.serial);
+        const savedMode = restartingModesRef.current.get(e.payload.serial);
+        restartingModesRef.current.delete(e.payload.serial);
+        upsertSession(e.payload, savedMode);
+      }),
       onSessionReplaced((e) => removeSession(e.payload)),
       onSessionExited((e) => {
         const state = useAppStore.getState();
         const endedSession = state.sessions.find((x) => x.id === e.payload.id);
         removeSession(e.payload.id);
         const targetSerial = e.payload.serial || endedSession?.serial;
+        if (targetSerial) {
+          restartingSerialsRef.current.delete(targetSerial);
+          restartingModesRef.current.delete(targetSerial);
+        }
         if (endedSession) {
           const resolved = resolveDeviceTarget(
             endedSession.serial,
@@ -272,8 +296,17 @@ function App() {
           }
         }
         if (targetSerial) {
-          const mirrorLabel = `mirror-${targetSerial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+          const mirrorLabel = mirrorLabelForSerial(targetSerial);
           const closeMirror = () => {
+            if (
+              !shouldCloseMirrorWindowOnExit({
+                exitedSerial: targetSerial,
+                activeSessions: useAppStore.getState().sessions,
+                restartingSerials: restartingSerialsRef.current,
+              })
+            ) {
+              return;
+            }
             WebviewWindow.getByLabel(mirrorLabel)
               .then((w) => w?.destroy().catch(() => w?.close().catch(() => {})))
               .catch(() => {});
@@ -398,26 +431,30 @@ function App() {
 
   // Floating, always-on-top control window: open while mirroring, close when idle.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const allWindows = await WebviewWindow.getAll();
+      if (cancelled) return;
       const existingControls = allWindows.find((w) => w.label === "controls");
-      const activeMirrorLabels = new Set(
-        sessions.map((s) => `mirror-${s.serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`)
-      );
 
-      // Close any mirror windows whose sessions have ended
+      // Close any mirror windows whose sessions have ended (unless restarting in-place).
       for (const w of allWindows) {
-        if (w.label.startsWith("mirror-") && !activeMirrorLabels.has(w.label)) {
+        if (
+          w.label.startsWith("mirror-") &&
+          !shouldKeepMirrorWindowOpen(w.label, sessions, restartingSerialsRef.current)
+        ) {
           await w.destroy().catch(() => w.close().catch(() => {}));
         }
       }
+      if (cancelled) return;
 
       if (sessions.length > 0) {
         const lastSession = sessions[sessions.length - 1];
         const serial = lastSession.serial;
         const mode = lastSession.mode || "display";
-        const mirrorLabel = `mirror-${serial.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+        const mirrorLabel = mirrorLabelForSerial(serial);
         const existingMirror = await WebviewWindow.getByLabel(mirrorLabel);
+        if (cancelled) return;
         const st = useAppStore.getState();
         const sessionMode = st.sessionModes[lastSession.id] ?? st.currentMode;
         const isEmbedded =
@@ -426,25 +463,53 @@ function App() {
             : resolveLaunchSettings(sessionMode, st.modeDefaults).embedded;
         const isFlex = sessionMode === "flex";
 
+        const openMirrorWindow = (attempt = 0) => {
+          if (cancelled) return;
+          if (!useAppStore.getState().sessions.some((s) => s.serial === serial)) return;
+          try {
+            const w = new WebviewWindow(mirrorLabel, {
+              url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}&flex=${isFlex ? 1 : 0}`,
+              title: mode === "camera" ? `AnyLeap Camera Studio — ${serial}` : `AnyLeap Workstation — ${serial}`,
+              width: 480,
+              height: 860,
+              resizable: true,
+              decorations: false,
+              transparent: false,
+            });
+            w.once("tauri://error", (e) => {
+              console.error("mirror window:", e);
+              if (!cancelled && attempt < 3) {
+                setTimeout(() => {
+                  void WebviewWindow.getByLabel(mirrorLabel).then((live) => {
+                    if (!live && !cancelled) openMirrorWindow(attempt + 1);
+                  });
+                }, 200);
+              }
+            });
+          } catch (e) {
+            console.error("mirror window create failed:", e);
+          }
+        };
+
         if (isEmbedded) {
           if (existingControls) {
             await existingControls.close().catch(() => {});
           }
           if (!existingMirror) {
-            try {
-              const w = new WebviewWindow(mirrorLabel, {
-                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}&flex=${isFlex ? 1 : 0}`,
-                title: mode === "camera" ? `AnyLeap Camera Studio — ${serial}` : `AnyLeap Workstation — ${serial}`,
-                width: 480,
-                height: 860,
-                resizable: true,
-                decorations: false,
-                transparent: false,
-              });
-              w.once("tauri://error", (e) => console.error("mirror window:", e));
-            } catch (e) {
-              console.error("mirror window create failed:", e);
-            }
+            openMirrorWindow();
+          } else if (!restartingSerialsRef.current.has(serial)) {
+            // If an old wrapper was mid-teardown when the session reopened, recreate once it finishes destroying.
+            void existingMirror
+              .once("tauri://destroyed", () => {
+                if (
+                  !cancelled &&
+                  !restartingSerialsRef.current.has(serial) &&
+                  useAppStore.getState().sessions.some((s) => s.serial === serial)
+                ) {
+                  openMirrorWindow();
+                }
+              })
+              .catch(() => {});
           }
         } else {
           if (existingMirror) {
@@ -476,6 +541,9 @@ function App() {
         if (existingControls) await existingControls.close().catch(() => {});
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [sessions]);
 
   // Manage native OS topmost Desktop HUD Overlay window
