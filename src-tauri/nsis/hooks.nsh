@@ -4,6 +4,10 @@
   ; Terminate running adb and scrcpy processes so AdbWinApi.dll, adb.exe,
   ; SDL3.dll, and other bundled dependencies can be overwritten during update.
   DetailPrint "Stopping background adb and scrcpy processes..."
+  ; Stop AnyLeap first: while it runs it restarts the adb server right away,
+  ; which keeps AdbWinApi.dll locked. No /T: the updater may have launched this installer.
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM anyleap.exe'
+  Pop $0
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM adb.exe /T'
   Pop $0
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM scrcpy.exe /T'
@@ -20,6 +24,10 @@
 !macro NSIS_HOOK_PREUNINSTALL
   ; Terminate running adb and scrcpy processes before removing installation files.
   DetailPrint "Stopping background adb and scrcpy processes..."
+  ; Stop AnyLeap first: while it runs it restarts the adb server right away,
+  ; which keeps AdbWinApi.dll locked. No /T: the updater may have launched this installer.
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM anyleap.exe'
+  Pop $0
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM adb.exe /T'
   Pop $0
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM scrcpy.exe /T'
