@@ -17,6 +17,12 @@ import type { ControlConfig } from "@/lib/controlConfig";
 import { DEFAULT_CONTROL_CONFIG } from "@/lib/controlConfig";
 import type { AppPrefs } from "@/lib/persist";
 import { DEFAULT_APP_PREFS } from "@/lib/persist";
+import {
+  DEFAULT_PHONE_UPLOAD_DIR,
+  DEFAULT_TRANSFER_FOLDERS,
+  type TransferFoldersSettings,
+} from "@/lib/transferFolders";
+import type { DefaultTransferFolders } from "@/lib/tauri";
 import type { StudioMode } from "@/components/deck/LaunchMatrix";
 
 interface AppStore {
@@ -31,6 +37,8 @@ interface AppStore {
   sessionModes: Record<string, MirrorMode>;
   controlConfig: ControlConfig;
   appPrefs: AppPrefs;
+  transferFolders: TransferFoldersSettings;
+  defaultTransferFolders: DefaultTransferFolders;
   error: string | null;
   deviceToggles: Record<string, { screenOff?: boolean; asleep?: boolean; swipeScroll?: boolean }>;
   nicknames: Record<string, string>;
@@ -71,6 +79,9 @@ interface AppStore {
   ) => void;
   setControlConfig: (c: ControlConfig) => void;
   setAppPrefs: (p: AppPrefs) => void;
+  setTransferFolders: (t: TransferFoldersSettings) => void;
+  updateTransferFolders: (patch: Partial<TransferFoldersSettings>) => void;
+  setDefaultTransferFolders: (d: DefaultTransferFolders) => void;
   setError: (e: string | null) => void;
   setDeviceToggle: (serial: string, key: "screenOff" | "asleep" | "swipeScroll", val: boolean) => void;
 }
@@ -84,6 +95,11 @@ export const useAppStore = create<AppStore>((set) => ({
   sessionModes: {},
   controlConfig: DEFAULT_CONTROL_CONFIG,
   appPrefs: DEFAULT_APP_PREFS,
+  transferFolders: { ...DEFAULT_TRANSFER_FOLDERS },
+  defaultTransferFolders: {
+    defaultReceiveDir: "",
+    defaultPhoneUploadDir: DEFAULT_PHONE_UPLOAD_DIR,
+  },
   error: null,
   deviceToggles: {},
   nicknames: {},
@@ -188,6 +204,12 @@ export const useAppStore = create<AppStore>((set) => ({
     })),
   setControlConfig: (controlConfig) => set({ controlConfig }),
   setAppPrefs: (appPrefs) => set({ appPrefs }),
+  setTransferFolders: (transferFolders) => set({ transferFolders }),
+  updateTransferFolders: (patch) =>
+    set((st) => ({
+      transferFolders: { ...st.transferFolders, ...patch },
+    })),
+  setDefaultTransferFolders: (defaultTransferFolders) => set({ defaultTransferFolders }),
   setError: (error) => set({ error }),
   setDeviceToggle: (serial, key, val) =>
     set((st) => ({

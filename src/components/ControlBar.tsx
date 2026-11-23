@@ -203,7 +203,7 @@ export function ControlBar({
       if (wasRecording) {
         notify({
           text: "Recording saved",
-          actionLabel: savedPath ? "Open recording folder" : undefined,
+          actionLabel: savedPath ? "Show in folder" : undefined,
           onAction: savedPath ? () => revealItemInDir(savedPath).catch(err) : undefined,
         });
       }

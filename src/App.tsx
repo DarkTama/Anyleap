@@ -11,14 +11,16 @@ import { PairDialog } from "@/components/PairDialog";
 import { useAppStore } from "@/store/useAppStore";
 import {
   getDeviceNotifications,
+  getDefaultTransferFolders,
   listSessions,
   onSessionExited,
   onSessionReplaced,
   onSessionRestarting,
   onSessionStarted,
+  setTransferFoldersConfig,
   startMirror,
   stopMirror,
-  takeScreenshot,
+  saveScreenshot,
   startRecording,
   stopRecording,
   openUrlOnDevice,
@@ -37,7 +39,13 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
-import { getNicknames, loadAppPrefs, loadModeDefaults, runFileSyncMigration } from "@/lib/persist";
+import {
+  getNicknames,
+  loadAppPrefs,
+  loadModeDefaults,
+  loadTransferFolders,
+  runFileSyncMigration,
+} from "@/lib/persist";
 import { resolveLaunchSettings, toScrollConfig, type MirrorMode } from "@/lib/modeSettings";
 import { launchMode } from "@/lib/modeActions";
 import {
@@ -68,8 +76,16 @@ import type { StudioMode } from "@/components/deck/LaunchMatrix";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 const EMPTY_NOTIFICATIONS: PhoneHubNotification[] = [];
+
+interface AppToast {
+  text: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}
 
 
 function App() {
@@ -82,6 +98,8 @@ function App() {
   const setControlConfig = useAppStore((s) => s.setControlConfig);
   const setModeDefaults = useAppStore((s) => s.setModeDefaults);
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
+  const setTransferFolders = useAppStore((s) => s.setTransferFolders);
+  const setDefaultTransferFolders = useAppStore((s) => s.setDefaultTransferFolders);
   const setError = useAppStore((s) => s.setError);
   const setNicknames = useAppStore((s) => s.setNicknames);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
@@ -95,7 +113,7 @@ function App() {
   const prevOnlineSerialsRef = useRef<Set<string>>(new Set());
   const [pairOpen, setPairOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<AppToast | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hudNotice, setHudNotice] = useState<string | null>(null);
   const hudNoticeRef = useRef<string | null>(null);
@@ -345,7 +363,7 @@ function App() {
           kvmState.topology.computers.find((c) => !c.is_local)?.name ||
           "Linked PC";
         const msg = `Can't move to ${linkedName} while an administrator window is focused`;
-        setToast(msg);
+        setToast({ text: msg });
         if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
         toastTimerRef.current = setTimeout(() => setToast(null), 4000);
         hudNoticeRef.current = msg;
@@ -416,6 +434,15 @@ function App() {
         if (p.checkUpdates) void useAppUpdateStore.getState().checkForUpdates();
       })
       .catch(() => {});
+    getDefaultTransferFolders()
+      .then(setDefaultTransferFolders)
+      .catch(() => {});
+    loadTransferFolders()
+      .then((tf) => {
+        setTransferFolders(tf);
+        void setTransferFoldersConfig(tf.receiveDir, tf.phoneUploadDir).catch(() => {});
+      })
+      .catch(() => {});
     getNicknames().then(setNicknames).catch(() => {});
     void useActivityStore.getState().load();
     void useKvmStore.getState().setAllowControl(loadAllowControl());
@@ -427,7 +454,7 @@ function App() {
       get: () => useKvmStore.getState().settings,
       update: (patch) => useKvmStore.getState().updateSettings(patch),
     }).catch(() => {});
-  }, [setModeDefaults, setAppPrefs, setNicknames]);
+  }, [setModeDefaults, setAppPrefs, setTransferFolders, setDefaultTransferFolders, setNicknames]);
 
   // Global Ctrl+K shortcut for Command Palette
   useEffect(() => {
@@ -858,22 +885,44 @@ function App() {
       togglePhoneDnd: () => togglePhone("dnd"),
       takeScreenshot: () => {
         if (!selectedSerial) return;
-        void takeScreenshot(selectedSerial)
-          .then((bytes) => {
-            const blob = new Blob([new Uint8Array(bytes)], { type: "image/png" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `anyleap-${selectedSerial.replace(/[^a-zA-Z0-9_-]/g, "_")}-${Date.now()}.png`;
-            a.click();
-            URL.revokeObjectURL(url);
-            logActivity({
-              kind: "screenshot",
-              title: `Screenshot saved`,
-              detail: selectedSerial,
+        void (async () => {
+          const { transferFolders, defaultTransferFolders } = useAppStore.getState();
+          let destFile: string | null = null;
+          if (transferFolders.askWhereToSave) {
+            const safeSerial = selectedSerial.replace(/[^a-zA-Z0-9_-]/g, "_") || "device";
+            const dir =
+              transferFolders.receiveDir || defaultTransferFolders.defaultReceiveDir || "";
+            const defaultFileName = `Screenshot_${safeSerial}_${Date.now()}.png`;
+            const defaultPath = dir
+              ? `${dir.replace(/[\\/]+$/, "")}\\${defaultFileName}`
+              : defaultFileName;
+            const picked = await saveDialog({
+              defaultPath,
+              filters: [{ name: "PNG Image", extensions: ["png"] }],
             });
-          })
-          .catch((err) => setError(String(err)));
+            if (!picked) return;
+            destFile = picked;
+          }
+          const res = await saveScreenshot(selectedSerial, destFile);
+          logActivity({
+            kind: "screenshot",
+            title: "Screenshot saved",
+            detail: res.savedPath,
+          });
+          const actualDir = res.savedPath.replace(/[\\/][^\\/]+$/, "") || res.savedPath;
+          const text = res.fallbackFrom
+            ? `Could not save to "${res.fallbackFrom}" — saved to "${actualDir}" instead.`
+            : "Screenshot saved";
+          setToast({
+            text,
+            actionLabel: "Show in folder",
+            onAction: () => {
+              void revealItemInDir(res.savedPath).catch((err) => setError(String(err)));
+            },
+          });
+          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+          toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+        })().catch((err) => setError(String(err)));
       },
       openPair: () => setPairOpen(true),
       openDoctor: () => openDoctor(selectedSerial),
@@ -898,7 +947,7 @@ function App() {
         const kvm = useKvmStore.getState();
         const next = !kvm.settings.continuityAudioBridge;
         kvm.updateSettings({ continuityAudioBridge: next });
-        setToast(next ? "Audio bridge enabled" : "Audio bridge disabled");
+        setToast({ text: next ? "Audio bridge enabled" : "Audio bridge disabled" });
         if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
         toastTimerRef.current = setTimeout(() => setToast(null), 2500);
       },
@@ -1005,10 +1054,24 @@ function App() {
       <UpdateModal />
       {toast && (
         <div
-          className="popover-panel pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 z-50 whitespace-nowrap rounded-lg bg-ink-800 border border-gold-400/50 px-3 py-1.5 text-xs text-gold-400 shadow-elevated"
+          className={`popover-panel absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 whitespace-nowrap rounded-lg bg-ink-800 border border-gold-400/50 px-3 py-1.5 text-xs text-gold-400 shadow-elevated ${
+            toast.actionLabel ? "pointer-events-auto" : "pointer-events-none"
+          }`}
           style={{ "--transform-origin": "bottom center" } as React.CSSProperties}
         >
-          {toast}
+          <span>{toast.text}</span>
+          {toast.actionLabel && toast.onAction && (
+            <button
+              type="button"
+              onClick={() => {
+                toast.onAction?.();
+                setToast(null);
+              }}
+              className="btn-tactile rounded border border-gold-400/50 bg-ink-950 px-2 py-0.5 text-[11px] font-semibold text-gold-400 hover:bg-ink-900 cursor-pointer"
+            >
+              {toast.actionLabel}
+            </button>
+          )}
         </div>
       )}
     </div>

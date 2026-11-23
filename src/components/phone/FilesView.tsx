@@ -1,22 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   ChevronRight,
   Download,
   File,
   Folder,
+  FolderOpen,
   Loader2,
   RefreshCw,
   Trash2,
   Upload,
 } from "lucide-react";
+import { downloadDir } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   deleteDevicePath,
   listDeviceDir,
   pullDeviceFile,
   pushToDevice,
 } from "@/lib/tauri";
+import {
+  applyRangeSelection,
+  emptyRangeSelection,
+  type RangeSelectionState,
+} from "@/lib/rangeSelection";
+import { useAppStore } from "@/store/useAppStore";
 import { logActivity } from "@/stores/activityStore";
 import type { DeviceEntry } from "@/lib/types";
 
@@ -53,18 +61,29 @@ function formatDate(unix: number): string {
 
 interface FilesViewProps {
   serial: string;
+  onCurrentPathChange?: (path: string) => void;
+  reloadKey?: number;
 }
 
-export function FilesView({ serial }: FilesViewProps) {
+export function FilesView({
+  serial,
+  onCurrentPathChange,
+  reloadKey = 0,
+}: FilesViewProps) {
   const [currentPath, setCurrentPath] = useState(DEVICE_ROOT);
+  const currentPathRef = useRef(DEVICE_ROOT);
   const [entries, setEntries] = useState<DeviceEntry[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selection, setSelection] = useState<RangeSelectionState>(emptyRangeSelection);
   const [loading, setLoading] = useState(false);
   const [busyOp, setBusyOp] = useState<string | null>(null);
+  const transferFolders = useAppStore((s) => s.transferFolders);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [lastSavedPath, setLastSavedPath] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
+
+  const orderedPaths = useMemo(() => entries.map((e) => e.path), [entries]);
+  const selected = selection.selected;
 
   const loadDir = useCallback(
     async (targetPath: string) => {
@@ -74,20 +93,33 @@ export function FilesView({ serial }: FilesViewProps) {
       try {
         const list = await listDeviceDir(serial, targetPath);
         setEntries(list);
+        currentPathRef.current = targetPath;
         setCurrentPath(targetPath);
-        setSelected(new Set());
+        onCurrentPathChange?.(targetPath);
+        setSelection(emptyRangeSelection());
       } catch (e) {
         setError(String(e));
       } finally {
         setLoading(false);
       }
     },
-    [serial],
+    [serial, onCurrentPathChange],
   );
 
   useEffect(() => {
+    currentPathRef.current = DEVICE_ROOT;
+    onCurrentPathChange?.(DEVICE_ROOT);
     void loadDir(DEVICE_ROOT);
-  }, [serial, loadDir]);
+  }, [serial, loadDir, onCurrentPathChange]);
+
+  const lastReloadKeyRef = useRef(reloadKey);
+  useEffect(() => {
+    if (reloadKey === lastReloadKeyRef.current) return;
+    lastReloadKeyRef.current = reloadKey;
+    if (reloadKey > 0) {
+      void loadDir(currentPathRef.current);
+    }
+  }, [reloadKey, loadDir]);
 
   const handleUploadPaths = useCallback(
     async (localPaths: string[]) => {
@@ -100,9 +132,9 @@ export function FilesView({ serial }: FilesViewProps) {
         logActivity({
           kind: "files",
           title: `Sent ${localPaths.length} file(s) to phone`,
-          detail: serial,
+          detail: `${serial} → ${currentPath}`,
         });
-        setStatusMsg(`Uploaded ${localPaths.length} item(s)`);
+        setStatusMsg(`Uploaded ${localPaths.length} item(s) to ${currentPath}`);
         await loadDir(currentPath);
       } catch (e) {
         setError(String(e));
@@ -113,47 +145,48 @@ export function FilesView({ serial }: FilesViewProps) {
     [serial, currentPath, loadDir],
   );
 
-  // OS drag-and-drop onto the file list via Tauri webview event
-  useEffect(() => {
-    let cancelled = false;
-    const unlistenPromise = getCurrentWebview().onDragDropEvent((event) => {
-      if (cancelled) return;
-      if (event.payload.type === "over" || event.payload.type === "enter") {
-        setDragOver(true);
-      } else if (event.payload.type === "leave") {
-        setDragOver(false);
-      } else if (event.payload.type === "drop") {
-        setDragOver(false);
-        if (event.payload.paths.length > 0) {
-          void handleUploadPaths(event.payload.paths);
-        }
-      }
-    });
-    return () => {
-      cancelled = true;
-      void unlistenPromise.then((un) => un());
-    };
-  }, [handleUploadPaths]);
-
   async function handleDownloadSelected() {
     const selectedEntries = entries.filter((e) => selected.has(e.path));
     if (!selectedEntries.length) return;
-    const dest = await openDialog({ directory: true, multiple: false });
-    if (!dest || typeof dest !== "string") return;
+    let explicitDest: string | null = null;
+    if (transferFolders.askWhereToSave) {
+      const defaultPath =
+        transferFolders.receiveDir ?? (await downloadDir().catch(() => undefined));
+      const dest = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath,
+      });
+      if (!dest || typeof dest !== "string") return;
+      explicitDest = dest;
+    }
 
     setBusyOp(`Downloading ${selectedEntries.length} item(s)...`);
     setError(null);
     setStatusMsg(null);
+    setLastSavedPath(null);
+    let lastPath: string | null = null;
+    let fallbackNotice: string | null = null;
     try {
       for (const entry of selectedEntries) {
-        await pullDeviceFile(serial, entry.path, dest);
+        const res = await pullDeviceFile(serial, entry.path, explicitDest);
+        lastPath = res.savedPath;
+        if (res.fallbackFrom && !fallbackNotice) {
+          const actualDir = res.savedPath.replace(/[\\/][^\\/]+$/, "") || res.savedPath;
+          fallbackNotice = `Could not save to "${res.fallbackFrom}" — saved to "${actualDir}" instead.`;
+        }
         logActivity({
           kind: "files",
           title: `Downloaded ${entry.name}`,
-          detail: serial,
+          detail: res.savedPath,
         });
       }
-      setStatusMsg(`Downloaded ${selectedEntries.length} item(s) to ${dest}`);
+      setLastSavedPath(lastPath);
+      const savedDir =
+        lastPath?.replace(/[\\/][^\\/]+$/, "") || explicitDest || "receive folder";
+      setStatusMsg(
+        fallbackNotice ?? `Downloaded ${selectedEntries.length} item(s) to ${savedDir}`,
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -194,21 +227,30 @@ export function FilesView({ serial }: FilesViewProps) {
     }
   }
 
-  function toggleSelect(path: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+  function selectPath(
+    path: string,
+    e: MouseEvent<HTMLElement>,
+    toggleIfSole: boolean,
+  ) {
+    setSelection((prev) =>
+      applyRangeSelection(orderedPaths, prev, path, {
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        toggleIfSole,
+      }),
+    );
     setConfirmDelete(false);
   }
 
   function toggleAll() {
     if (selected.size === entries.length && entries.length > 0) {
-      setSelected(new Set());
+      setSelection(emptyRangeSelection());
     } else {
-      setSelected(new Set(entries.map((e) => e.path)));
+      setSelection({
+        selected: new Set(entries.map((e) => e.path)),
+        anchorId: null,
+      });
     }
     setConfirmDelete(false);
   }
@@ -249,11 +291,14 @@ export function FilesView({ serial }: FilesViewProps) {
           <button
             type="button"
             disabled={!!busyOp}
+            title={`Upload to ${currentPath}`}
             onClick={() => void handleUploadClick()}
             className="btn-tactile flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-800 px-2.5 py-1 text-xs font-medium text-text-strong hover:border-text-muted disabled:opacity-50 cursor-pointer"
           >
-            <Upload className="h-3.5 w-3.5" />
-            Upload
+            <Upload className="h-3.5 w-3.5 shrink-0" />
+            <span className="max-w-[220px] truncate">
+              Upload to {currentPath}
+            </span>
           </button>
           <button
             type="button"
@@ -340,17 +385,23 @@ export function FilesView({ serial }: FilesViewProps) {
         </div>
       )}
       {statusMsg && !error && (
-        <div className="border-b border-status-success/40 bg-status-success-bg px-4 py-1.5 text-xs text-status-success">
-          {statusMsg}
+        <div className="flex items-center justify-between gap-2 border-b border-status-success/40 bg-status-success-bg px-4 py-1.5 text-xs text-status-success">
+          <span className="truncate">{statusMsg}</span>
+          {lastSavedPath && (
+            <button
+              type="button"
+              onClick={() => void revealItemInDir(lastSavedPath).catch(() => {})}
+              className="btn-tactile inline-flex shrink-0 items-center gap-1 rounded border border-status-success/40 bg-ink-950/60 px-2 py-0.5 text-[11px] font-medium text-text-strong hover:border-status-success cursor-pointer"
+            >
+              <FolderOpen className="h-3 w-3" />
+              Show in folder
+            </button>
+          )}
         </div>
       )}
 
-      {/* File table + drop target */}
-      <div
-        className={`relative flex-1 overflow-y-auto ${
-          dragOver ? "ring-2 ring-inset ring-gold-400/60 bg-gold-400/10" : ""
-        }`}
-      >
+      {/* File table */}
+      <div className="relative flex-1 overflow-y-auto select-none">
         <table className="w-full text-left text-xs">
           <thead className="sticky top-0 border-b border-ink-700 bg-ink-900 text-[11px] uppercase tracking-wider text-text-muted">
             <tr>
@@ -373,6 +424,11 @@ export function FilesView({ serial }: FilesViewProps) {
               return (
                 <tr
                   key={entry.path}
+                  onClick={(e) => {
+                    if (e.shiftKey || e.ctrlKey || e.metaKey || !entry.is_dir) {
+                      selectPath(entry.path, e, false);
+                    }
+                  }}
                   onDoubleClick={() => {
                     if (entry.is_dir) void loadDir(entry.path);
                   }}
@@ -384,7 +440,11 @@ export function FilesView({ serial }: FilesViewProps) {
                     <input
                       type="checkbox"
                       checked={isSelected}
-                      onChange={() => toggleSelect(entry.path)}
+                      onChange={() => {}}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectPath(entry.path, e, true);
+                      }}
                       className="h-3.5 w-3.5 accent-gold-400"
                     />
                   </td>
@@ -392,8 +452,12 @@ export function FilesView({ serial }: FilesViewProps) {
                     className={`px-2 py-2 flex items-center gap-2 ${
                       entry.is_dir ? "cursor-pointer text-text-strong font-medium" : "text-text"
                     }`}
-                    onClick={() => {
-                      if (entry.is_dir) void loadDir(entry.path);
+                    onClick={(e) => {
+                      if (e.shiftKey || e.ctrlKey || e.metaKey) return;
+                      if (entry.is_dir) {
+                        e.stopPropagation();
+                        void loadDir(entry.path);
+                      }
                     }}
                   >
                     {entry.is_dir ? (
@@ -418,7 +482,9 @@ export function FilesView({ serial }: FilesViewProps) {
         {!loading && entries.length === 0 && (
           <div className="flex h-48 flex-col items-center justify-center text-xs text-text-muted">
             <p>This folder is empty</p>
-            <p className="mt-1 text-[11px] text-text-muted">Drop files here to upload</p>
+            <p className="mt-1 text-[11px] text-text-muted">
+              Drop files here to upload to {currentPath}
+            </p>
           </div>
         )}
       </div>

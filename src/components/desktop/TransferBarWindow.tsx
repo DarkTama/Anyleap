@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Download, Laptop, X } from "lucide-react";
+import { AlertTriangle, Check, Download, FolderOpen, Laptop, X } from "lucide-react";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   kvmCancelTransfer,
   kvmFetchClip,
@@ -185,7 +186,7 @@ export function TransferBarWindow() {
       {visible.length > 0 && (
         <div className="hud-notice flex w-full flex-col gap-1.5 rounded-2xl border border-gold-400/50 bg-ink-900 px-3 py-2 text-[11px] text-text-strong">
           {visible.map((item) => {
-            const label = getTransferKindLabel(item.kind, item.status);
+            const label = getTransferKindLabel(item.kind, item.status, item.savedPath);
             const isDone = item.status === "done";
             const isFailed = item.status === "failed";
             const isCancelled = item.status === "cancelled";
@@ -264,9 +265,20 @@ export function TransferBarWindow() {
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <span className="font-mono text-[10px] text-text-muted">
-                      {item.pct}%
-                    </span>
+                    {isDone && item.savedPath ? (
+                      <button
+                        type="button"
+                        onClick={() => void revealItemInDir(item.savedPath!).catch(() => {})}
+                        className="btn-tactile inline-flex items-center gap-1 rounded-md border border-status-success/40 bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-text-strong hover:border-status-success cursor-pointer"
+                      >
+                        <FolderOpen className="h-3 w-3" />
+                        Show in folder
+                      </button>
+                    ) : (
+                      <span className="font-mono text-[10px] text-text-muted">
+                        {item.pct}%
+                      </span>
+                    )}
                     {isActive && (
                       <button
                         type="button"

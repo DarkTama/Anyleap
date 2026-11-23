@@ -1,6 +1,6 @@
 # SPEC-31: Default Transfer Folders
 
-> **Status:** Draft (2026-11-23)
+> **Status:** Implemented (2026-11-23)
 > **Scope:** Phone Hub downloads/uploads (`src/components/phone/`, `src-tauri/src/phone_files.rs`), phone mirroring captures & drops (`src/App.tsx`, `src/components/EmbeddedMirrorWindow.tsx`, `src-tauri/src/commands.rs`), multi-PC KVM file receives (`src-tauri/src/kvm/`, `src/components/computers/`, `src/components/desktop/TransferBarWindow.tsx`), and Settings (`src/components/settings/`, `src/lib/settingsStore.ts`).
 > **Related:** SPEC-21 (Phone Files & Photos), SPEC-25a (Files Across PCs), SPEC-25c (Open on Linked PC), SPEC-27 (Phone Hub), SPEC-28 (Settings Redesign).
 > **Plan:** `docs/superpowers/plans/2026-11-23-spec31-default-transfer-folders.md`
@@ -226,7 +226,7 @@ Copy compliance check (`SPEC-28 §8.5`):
   - `prepare_receive_dir`: succeeds on valid writable directory (`fallback_from == None`); falls back cleanly when configured path is missing/unwritable or points to an existing regular file (`fallback_from == Some(configured)`).
   - `normalize_phone_upload_dir`: accepts `/sdcard/Download`, `/sdcard/Documents/Work/`, `/storage/emulated/0/Download`; rejects empty, `..` traversal, relative paths, quotes/newlines/control chars, and `/data/local/tmp`.
 - **`commands.rs`:**
-  - `build_scrcpy_args`: passes `--push-target=<dir>` when `phone_upload_dir` is set (verify exact flag compatibility against bundled `scrcpy 4.0 --help` before implementation).
+  - `build_scrcpy_args`: passes `--push-target=<dir>` when `phone_upload_dir` is set (verified against bundled `scrcpy 5.0.1 --help`).
   - `save_screenshot_to_dir` helper: writes PNG into resolved dir with `unique_dest_path` collision handling and returns `savedPath` + `fallbackFrom`.
 - **`kvm/staging.rs` & `kvm/files.rs`:**
   - Updating `transfer_paths` live config changes the destination used by subsequent `StreamHeader::File` and `DownloadsFallback` transfers without restarting the KVM client or server.
@@ -270,7 +270,7 @@ Each phase compiles, passes all five quality gates (`AGENTS.md` §2), and ships 
    - `phone_files.rs` uses `transfer_paths::prepare_receive_dir` when `dest_dir` is omitted (`pull_device_file` returns `{ savedPath, fallbackFrom }`).
    - `GalleryView.tsx` & `FilesView.tsx` respect `askWhereToSave` and add **"Show in folder"** + fallback notice.
    - New `save_screenshot` Rust command replacing `<a download>` in `App.tsx` + toast with **"Show in folder"**.
-   - PC → Phone: `--push-target` in `build_scrcpy_args` (verified against `scrcpy 4.0`), `push_clipboard_image` and `handle_dropped_files` read live `phoneUploadDir`.
+   - PC → Phone: `--push-target` in `build_scrcpy_args` (verified against `scrcpy 5.0.1`), `push_clipboard_image` and `handle_dropped_files` read live `phoneUploadDir`.
    - Consistent `"Show in folder"` label on `ControlBar.tsx` recording stop toast.
 3. **Phase 3 — KVM live destination, Transfer Bar & Activity Feed "Show in folder".**
    - Replace `kvm/commands.rs::get_download_dir()` and static `download_dir` captures in `kvm/client.rs` / `kvm/server.rs` with live calls to `transfer_paths::prepare_receive_dir()`.

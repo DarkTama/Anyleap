@@ -44,8 +44,17 @@ describe("filterSettings", () => {
   it("every control id has exactly one registry entry", () => {
     const ids = REGISTRY.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
-    for (const id of ["K-01", "K-02", "T-12", "C-03", "M-29"]) expect(ids).toContain(id);
+    for (const id of ["K-01", "K-02", "T-12", "C-03", "M-29", "F-01", "F-02", "F-03"]) {
+      expect(ids).toContain(id);
+    }
     expect(ids).not.toContain("K-08");
     expect(ids).not.toContain("M-13");
+  });
+
+  it("matches F-01..F-03 transfer folder settings by label, helper, and keywords", () => {
+    expect(filterSettings("folder").matches.has("F-01")).toBe(true);
+    expect(filterSettings("prompt").matches.has("F-02")).toBe(true);
+    expect(filterSettings("sdcard").matches.has("F-03")).toBe(true);
+    expect(filterSettings("upload").matches.has("F-03")).toBe(true);
   });
 });

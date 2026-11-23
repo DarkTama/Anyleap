@@ -362,24 +362,6 @@ pub fn sanitize_name(name: &str) -> Option<String> {
     (!reserved).then(|| base.to_string())
 }
 
-/// `name`, or `stem (n).ext` if it already exists in `dir`.
-pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let first = dir.join(name);
-    if !first.exists() {
-        return first;
-    }
-    let p = Path::new(name);
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
-    let ext = p.extension().and_then(|s| s.to_str());
-    (1..)
-        .map(|n| match ext {
-            Some(e) => dir.join(format!("{stem} ({n}).{e}")),
-            None => dir.join(format!("{stem} ({n})")),
-        })
-        .find(|c| !c.exists())
-        .unwrap()
-}
-
 enum WritePartError {
     Cancelled,
     Io(std::io::Error),
@@ -461,7 +443,7 @@ pub async fn receive_with_events<R: AsyncRead + Unpin>(
 ) -> Result<TransferEvent, String> {
     receive_with_policies_and_conn(
         r,
-        dir,
+        Some(dir),
         super::clipboard::sync_files_enabled(),
         super::dragdrop::drag_drop_enabled(),
         super::dragdrop::file_clipboard_enabled(),
@@ -473,7 +455,7 @@ pub async fn receive_with_events<R: AsyncRead + Unpin>(
 
 pub async fn receive_with_events_for_conn<R: AsyncRead + Unpin>(
     r: &mut R,
-    dir: &Path,
+    dir: Option<&Path>,
     transfer_tx: Option<&broadcast::Sender<TransferEvent>>,
     conn_id: usize,
 ) -> Result<TransferEvent, String> {
@@ -494,12 +476,13 @@ pub async fn receive_with_policy<R: AsyncRead + Unpin>(
     dir: &Path,
     allow_files: bool,
 ) -> Result<TransferEvent, String> {
-    receive_with_policies_and_conn(r, dir, allow_files, allow_files, allow_files, None, 0).await
+    receive_with_policies_and_conn(r, Some(dir), allow_files, allow_files, allow_files, None, 0)
+        .await
 }
 
 async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
     r: &mut R,
-    dir: &Path,
+    dir: Option<&Path>,
     allow_files: bool,
     allow_drag: bool,
     allow_clip: bool,
@@ -523,10 +506,21 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
             }
             let safe =
                 sanitize_name(&name).ok_or_else(|| format!("rejected file name {name:?}"))?;
-            tokio::fs::create_dir_all(dir)
-                .await
-                .map_err(|e| e.to_string())?;
-            let target = unique_path(dir, &safe);
+            let resolved = match dir {
+                Some(explicit) => {
+                    tokio::fs::create_dir_all(explicit)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    crate::transfer_paths::ResolvedReceiveDir {
+                        path: explicit.to_path_buf(),
+                        fallback_from: None,
+                    }
+                }
+                None => tokio::task::spawn_blocking(crate::transfer_paths::prepare_receive_dir)
+                    .await
+                    .map_err(|e| e.to_string())??,
+            };
+            let target = crate::transfer_paths::unique_dest_path(&resolved.path, &safe);
             let part = PathBuf::from(format!("{}.part", target.display()));
             if let Err(e) = write_part_with_progress(r, &part, size, None, |_, _| {}).await {
                 let _ = tokio::fs::remove_file(&part).await;
@@ -543,7 +537,12 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                 .and_then(|n| n.to_str())
                 .unwrap_or(&safe)
                 .to_string();
-            Ok(TransferEvent::File { name, size })
+            Ok(TransferEvent::File {
+                name,
+                size,
+                saved_path: target,
+                fallback_from: resolved.fallback_from,
+            })
         }
         StreamHeader::ClipboardImage { .. } => {
             let mut data = Vec::new();
@@ -607,7 +606,7 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                 }
                 return Err(msg);
             }
-            let target = unique_path(&open_dir, &safe);
+            let target = crate::transfer_paths::unique_dest_path(&open_dir, &safe);
             let part = PathBuf::from(format!("{}.part", target.display()));
             let mut throttle = ProgressThrottle::new();
             if let Some(tx) = transfer_tx {
@@ -727,9 +726,12 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                 emit_bulk_failed(transfer_tx, &drag_id, "drag", &rel_path, &msg);
                 return Err(msg);
             }
+            let fallback_root = dir
+                .map(PathBuf::from)
+                .unwrap_or_else(super::staging::default_staging_root);
             let target = receive_staged_bulk_file(
                 r,
-                dir,
+                &fallback_root,
                 BulkTransferKind::Drag,
                 &drag_id,
                 &rel_path,
@@ -755,9 +757,12 @@ async fn receive_with_policies_and_conn<R: AsyncRead + Unpin>(
                 emit_bulk_failed(transfer_tx, &offer_id, "clip", &rel_path, &msg);
                 return Err(msg);
             }
+            let fallback_root = dir
+                .map(PathBuf::from)
+                .unwrap_or_else(super::staging::default_staging_root);
             let target = receive_staged_bulk_file(
                 r,
-                dir,
+                &fallback_root,
                 BulkTransferKind::Clip,
                 &offer_id,
                 &rel_path,
@@ -1438,10 +1443,19 @@ mod tests {
         let d = std::env::temp_dir().join(format!("anyleap-uniq-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("a.txt"), b"1").unwrap();
-        assert_eq!(unique_path(&d, "a.txt"), d.join("a (1).txt"));
+        assert_eq!(
+            crate::transfer_paths::unique_dest_path(&d, "a.txt"),
+            d.join("a (1).txt")
+        );
         std::fs::write(d.join("a (1).txt"), b"1").unwrap();
-        assert_eq!(unique_path(&d, "a.txt"), d.join("a (2).txt"));
-        assert_eq!(unique_path(&d, "new"), d.join("new"));
+        assert_eq!(
+            crate::transfer_paths::unique_dest_path(&d, "a.txt"),
+            d.join("a (2).txt")
+        );
+        assert_eq!(
+            crate::transfer_paths::unique_dest_path(&d, "new"),
+            d.join("new")
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

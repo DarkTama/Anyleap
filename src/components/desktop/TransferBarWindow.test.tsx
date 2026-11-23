@@ -36,6 +36,11 @@ vi.mock("@tauri-apps/api/dpi", () => ({
   },
 }));
 
+const mockRevealItemInDir = vi.fn(() => Promise.resolve());
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: (...args: unknown[]) => mockRevealItemInDir(...(args as [])),
+}));
+
 vi.mock("@/services/kvmService", () => ({
   kvmCancelTransfer: vi.fn(() => Promise.resolve()),
   kvmFetchClip: vi.fn(() => Promise.resolve()),
@@ -54,6 +59,7 @@ describe("TransferBarWindow hit area & sizing (SPEC-25)", () => {
     mockSetSize.mockClear();
     mockSetPosition.mockClear();
     mockClose.mockClear();
+    mockRevealItemInDir.mockClear();
     resizeCallbacks = [];
     mockRect = { width: 220.4, height: 32.2 };
 
@@ -219,5 +225,42 @@ describe("TransferBarWindow hit area & sizing (SPEC-25)", () => {
     });
     expect(container.textContent).not.toContain("dataset.zip");
     vi.useRealTimers();
+  });
+
+  it("renders Show in folder only for done rows with savedPath", async () => {
+    const init = JSON.stringify({
+      transfers: [
+        {
+          id: "f-saved",
+          kind: "file",
+          name: "bundle.zip",
+          pct: 100,
+          state: "done",
+          savedPath: "C:\\Downloads\\AnyLeap\\bundle.zip",
+        },
+        {
+          id: "c-staged",
+          kind: "clip",
+          name: "note.txt",
+          pct: 100,
+          state: "done",
+        },
+      ],
+    });
+    window.history.replaceState({}, "", `/?kvm_transfer_bar=1&init=${encodeURIComponent(init)}`);
+
+    act(() => {
+      root.render(<TransferBarWindow />);
+    });
+
+    const showButtons = Array.from(container.querySelectorAll("button")).filter((b) =>
+      b.textContent?.includes("Show in folder"),
+    );
+    expect(showButtons).toHaveLength(1);
+
+    await act(async () => {
+      showButtons[0].click();
+    });
+    expect(mockRevealItemInDir).toHaveBeenCalledWith("C:\\Downloads\\AnyLeap\\bundle.zip");
   });
 });

@@ -9,6 +9,7 @@ pub mod phone_hub;
 // --- end SPEC-27a ---
 pub mod scroll_feel;
 mod state;
+pub mod transfer_paths;
 mod wheel_swipe;
 use state::AppState;
 use tauri::menu::{Menu, MenuItem};
@@ -71,6 +72,7 @@ pub fn run() {
             commands::list_installed_apps,
             commands::launch_app,
             commands::take_screenshot,
+            commands::save_screenshot,
             commands::get_system_resolution,
             commands::push_clipboard_image,
             commands::get_battery_info,
@@ -149,8 +151,13 @@ pub fn run() {
             phone_hub::audio_only::phone_audio_start,
             phone_hub::audio_only::phone_audio_stop,
             // --- end SPEC-27a ---
+            // --- SPEC-31 ---
+            transfer_paths::set_transfer_folders,
+            transfer_paths::get_default_transfer_folders,
+            // --- end SPEC-31 ---
         ])
         .setup(|app| {
+            transfer_paths::init_defaults(app.path().download_dir().ok());
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
             wheel_swipe::init(app.handle());
             // --- SPEC-25b ---

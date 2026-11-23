@@ -11,10 +11,12 @@ import {
   Image as ImageIcon,
   File as FileIcon,
   CheckCircle2,
+  FolderOpen,
   Trash2,
   Unlink,
   Volume2,
 } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { DiscoveredPeer } from "@/types/kvm";
 import { useKvmStore } from "@/stores/kvmStore";
 import { kvmSetSyncSettings } from "@/services/kvmService";
@@ -562,6 +564,16 @@ export function ComputersView() {
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0">
+                    {act.savedPath && !isSyncing && (
+                      <button
+                        type="button"
+                        onClick={() => void revealItemInDir(act.savedPath!).catch(() => {})}
+                        className="btn-tactile inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-0.5 text-[10px] font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+                      >
+                        <FolderOpen className="h-3 w-3" />
+                        Show in folder
+                      </button>
+                    )}
                     {isSyncing ? (
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 w-16 rounded-full bg-ink-800 overflow-hidden">

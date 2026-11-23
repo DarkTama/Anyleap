@@ -39,7 +39,7 @@ Equipment: 2 Windows PCs on the same LAN (ideally one with 2 monitors of differe
 - [ ] Copy cells from a spreadsheet / text from a browser page with images → pastes as **text**
 - [ ] Copy a screenshot (image only) → pastes as image
 - [ ] Settings: turn off text sync → copy no longer syncs and no activity entry appears; same for image
-- [ ] Send a large file (≥ 500 MB) → arrives intact in `Downloads\AnyLeap_Transfers`; mouse/keyboard stay smooth during transfer
+- [ ] Send a large file (≥ 500 MB) → arrives intact in the configured receive folder (default `Downloads\AnyLeap`); mouse/keyboard stay smooth during transfer
 - [ ] Turn off file sync on the receiver → incoming file is rejected, no `.part` leftovers
 - [ ] Sending a file whose name already exists → saved as `name (1).ext`
 
@@ -130,7 +130,16 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
 - [ ] Tab through the bar: each button shows a tooltip on keyboard focus; More opens with Enter, arrows move, Escape closes and focus returns to More.
 - [ ] Volume down shows the volume-down icon; no Sleep button; Rotate hidden in Flex.
 - [ ] Screen-off, Record, Wi-Fi, Bluetooth, Do Not Disturb, Mouse wheel swipes show `aria-pressed` and a gold outline when on; Record is red while recording.
-- [ ] Stopping a recording shows a toast with "Open recording folder".
+- [ ] Stopping a recording shows a toast with "Show in folder".
 - [ ] End call appears (red) only during a call.
 - [ ] Camera mode: torch, zoom, stop camera group; help text names no third-party apps.
 - [ ] Title-bar buttons are 36 x 28 px; Close turns red on hover.
+
+## I. Default transfer folders (SPEC-31)
+
+- [ ] Phone Hub Gallery & Files download with default settings → saves straight to `Downloads\AnyLeap` without prompting; **Show in folder** opens Explorer at the file.
+- [ ] Toggle **Ask where to save each time** on → Gallery and Files prompt once per click; cancelling leaves no file.
+- [ ] Command Palette **Take screenshot** → saves PNG to the configured receive folder and shows **Show in folder** toast.
+- [ ] Set **Save files sent to phone in** to `/sdcard/Documents`, drop a non-APK onto the mirror window and paste an image (`Ctrl+V`) → lands in `/sdcard/Documents/` on phone.
+- [ ] Set PC receive folder to an unavailable path (e.g. `Z:\Missing`), trigger a phone download and a multi-PC transfer → falls back to `Downloads\AnyLeap` with a notice.
+- [ ] Drop a file onto the Computers canvas or paste a large (`> stagingLimitMb`) file across PCs → Transfer Bar and Activity Feed show **Show in folder**.

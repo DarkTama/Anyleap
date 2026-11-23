@@ -3,6 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/store/useAppStore";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
+import { DEFAULT_TRANSFER_FOLDERS } from "@/lib/transferFolders";
+import type { DeviceEntry } from "@/lib/types";
 import type { PhoneOverview } from "@/types/phone";
 
 const mockPhoneHubWatch = vi.fn((..._args: unknown[]) => Promise.resolve());
@@ -28,6 +30,44 @@ const mockGetPhoneToggles = vi.fn((..._args: unknown[]) =>
   Promise.resolve({ wifi: true, bluetooth: false, dnd: false }),
 );
 const mockSetPhoneToggle = vi.fn((..._args: unknown[]) => Promise.resolve());
+const mockPushToDevice = vi.fn((..._args: unknown[]) => Promise.resolve());
+const mockListDeviceDir = vi.fn<(...args: unknown[]) => Promise<DeviceEntry[]>>(() =>
+  Promise.resolve([]),
+);
+
+type DragEventPayload =
+  | { type: "enter"; paths: string[] }
+  | { type: "over" }
+  | { type: "leave" }
+  | { type: "drop"; paths: string[] };
+
+let dragListeners: Array<(e: { payload: DragEventPayload }) => void> = [];
+const mockOnDragDropEvent = vi.fn(
+  async (cb: (e: { payload: DragEventPayload }) => void) => {
+    dragListeners.push(cb);
+    return () => {
+      dragListeners = dragListeners.filter((x) => x !== cb);
+    };
+  },
+);
+
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: mockOnDragDropEvent,
+  }),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(async () => null),
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: vi.fn(async () => {}),
+}));
+
+vi.mock("@tauri-apps/api/path", () => ({
+  downloadDir: vi.fn(async () => "C:\\Downloads"),
+}));
 
 vi.mock("@/services/phoneHubService", () => ({
   phoneHubWatch: (...args: unknown[]) => mockPhoneHubWatch(...args),
@@ -46,6 +86,10 @@ vi.mock("@/lib/tauri", () => ({
   setPhoneToggle: (...args: unknown[]) => mockSetPhoneToggle(...args),
   startMirror: vi.fn(() => Promise.resolve()),
   stopMirror: vi.fn(() => Promise.resolve()),
+  pushToDevice: (...args: unknown[]) => mockPushToDevice(...args),
+  listDeviceDir: (...args: unknown[]) => mockListDeviceDir(...args),
+  pullDeviceFile: vi.fn(() => Promise.resolve({ savedPath: "C:\\Downloads\\AnyLeap\\f.txt", fallbackFrom: null })),
+  deleteDevicePath: vi.fn(() => Promise.resolve()),
 }));
 
 import { PhoneView } from "../PhoneView";
@@ -63,7 +107,13 @@ describe("PhoneView & OverviewView (SPEC-27b Task B2)", () => {
     mockPhoneGetConversations.mockClear();
     mockGetPhoneToggles.mockClear();
     mockSetPhoneToggle.mockClear();
+    mockPushToDevice.mockClear();
+    mockListDeviceDir.mockReset();
+    mockListDeviceDir.mockResolvedValue([]);
+    dragListeners = [];
+    mockOnDragDropEvent.mockClear();
     usePhoneHubStore.getState().reset();
+    useAppStore.getState().setTransferFolders({ ...DEFAULT_TRANSFER_FOLDERS });
     useAppStore.setState({
       devices: [
         {
@@ -251,5 +301,91 @@ describe("PhoneView & OverviewView (SPEC-27b Task B2)", () => {
       "wifi",
       false,
     );
+  });
+
+  it("handles OS drag-drop once in PhoneView: uploads to phoneUploadDir off Files and currentPath on Files", async () => {
+    useAppStore.getState().setTransferFolders({
+      ...DEFAULT_TRANSFER_FOLDERS,
+      phoneUploadDir: "/sdcard/Documents",
+    });
+    mockListDeviceDir
+      .mockResolvedValueOnce([
+        {
+          name: "Work",
+          path: "/storage/emulated/0/Work",
+          is_dir: true,
+          size: 0,
+          modified_unix: 100,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    const renderWithTab = async (subTab: "overview" | "files") => {
+      await act(async () => {
+        root.render(
+          <PhoneView
+            subTab={subTab}
+            onSubTabChange={() => {}}
+            selectedSerial="192.168.1.50:5555"
+            onSelectSerial={() => {}}
+            notifications={[]}
+            notificationsLoading={false}
+            notificationsError={null}
+            onRefreshNotifications={() => {}}
+          />,
+        );
+      });
+    };
+
+    await renderWithTab("overview");
+    expect(mockOnDragDropEvent).toHaveBeenCalledTimes(1);
+    expect(dragListeners).toHaveLength(1);
+
+    // Drag enter on Overview shows drop overlay naming phoneUploadDir
+    await act(async () => {
+      dragListeners[0]({ payload: { type: "enter", paths: ["C:\\a.txt"] } });
+    });
+    expect(container.textContent).toContain("Drop files to upload to phone");
+    expect(container.textContent).toContain("Destination: /sdcard/Documents");
+
+    // Drop uploads once to phoneUploadDir and shows completion toast
+    await act(async () => {
+      dragListeners[0]({ payload: { type: "drop", paths: ["C:\\a.txt", "C:\\b.jpg"] } });
+    });
+    expect(mockPushToDevice).toHaveBeenCalledTimes(1);
+    expect(mockPushToDevice).toHaveBeenCalledWith(
+      "192.168.1.50:5555",
+      ["C:\\a.txt", "C:\\b.jpg"],
+      "/sdcard/Documents",
+    );
+    expect(container.textContent).toContain("Uploaded 2 item(s) to /sdcard/Documents");
+
+    // Switch to Files sub-tab and navigate into /storage/emulated/0/Work
+    mockPushToDevice.mockClear();
+    await renderWithTab("files");
+    expect(mockOnDragDropEvent).toHaveBeenCalledTimes(1);
+
+    const workCell = Array.from(container.querySelectorAll("td")).find((td) =>
+      td.textContent?.includes("Work"),
+    )!;
+    await act(async () => {
+      workCell.click();
+    });
+
+    await act(async () => {
+      dragListeners[0]({ payload: { type: "over" } });
+    });
+    expect(container.textContent).toContain("Destination: /storage/emulated/0/Work");
+
+    await act(async () => {
+      dragListeners[0]({ payload: { type: "drop", paths: ["C:\\report.pdf"] } });
+    });
+    expect(mockPushToDevice).toHaveBeenCalledTimes(1);
+    expect(mockPushToDevice).toHaveBeenCalledWith(
+      "192.168.1.50:5555",
+      ["C:\\report.pdf"],
+      "/storage/emulated/0/Work",
+    );
+    expect(container.textContent).toContain("Uploaded 1 item(s) to /storage/emulated/0/Work");
   });
 });

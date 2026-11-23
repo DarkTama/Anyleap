@@ -6,6 +6,7 @@ import type {
 } from "@/types/kvm";
 
 export const TRANSFER_COMPLETED_LINGER_MS = 1500;
+export const TRANSFER_SAVED_LINGER_MS = 4500;
 export const TRANSFER_NOTICE_LINGER_MS = 4000;
 export const TRANSFER_AWAITING_FETCH_TTL_MS = 10 * 60 * 1000;
 export const TRANSFER_STALE_DRAG_MS = 15_000;
@@ -21,6 +22,7 @@ export interface TransferBarItem {
   pct: number;
   status: TransferStatus;
   sizeBytes?: number;
+  savedPath?: string;
   expiresAt: number | null;
   errorText?: string;
 }
@@ -56,10 +58,11 @@ function resolveExpiresAt(
   kind: TransferKind,
   pct: number,
   now: number,
+  savedPath?: string,
 ): number | null {
   switch (status) {
     case "done":
-      return now + TRANSFER_COMPLETED_LINGER_MS;
+      return now + (savedPath ? TRANSFER_SAVED_LINGER_MS : TRANSFER_COMPLETED_LINGER_MS);
     case "failed":
     case "cancelled":
       return now + TRANSFER_NOTICE_LINGER_MS;
@@ -89,6 +92,12 @@ export function upsertTransferProgress(
     typeof payload.sizeBytes === "number" && Number.isFinite(payload.sizeBytes)
       ? Math.max(0, payload.sizeBytes)
       : existing?.sizeBytes;
+  const savedPath =
+    typeof payload.savedPath === "string" && payload.savedPath.trim()
+      ? payload.savedPath
+      : status === "done"
+        ? existing?.savedPath
+        : undefined;
 
   const nextItem: TransferBarItem = {
     id: payload.id,
@@ -97,7 +106,8 @@ export function upsertTransferProgress(
     pct,
     status,
     sizeBytes,
-    expiresAt: resolveExpiresAt(status, payload.kind, pct, now),
+    savedPath,
+    expiresAt: resolveExpiresAt(status, payload.kind, pct, now, savedPath),
   };
 
   if (idx >= 0) {
@@ -190,11 +200,13 @@ export function getVisibleTransfers(
 export function getTransferKindLabel(
   kind: TransferKind,
   status: TransferStatus,
+  savedPath?: string,
 ): string {
   if (status === "failed") return "Failed";
   if (status === "cancelled") return "Cancelled";
   if (status === "awaiting_fetch") return "Large file";
   if (status === "done") {
+    if (savedPath) return "Saved";
     switch (kind) {
       case "clip":
         return "Ready to paste";
@@ -202,6 +214,8 @@ export function getTransferKindLabel(
         return "Opened";
       case "drag":
         return "Transferred";
+      case "file":
+        return "Saved";
     }
   }
   switch (kind) {
@@ -211,6 +225,8 @@ export function getTransferKindLabel(
       return "Dragging";
     case "open":
       return "Opening";
+    case "file":
+      return "Receiving";
   }
 }
 

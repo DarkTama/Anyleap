@@ -168,6 +168,14 @@ export const launchApp = (serial: string, packageName: string) =>
 export const takeScreenshot = (serial: string) =>
   invoke<number[]>("take_screenshot", { serial });
 
+export interface PullResult {
+  savedPath: string;
+  fallbackFrom: string | null;
+}
+
+export const saveScreenshot = (serial: string, destFile?: string | null) =>
+  invoke<PullResult>("save_screenshot", { serial, destFile: destFile ?? null });
+
 export const getSystemResolution = () =>
   invoke<[number, number]>("get_system_resolution");
 
@@ -188,8 +196,11 @@ export const runConnectionDoctor = (serial?: string | null) =>
 export const listDeviceDir = (serial: string, path: string) =>
   invoke<DeviceEntry[]>("list_device_dir", { serial, path });
 
-export const pullDeviceFile = (serial: string, devicePath: string, destDir: string) =>
-  invoke<string>("pull_device_file", { serial, devicePath, destDir });
+export const pullDeviceFile = (
+  serial: string,
+  devicePath: string,
+  destDir?: string | null,
+) => invoke<PullResult>("pull_device_file", { serial, devicePath, destDir: destDir ?? null });
 
 export const pushToDevice = (serial: string, localPaths: string[], deviceDir: string) =>
   invoke<void>("push_to_device", { serial, localPaths, deviceDir });
@@ -237,3 +248,18 @@ export const endCall = (serial: string) =>
 
 export const getCallActive = (serial: string) =>
   invoke<boolean>("get_call_active", { serial });
+
+// --- Transfer Folders (SPEC-31) ---
+
+export interface DefaultTransferFolders {
+  defaultReceiveDir: string;
+  defaultPhoneUploadDir: string;
+}
+
+export const setTransferFoldersConfig = (
+  receiveDir: string | null,
+  phoneUploadDir: string,
+) => invoke<void>("set_transfer_folders", { receiveDir, phoneUploadDir });
+
+export const getDefaultTransferFolders = () =>
+  invoke<DefaultTransferFolders>("get_default_transfer_folders");
