@@ -17,6 +17,7 @@ export type ScrollInertia = "off" | "low" | "medium" | "high";
 export interface ScrollSettings {
   style: ScrollStyle;
   speed: ScrollSpeed;
+  touchpadSpeed: number;
   smooth: boolean;
   inertia: ScrollInertia;
 }
@@ -25,6 +26,7 @@ export interface ScrollConfigPayload {
   style: ScrollStyle;
   speedMode: "auto" | "manual";
   manual: number;
+  touchpadSpeed: number;
   smooth: boolean;
   inertia: ScrollInertia;
 }
@@ -33,11 +35,15 @@ export const SCROLL_SPEED_OPTIONS: number[] = [
   1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3, 3.25, 3.5, 3.75, 4, 4.25, 4.5, 4.75, 5,
 ];
 
+export const TOUCHPAD_SPEED_OPTIONS: number[] = [
+  0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
+];
+
 export const DEFAULT_SCROLL: Record<MirrorMode, ScrollSettings> = {
-  mirror: { style: "smooth", speed: "auto", smooth: true, inertia: "off" },
-  flex: { style: "smooth", speed: "auto", smooth: true, inertia: "off" },
-  camera: { style: "smooth", speed: "auto", smooth: false, inertia: "off" },
-  hifi: { style: "smooth", speed: "auto", smooth: false, inertia: "off" },
+  mirror: { style: "smooth", speed: "auto", touchpadSpeed: 1, smooth: true, inertia: "off" },
+  flex: { style: "smooth", speed: "auto", touchpadSpeed: 1, smooth: true, inertia: "off" },
+  camera: { style: "smooth", speed: "auto", touchpadSpeed: 1, smooth: false, inertia: "off" },
+  hifi: { style: "smooth", speed: "auto", touchpadSpeed: 1, smooth: false, inertia: "off" },
 };
 
 export function toScrollConfig(s: ScrollSettings): ScrollConfigPayload {
@@ -45,6 +51,7 @@ export function toScrollConfig(s: ScrollSettings): ScrollConfigPayload {
     style: s.style,
     speedMode: s.speed === "auto" ? "auto" : "manual",
     manual: typeof s.speed === "number" ? s.speed : 1.0,
+    touchpadSpeed: s.touchpadSpeed,
     smooth: s.smooth,
     inertia: s.inertia,
   };
@@ -163,12 +170,16 @@ function normalizeScrollSettings(raw: unknown, fallback: ScrollSettings): Scroll
       : typeof r.speed === "number" && Number.isFinite(r.speed)
         ? Math.min(5, Math.max(1, r.speed))
         : fallback.speed;
+  const touchpadSpeed =
+    typeof r.touchpadSpeed === "number" && Number.isFinite(r.touchpadSpeed)
+      ? Math.min(3, Math.max(0.5, r.touchpadSpeed))
+      : fallback.touchpadSpeed;
   const smooth = typeof r.smooth === "boolean" ? r.smooth : fallback.smooth;
   const inertia: ScrollInertia =
     r.inertia === "off" || r.inertia === "low" || r.inertia === "medium" || r.inertia === "high"
       ? r.inertia
       : fallback.inertia;
-  return { style, speed, smooth, inertia };
+  return { style, speed, touchpadSpeed, smooth, inertia };
 }
 
 function pickModeSettings(raw: unknown, fallback: ModeSettings): ModeSettings {

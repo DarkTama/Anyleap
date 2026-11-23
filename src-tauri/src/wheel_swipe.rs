@@ -23,7 +23,7 @@
 //! - A single worker thread owns per-axis remainder accumulators (`PostMessageW`)
 //!   and serializes Paged touch flings.
 
-use crate::scroll_feel::ScrollStyle;
+use crate::scroll_feel::{ScrollStyle, WheelSource};
 
 /// Wheel axis for a mouse-wheel hook event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -56,12 +56,15 @@ impl ModifierState {
 }
 
 /// Pure hook decision: decide whether to swallow and enqueue a wheel event or pass through.
+#[allow(clippy::too_many_arguments)]
 pub fn decide(
     modifiers: ModifierState,
     axis: WheelAxis,
+    source: WheelSource,
     over_mirror: bool,
     style: ScrollStyle,
     multiplier: f32,
+    touchpad_speed: f32,
     smooth: bool,
     queue_ok: bool,
 ) -> HookDecision {
@@ -73,13 +76,23 @@ pub fn decide(
             WheelAxis::Vertical => HookDecision::Swallow,
             WheelAxis::Horizontal => HookDecision::PassThrough,
         },
-        ScrollStyle::Smooth => {
-            if !multiplier.is_finite() || (!smooth && (multiplier - 1.0).abs() <= 1e-4) {
-                HookDecision::PassThrough
-            } else {
-                HookDecision::Swallow
+        ScrollStyle::Smooth => match source {
+            WheelSource::Touchpad => {
+                // Touchpad input skips Auto multiplier and smoothing; pass through untouched at 1x.
+                if !touchpad_speed.is_finite() || (touchpad_speed - 1.0).abs() <= 1e-4 {
+                    HookDecision::PassThrough
+                } else {
+                    HookDecision::Swallow
+                }
             }
-        }
+            WheelSource::MouseWheel => {
+                if !multiplier.is_finite() || (!smooth && (multiplier - 1.0).abs() <= 1e-4) {
+                    HookDecision::PassThrough
+                } else {
+                    HookDecision::Swallow
+                }
+            }
+        },
     }
 }
 
@@ -116,7 +129,8 @@ mod imp {
         DEFAULT_NATIVE_DENSITY,
     };
     use crate::scroll_feel::{
-        effective_multiplier, AxisAccumulator, AxisSmoother, ScrollConfig, ScrollStyle,
+        classify_wheel_source, effective_multiplier, effective_touchpad_speed, AxisAccumulator,
+        AxisSmoother, ScrollConfig, ScrollStyle, WheelSource,
     };
     use crate::state::{poison_error, AppState};
 
@@ -135,6 +149,7 @@ mod imp {
         hwnd: isize,
         style: ScrollStyle,
         multiplier: f32,
+        touchpad_speed: f32,
         smooth: bool,
         /// `Some` for flex sessions: inject with `input -d <id>`.
         display_id: Option<u32>,
@@ -172,6 +187,7 @@ mod imp {
         Smooth {
             hwnd: isize,
             axis: WheelAxis,
+            source: WheelSource,
             delta: i16,
             key_state: u16,
             screen_x: i32,
@@ -225,7 +241,10 @@ mod imp {
 
     fn sync_any_enabled(reg: &Registry) {
         let any = reg.targets.values().any(|t| {
-            t.style == ScrollStyle::Paged || t.smooth || (t.multiplier - 1.0).abs() > 1e-4
+            t.style == ScrollStyle::Paged
+                || t.smooth
+                || (t.multiplier - 1.0).abs() > 1e-4
+                || (t.touchpad_speed - 1.0).abs() > 1e-4
         });
         ANY_ENABLED.store(any, Ordering::Relaxed);
     }
@@ -297,6 +316,7 @@ mod imp {
         reg.paged_override.insert(serial.to_string(), enabled);
         let cfg = effective_config_for(&reg, serial);
         let mult = compute_multiplier_for(&reg, serial, is_flex, &cfg);
+        let touchpad_speed = effective_touchpad_speed(&cfg);
         reg.multipliers.insert(serial.to_string(), mult);
 
         if let Some((hwnd, size)) = resolved {
@@ -307,6 +327,7 @@ mod imp {
                     hwnd,
                     style: ScrollStyle::Paged,
                     multiplier: mult,
+                    touchpad_speed,
                     smooth: cfg.smooth,
                     display_id,
                     w: size.0,
@@ -316,6 +337,7 @@ mod imp {
         } else if let Some(t) = reg.targets.values_mut().find(|t| &*t.serial == serial) {
             t.style = cfg.style;
             t.multiplier = mult;
+            t.touchpad_speed = touchpad_speed;
             t.smooth = cfg.smooth;
         }
 
@@ -343,11 +365,13 @@ mod imp {
         reg.configs.insert(serial.to_string(), config);
         reg.paged_override.remove(serial);
         let mult = compute_multiplier_for(&reg, serial, is_flex, &config);
+        let touchpad_speed = effective_touchpad_speed(&config);
         reg.multipliers.insert(serial.to_string(), mult);
 
         if let Some(t) = reg.targets.values_mut().find(|t| &*t.serial == serial) {
             t.style = config.style;
             t.multiplier = mult;
+            t.touchpad_speed = touchpad_speed;
             t.smooth = config.smooth;
         }
         sync_any_enabled(&reg);
@@ -414,14 +438,35 @@ mod imp {
                         reg.targets
                             .get(&(hwnd.0 as isize))
                             .or_else(|| reg.targets.get(&(root.0 as isize)))
-                            .map(|t| (t.serial.clone(), t.hwnd, t.style, t.multiplier, t.smooth))
+                            .map(|t| {
+                                (
+                                    t.serial.clone(),
+                                    t.hwnd,
+                                    t.style,
+                                    t.multiplier,
+                                    t.touchpad_speed,
+                                    t.smooth,
+                                )
+                            })
                     });
 
-                    if let Some((serial, target_hwnd, style, multiplier, smooth)) = matched {
-                        if decide(modifiers, axis, true, style, multiplier, smooth, true)
-                            == HookDecision::Swallow
+                    if let Some((serial, target_hwnd, style, multiplier, touchpad_speed, smooth)) =
+                        matched
+                    {
+                        let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16;
+                        let source = classify_wheel_source(info.flags, delta);
+                        if decide(
+                            modifiers,
+                            axis,
+                            source,
+                            true,
+                            style,
+                            multiplier,
+                            touchpad_speed,
+                            smooth,
+                            true,
+                        ) == HookDecision::Swallow
                         {
-                            let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16;
                             let key_state = if modifiers.shift { MK_SHIFT_FLAG } else { 0 };
                             let ev = match style {
                                 ScrollStyle::Paged => WheelEvent::Paged {
@@ -432,12 +477,19 @@ mod imp {
                                 ScrollStyle::Smooth => WheelEvent::Smooth {
                                     hwnd: target_hwnd,
                                     axis,
+                                    source,
                                     delta,
                                     key_state,
                                     screen_x: info.pt.x,
                                     screen_y: info.pt.y,
-                                    multiplier,
-                                    smooth,
+                                    multiplier: match source {
+                                        WheelSource::Touchpad => touchpad_speed,
+                                        WheelSource::MouseWheel => multiplier,
+                                    },
+                                    smooth: match source {
+                                        WheelSource::Touchpad => false,
+                                        WheelSource::MouseWheel => smooth,
+                                    },
                                     at: Instant::now(),
                                 },
                             };
@@ -620,6 +672,7 @@ mod imp {
             for (serial, display_id, virtual_size, is_flex) in &sessions {
                 let cfg = effective_config_for(&reg, serial);
                 let mult = compute_multiplier_for(&reg, serial, *is_flex, &cfg);
+                let touchpad_speed = effective_touchpad_speed(&cfg);
                 reg.multipliers.insert(serial.clone(), mult);
 
                 let Some(&hwnd) = resolved_hwnds.get(serial) else {
@@ -639,6 +692,7 @@ mod imp {
                         hwnd,
                         style: cfg.style,
                         multiplier: mult,
+                        touchpad_speed,
                         smooth: cfg.smooth,
                         display_id: did,
                         w,
@@ -753,6 +807,7 @@ mod imp {
     #[derive(Default)]
     struct SmoothChannel {
         acc: AxisAccumulator,
+        touchpad_acc: AxisAccumulator,
         smoother: AxisSmoother,
         last_key_state: u16,
         last_screen_x: i32,
@@ -761,6 +816,10 @@ mod imp {
         next_tick: Option<Instant>,
     }
 
+    /// Post scaled wheel messages directly to the target scrcpy window.
+    ///
+    /// Uses `PostMessageW` (never `SendInput`) so AnyLeap's posted messages never
+    /// re-enter `WH_MOUSE_LL` and cannot loop back.
     fn post_wheel_deltas(
         hwnd: isize,
         axis: WheelAxis,
@@ -830,6 +889,7 @@ mod imp {
                     WheelEvent::Smooth {
                         hwnd,
                         axis,
+                        source,
                         delta,
                         key_state,
                         screen_x,
@@ -843,31 +903,44 @@ mod imp {
                         ch.last_screen_x = screen_x;
                         ch.last_screen_y = screen_y;
 
-                        if smooth {
-                            let immediate = ch.smoother.push(delta, multiplier, at);
-                            post_wheel_deltas(
-                                hwnd, axis, &immediate, key_state, screen_x, screen_y,
-                            );
-                            if ch.smoother.has_pending() {
-                                if ch.last_tick_at.is_none() {
-                                    ch.last_tick_at = Some(at);
-                                    ch.next_tick = Some(at + SMOOTH_TICK);
-                                }
-                            } else {
-                                ch.last_tick_at = None;
-                                ch.next_tick = None;
-                            }
-                        } else {
-                            if ch.smoother.has_pending() {
-                                let flushed = ch.smoother.flush();
+                        match source {
+                            WheelSource::Touchpad => {
+                                // Touchpad input always skips smoothing and scales 1:1 with touchpad_speed.
+                                let deltas = ch.touchpad_acc.push(delta, multiplier, at);
                                 post_wheel_deltas(
-                                    hwnd, axis, &flushed, key_state, screen_x, screen_y,
+                                    hwnd, axis, &deltas, key_state, screen_x, screen_y,
                                 );
-                                ch.last_tick_at = None;
-                                ch.next_tick = None;
                             }
-                            let deltas = ch.acc.push(delta, multiplier, at);
-                            post_wheel_deltas(hwnd, axis, &deltas, key_state, screen_x, screen_y);
+                            WheelSource::MouseWheel => {
+                                if smooth {
+                                    let immediate = ch.smoother.push(delta, multiplier, at);
+                                    post_wheel_deltas(
+                                        hwnd, axis, &immediate, key_state, screen_x, screen_y,
+                                    );
+                                    if ch.smoother.has_pending() {
+                                        if ch.last_tick_at.is_none() {
+                                            ch.last_tick_at = Some(at);
+                                            ch.next_tick = Some(at + SMOOTH_TICK);
+                                        }
+                                    } else {
+                                        ch.last_tick_at = None;
+                                        ch.next_tick = None;
+                                    }
+                                } else {
+                                    if ch.smoother.has_pending() {
+                                        let flushed = ch.smoother.flush();
+                                        post_wheel_deltas(
+                                            hwnd, axis, &flushed, key_state, screen_x, screen_y,
+                                        );
+                                        ch.last_tick_at = None;
+                                        ch.next_tick = None;
+                                    }
+                                    let deltas = ch.acc.push(delta, multiplier, at);
+                                    post_wheel_deltas(
+                                        hwnd, axis, &deltas, key_state, screen_x, screen_y,
+                                    );
+                                }
+                            }
                         }
                     }
                     WheelEvent::Paged { serial, delta, at } => {
@@ -1003,9 +1076,11 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 false,
                 ScrollStyle::Smooth,
                 2.5,
+                1.0,
                 true,
                 true,
             ),
@@ -1015,9 +1090,11 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                1.0,
                 true,
                 false,
             ),
@@ -1045,9 +1122,11 @@ mod decision_tests {
                 decide(
                     mods,
                     WheelAxis::Vertical,
+                    WheelSource::MouseWheel,
                     true,
                     ScrollStyle::Smooth,
                     2.5,
+                    1.0,
                     true,
                     true
                 ),
@@ -1057,8 +1136,24 @@ mod decision_tests {
                 decide(
                     mods,
                     WheelAxis::Vertical,
+                    WheelSource::Touchpad,
+                    true,
+                    ScrollStyle::Smooth,
+                    2.5,
+                    2.0,
+                    true,
+                    true
+                ),
+                HookDecision::PassThrough
+            );
+            assert_eq!(
+                decide(
+                    mods,
+                    WheelAxis::Vertical,
+                    WheelSource::MouseWheel,
                     true,
                     ScrollStyle::Paged,
+                    1.0,
                     1.0,
                     false,
                     true
@@ -1074,9 +1169,11 @@ mod decision_tests {
                     ..Default::default()
                 },
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                1.0,
                 false,
                 true,
             ),
@@ -1090,8 +1187,10 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
+                1.0,
                 1.0,
                 false,
                 true,
@@ -1102,8 +1201,10 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Horizontal,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
+                1.0,
                 1.0,
                 false,
                 true,
@@ -1114,8 +1215,10 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
+                1.0,
                 1.0,
                 true,
                 true,
@@ -1126,8 +1229,10 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Horizontal,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
+                1.0,
                 1.0,
                 true,
                 true,
@@ -1138,9 +1243,11 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                1.0,
                 false,
                 true,
             ),
@@ -1150,9 +1257,11 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Horizontal,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                1.0,
                 false,
                 true,
             ),
@@ -1161,13 +1270,63 @@ mod decision_tests {
     }
 
     #[test]
+    fn touchpad_at_1x_passes_through_even_with_auto_and_smoothing_on() {
+        for axis in [WheelAxis::Vertical, WheelAxis::Horizontal] {
+            assert_eq!(
+                decide(
+                    ModifierState::default(),
+                    axis,
+                    WheelSource::Touchpad,
+                    true,
+                    ScrollStyle::Smooth,
+                    2.75,
+                    1.0,
+                    true,
+                    true,
+                ),
+                HookDecision::PassThrough
+            );
+            assert_eq!(
+                decide(
+                    ModifierState::default(),
+                    axis,
+                    WheelSource::Touchpad,
+                    true,
+                    ScrollStyle::Smooth,
+                    1.0,
+                    1.5,
+                    false,
+                    true,
+                ),
+                HookDecision::Swallow
+            );
+            assert_eq!(
+                decide(
+                    ModifierState::default(),
+                    axis,
+                    WheelSource::Touchpad,
+                    true,
+                    ScrollStyle::Smooth,
+                    2.75,
+                    0.5,
+                    true,
+                    true,
+                ),
+                HookDecision::Swallow
+            );
+        }
+    }
+
+    #[test]
     fn paged_swallows_vertical_and_passes_horizontal() {
         assert_eq!(
             decide(
                 ModifierState::default(),
                 WheelAxis::Vertical,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Paged,
+                1.0,
                 1.0,
                 true,
                 true,
@@ -1178,9 +1337,11 @@ mod decision_tests {
             decide(
                 ModifierState::default(),
                 WheelAxis::Horizontal,
+                WheelSource::MouseWheel,
                 true,
                 ScrollStyle::Paged,
                 2.5,
+                1.5,
                 true,
                 true,
             ),

@@ -44,7 +44,7 @@ Items observed during M2 testing, to be sequenced into future milestones.
 
 - ~~**Phase 0 & Phase 1:** SDL3 precise-scroll verification spike, density-independent scroll speed (`Auto` / `1x–5x`), per-mode Scrolling group, More popover **Paged scrolling** rename~~ (SPEC-30 phase 1, done).
 - ~~**Phase 2:** optional smooth scrolling (eased step interpolation, touchpad bypass).~~ (SPEC-30 phase 2, code done; manual device feel/CPU check pending).
-- **Phase 3:** touchpad delta stream measurement and optional inertia.
+- ~~**Touchpad follow-up & Phase 3:**~~ separate touchpad classification (`LLMHF_INJECTED` or non-120 delta) with per-mode **Touchpad speed** (`0.5x–3x`, default `1x`) and 1:1 bypass done; Phase 3 synthetic inertia stays unbuilt because the driver already supplies flick momentum.
 
 ## Dependencies
 
