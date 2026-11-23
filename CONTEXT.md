@@ -111,3 +111,10 @@ Per-mode scrolling settings inside `modeDefaults` that shape how the PC wheel or
 - **Smooth scrolling** *(Phase 2, planned)*: eases each notch into small steps over about 100 to 150 ms, merging consecutive notches, with the same total distance. Adds a little latency.
 - **Touchpad momentum (inertia)** *(Phase 3, planned)*: synthesized decaying scroll steps after touchpad input stops, with Low / Medium / High strength.
 - **Pending distance** *(Phase 2, planned)*: the not-yet-emitted scroll delta that smooth scrolling drains each tick.
+
+### Transfer Folders (`SPEC-31`)
+Unified destination settings stored under `transferFolders` in `settings.json` and resolved live by `src-tauri/src/transfer_paths.rs`:
+- **Receive folder (`receiveDir`)**: Single PC destination for Phone Hub downloads, Command Palette screenshots, and KVM disk-saved receives (`StreamHeader::File` and `DownloadsFallback`). Defaults to `<OS Downloads>\AnyLeap`; missing or unwritable paths fall back safely to the default folder (then OS Downloads / temp) with a user notice.
+- **Ask where to save each time (`askWhereToSave`)**: Default `false`. When enabled, user-initiated PC downloads in the UI prompt with a native dialog pre-seeded at the receive folder; background peer KVM receives never block on a dialog.
+- **Phone upload folder (`phoneUploadDir`)**: Android destination (default `/sdcard/Download`) for mirror drag-and-drop and pasted clipboard images.
+- **Show in folder**: Completed PC-side transfers surface `revealItemInDir(savedPath)` across Phone Hub, screenshot toasts, the KVM Transfer Bar, and the Computers activity feed.
