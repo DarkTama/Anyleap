@@ -59,7 +59,7 @@ interface AppStore {
 
   setDevices: (d: DeviceInfo[]) => void;
   setSessions: (s: SessionInfo[]) => void;
-  upsertSession: (s: SessionInfo) => void;
+  upsertSession: (s: SessionInfo, modeOverride?: MirrorMode) => void;
   removeSession: (id: string) => void;
   setSavedDevices: (d: SavedDevice[]) => void;
   setModeDefaults: (d: ModeDefaultsV2, notice?: boolean) => void;
@@ -144,7 +144,7 @@ export const useAppStore = create<AppStore>((set) => ({
 
   setDevices: (devices) => set({ devices }),
   setSessions: (sessions) => set({ sessions }),
-  upsertSession: (s) =>
+  upsertSession: (s, modeOverride) =>
     set((st) => {
       const known = st.sessions.some((x) => x.id === s.id);
       return {
@@ -157,7 +157,13 @@ export const useAppStore = create<AppStore>((set) => ({
             ? st.sessionModes
             : {
                 ...st.sessionModes,
-                [s.id]: s.mode === "camera" ? "camera" : st.currentMode === "camera" ? "mirror" : st.currentMode,
+                [s.id]:
+                  modeOverride ??
+                  (s.mode === "camera"
+                    ? "camera"
+                    : st.currentMode === "camera"
+                      ? "mirror"
+                      : st.currentMode),
               },
       };
     }),

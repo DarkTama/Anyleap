@@ -70,7 +70,77 @@ pub fn should_focus_scrcpy_for_foreground(
     fg_hwnd == 0 && from_direct_click
 }
 
-/// True when a `Ctrl+V` keypress inside an embedded mirror should be intercepted to
+/// Cached metadata for an embedded scrcpy child window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddedEntry {
+    pub hwnd: isize,
+    pub pid: u32,
+    pub host_hwnd: isize,
+}
+
+/// Cache resolution decision for `embed_mirror`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedCacheAction {
+    /// No valid cache hit for this `(pid, host_hwnd)` -> evict if stale and embed fresh.
+    EmbedFresh { evict_stale: bool },
+    /// Cached child HWND already belongs to this live session PID and host window.
+    AlreadyEmbedded(isize),
+}
+
+/// Decide whether a cached embed entry is reusable for `(current_pid, current_host_hwnd)`
+/// or stale and in need of eviction.
+pub fn decide_embed_cache(
+    cached: Option<EmbeddedEntry>,
+    current_pid: u32,
+    current_host_hwnd: isize,
+    hwnd_valid: bool,
+    is_child_of_host: bool,
+) -> EmbedCacheAction {
+    match cached {
+        None => EmbedCacheAction::EmbedFresh { evict_stale: false },
+        Some(entry) => {
+            if entry.pid == current_pid
+                && entry.host_hwnd == current_host_hwnd
+                && hwnd_valid
+                && is_child_of_host
+            {
+                EmbedCacheAction::AlreadyEmbedded(entry.hwnd)
+            } else {
+                EmbedCacheAction::EmbedFresh { evict_stale: true }
+            }
+        }
+    }
+}
+
+/// True when a cached embed entry can be used for resize without re-resolving by PID.
+pub fn is_cached_embed_valid_for_resize(
+    cached: Option<EmbeddedEntry>,
+    active_pid: Option<u32>,
+    current_host_hwnd: isize,
+    hwnd_valid: bool,
+) -> bool {
+    let Some(entry) = cached else {
+        return false;
+    };
+    let Some(pid) = active_pid else {
+        return false;
+    };
+    entry.pid == pid && entry.host_hwnd == current_host_hwnd && hwnd_valid
+}
+
+/// True when an embed entry should be removed on cleanup (either unconditional or matching `expected_pid`).
+pub fn should_remove_embed_for_pid(
+    cached: Option<EmbeddedEntry>,
+    expected_pid: Option<u32>,
+) -> bool {
+    match (cached, expected_pid) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(entry), Some(pid)) => entry.pid == pid,
+    }
+}
+
+/// True when `Ctrl+V` keypress inside an embedded mirror should be intercepted to
 /// push a clipboard image to the phone instead of passing through to scrcpy.
 /// Text paste (`has_text`) always takes precedence and passes through to scrcpy.
 pub fn should_intercept_ctrl_v_image(
@@ -129,8 +199,9 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 mod win_embed {
     use super::{
-        decide_click_focus, dib_to_png, is_point_in_rect, should_focus_scrcpy_for_foreground,
-        should_intercept_ctrl_v_image, EmbedFocusAction,
+        decide_click_focus, decide_embed_cache, dib_to_png, is_cached_embed_valid_for_resize,
+        is_point_in_rect, should_focus_scrcpy_for_foreground, should_intercept_ctrl_v_image,
+        should_remove_embed_for_pid, EmbedCacheAction, EmbedFocusAction, EmbeddedEntry,
     };
     use crate::state::AppState;
     use serde::Serialize;
@@ -172,7 +243,7 @@ mod win_embed {
     const MIRROR_HOST_SUBCLASS_ID: usize = 0x414C_454D;
     const RESPONSIVE_TIMEOUT_MS: u32 = 50;
 
-    static EMBEDDED_HWNDS: OnceLock<Arc<Mutex<HashMap<String, isize>>>> = OnceLock::new();
+    static EMBEDDED_HWNDS: OnceLock<Arc<Mutex<HashMap<String, EmbeddedEntry>>>> = OnceLock::new();
     static HOST_STATES: OnceLock<Mutex<HashMap<isize, Arc<HostEmbedState>>>> = OnceLock::new();
     static HAS_EMBEDDED_MIRROR: AtomicBool = AtomicBool::new(false);
     static PASTE_TX: OnceLock<tokio::sync::mpsc::Sender<PasteRequest>> = OnceLock::new();
@@ -202,7 +273,7 @@ mod win_embed {
         window_label: Mutex<String>,
     }
 
-    fn get_embedded_map() -> &'static Arc<Mutex<HashMap<String, isize>>> {
+    fn get_embedded_map() -> &'static Arc<Mutex<HashMap<String, EmbeddedEntry>>> {
         EMBEDDED_HWNDS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
     }
 
@@ -246,18 +317,34 @@ mod win_embed {
         get_embedded_map()
             .lock()
             .ok()
-            .and_then(|map| map.get(serial).copied())
+            .and_then(|map| map.get(serial).map(|e| e.hwnd))
     }
 
-    pub fn remove_embedded_hwnd_for_serial(serial: &str) {
+    pub fn remove_embedded_hwnd_for_serial_if_pid(serial: &str, expected_pid: Option<u32>) {
         let (removed, any_left) = get_embedded_map()
             .lock()
             .ok()
-            .map(|mut map| (map.remove(serial), !map.is_empty()))
+            .map(|mut map| {
+                let cached = map.get(serial).copied();
+                let removed = if should_remove_embed_for_pid(cached, expected_pid) {
+                    map.remove(serial).map(|e| e.hwnd)
+                } else {
+                    None
+                };
+                (removed, !map.is_empty())
+            })
             .unwrap_or((None, false));
         HAS_EMBEDDED_MIRROR.store(any_left, Ordering::Release);
 
-        if let Ok(hosts) = get_host_states().lock() {
+        if expected_pid.is_some() && removed.is_none() {
+            // Cached entry already belongs to a newer session PID; leave host state intact.
+            return;
+        }
+
+        if let Ok(mut hosts) = get_host_states().lock() {
+            hosts.retain(|&raw_hwnd, _| unsafe {
+                IsWindow(Some(HWND(raw_hwnd as *mut _))).as_bool()
+            });
             for st in hosts.values() {
                 let matches_serial = st
                     .serial
@@ -268,13 +355,17 @@ mod win_embed {
                 let matches_hwnd = removed
                     .map(|h| st.scrcpy_hwnd.load(Ordering::Acquire) == h)
                     .unwrap_or(false);
-                if matches_serial || matches_hwnd {
+                if (expected_pid.is_none() && matches_serial) || matches_hwnd {
                     st.scrcpy_hwnd.store(0, Ordering::Release);
                     st.prefer_scrcpy_focus.store(false, Ordering::Release);
                     unsafe { detach_thread_input(st) };
                 }
             }
         }
+    }
+
+    pub fn remove_embedded_hwnd_for_serial(serial: &str) {
+        remove_embedded_hwnd_for_serial_if_pid(serial, None);
     }
 
     struct EnumData {
@@ -780,22 +871,52 @@ mod win_embed {
         let state = app.state::<AppState>();
         let target_pid = {
             let map = state.sessions.lock().map_err(|e| e.to_string())?;
-            map.values().find(|s| s.serial == serial).map(|s| s.pid)
+            map.values()
+                .find(|s| s.serial == serial && s.mode == "display")
+                .or_else(|| map.values().find(|s| s.serial == serial))
+                .map(|s| s.pid)
         }
         .ok_or_else(|| format!("No active session found for serial '{}'", serial))?;
 
-        // scrcpy may take a brief moment (especially on wireless) to create its window; retry for up to 12 seconds.
-        let mut scrcpy_hwnd_raw: Option<isize> = None;
-        for _ in 0..120 {
-            if let Some(h) = find_hwnd_by_pid(target_pid, tauri_hwnd_raw) {
-                scrcpy_hwnd_raw = Some(h);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let cached = get_embedded_map()
+            .lock()
+            .ok()
+            .and_then(|map| map.get(serial).copied());
+        let (hwnd_valid, is_child_of_host) = match cached {
+            Some(entry) => unsafe {
+                let h = HWND(entry.hwnd as *mut _);
+                let host = HWND(tauri_hwnd_raw as *mut _);
+                let valid = !h.0.is_null() && IsWindow(Some(h)).as_bool();
+                let child = valid && IsChild(host, h).as_bool();
+                (valid, child)
+            },
+            None => (false, false),
+        };
 
-        let scrcpy_hwnd_raw = scrcpy_hwnd_raw
-            .ok_or_else(|| format!("scrcpy HWND not found for pid {}", target_pid))?;
+        let scrcpy_hwnd_raw = match decide_embed_cache(
+            cached,
+            target_pid,
+            tauri_hwnd_raw,
+            hwnd_valid,
+            is_child_of_host,
+        ) {
+            EmbedCacheAction::AlreadyEmbedded(existing_hwnd) => existing_hwnd,
+            EmbedCacheAction::EmbedFresh { evict_stale } => {
+                if evict_stale {
+                    remove_embedded_hwnd_for_serial_if_pid(serial, None);
+                }
+                // scrcpy may take a brief moment (especially on wireless) to create its window; retry for up to 12 seconds.
+                let mut found_hwnd: Option<isize> = None;
+                for _ in 0..120 {
+                    if let Some(h) = find_hwnd_by_pid(target_pid, tauri_hwnd_raw) {
+                        found_hwnd = Some(h);
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                found_hwnd.ok_or_else(|| format!("scrcpy HWND not found for pid {}", target_pid))?
+            }
+        };
 
         if scrcpy_hwnd_raw == tauri_hwnd_raw {
             return Err("Cannot embed host Tauri window into itself".to_string());
@@ -888,8 +1009,27 @@ mod win_embed {
 
         rx.await.map_err(|e| e.to_string())??;
 
+        let still_active = state
+            .sessions
+            .lock()
+            .map(|map| {
+                map.values()
+                    .any(|s| s.serial == serial && s.pid == target_pid)
+            })
+            .unwrap_or(false);
+        if !still_active {
+            return Err(format!("Session for '{}' exited during embed", serial));
+        }
+
         if let Ok(mut map) = get_embedded_map().lock() {
-            map.insert(serial.to_string(), scrcpy_hwnd_raw);
+            map.insert(
+                serial.to_string(),
+                EmbeddedEntry {
+                    hwnd: scrcpy_hwnd_raw,
+                    pid: target_pid,
+                    host_hwnd: tauri_hwnd_raw,
+                },
+            );
             HAS_EMBEDDED_MIRROR.store(!map.is_empty(), Ordering::Release);
         }
 
@@ -910,24 +1050,39 @@ mod win_embed {
             .ok_or_else(|| format!("Window '{}' not found", window_label))?;
         let tauri_hwnd_raw = win.hwnd().map_err(|e| e.to_string())?.0 as isize;
 
-        let cached_hwnd = get_embedded_map()
+        let state = app.state::<AppState>();
+        let active_pid = {
+            let map = state.sessions.lock().map_err(|e| e.to_string())?;
+            map.values()
+                .find(|s| s.serial == serial && s.mode == "display")
+                .or_else(|| map.values().find(|s| s.serial == serial))
+                .map(|s| s.pid)
+        };
+
+        let cached = get_embedded_map()
             .lock()
             .ok()
             .and_then(|map| map.get(serial).copied());
+        let cached_valid = match cached {
+            Some(entry) => unsafe {
+                let h = HWND(entry.hwnd as *mut _);
+                !h.0.is_null() && IsWindow(Some(h)).as_bool()
+            },
+            None => false,
+        };
 
-        let scrcpy_hwnd_raw = match cached_hwnd {
-            Some(h) => h,
-            None => {
-                let state = app.state::<AppState>();
-                let pid = {
-                    let map = state.sessions.lock().map_err(|e| e.to_string())?;
-                    map.values().find(|s| s.serial == serial).map(|s| s.pid)
+        let scrcpy_hwnd_raw =
+            if is_cached_embed_valid_for_resize(cached, active_pid, tauri_hwnd_raw, cached_valid) {
+                cached.unwrap().hwnd
+            } else {
+                if cached.is_some() {
+                    remove_embedded_hwnd_for_serial_if_pid(serial, None);
                 }
-                .ok_or_else(|| format!("No active session found for serial '{}'", serial))?;
+                let pid = active_pid
+                    .ok_or_else(|| format!("No active session found for serial '{}'", serial))?;
                 find_hwnd_by_pid(pid, tauri_hwnd_raw)
                     .ok_or_else(|| format!("scrcpy HWND not found for pid {}", pid))?
-            }
-        };
+            };
 
         if scrcpy_hwnd_raw == tauri_hwnd_raw {
             return Err("Target window is host window".to_string());
@@ -1026,6 +1181,17 @@ pub fn remove_embedded_scrcpy_hwnd(serial: &str) {
     #[cfg(not(windows))]
     {
         let _ = serial;
+    }
+}
+
+pub fn remove_embedded_scrcpy_hwnd_for_pid(serial: &str, pid: u32) {
+    #[cfg(windows)]
+    {
+        win_embed::remove_embedded_hwnd_for_serial_if_pid(serial, Some(pid));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (serial, pid);
     }
 }
 
@@ -1132,5 +1298,78 @@ mod tests {
         let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
         assert_eq!(decoded.width(), 2);
         assert_eq!(decoded.height(), 2);
+    }
+
+    #[test]
+    fn embed_cache_evicts_stale_entries_and_reuses_live_same_pid_and_host() {
+        let entry = EmbeddedEntry {
+            hwnd: 111,
+            pid: 42,
+            host_hwnd: 900,
+        };
+
+        assert_eq!(
+            decide_embed_cache(None, 42, 900, false, false),
+            EmbedCacheAction::EmbedFresh { evict_stale: false }
+        );
+        assert_eq!(
+            decide_embed_cache(Some(entry), 42, 900, true, true),
+            EmbedCacheAction::AlreadyEmbedded(111)
+        );
+        // Old session PID -> stale.
+        assert_eq!(
+            decide_embed_cache(Some(entry), 43, 900, true, true),
+            EmbedCacheAction::EmbedFresh { evict_stale: true }
+        );
+        // Reopened mirror window (different host HWND) -> stale.
+        assert_eq!(
+            decide_embed_cache(Some(entry), 42, 901, true, false),
+            EmbedCacheAction::EmbedFresh { evict_stale: true }
+        );
+        // Dead HWND or not reparented -> stale.
+        assert_eq!(
+            decide_embed_cache(Some(entry), 42, 900, false, false),
+            EmbedCacheAction::EmbedFresh { evict_stale: true }
+        );
+        assert_eq!(
+            decide_embed_cache(Some(entry), 42, 900, true, false),
+            EmbedCacheAction::EmbedFresh { evict_stale: true }
+        );
+
+        assert!(is_cached_embed_valid_for_resize(
+            Some(entry),
+            Some(42),
+            900,
+            true
+        ));
+        assert!(!is_cached_embed_valid_for_resize(
+            Some(entry),
+            Some(43),
+            900,
+            true
+        ));
+        assert!(!is_cached_embed_valid_for_resize(
+            Some(entry),
+            Some(42),
+            901,
+            true
+        ));
+        assert!(!is_cached_embed_valid_for_resize(
+            Some(entry),
+            Some(42),
+            900,
+            false
+        ));
+        assert!(!is_cached_embed_valid_for_resize(
+            Some(entry),
+            None,
+            900,
+            true
+        ));
+
+        assert!(should_remove_embed_for_pid(Some(entry), Some(42)));
+        assert!(!should_remove_embed_for_pid(Some(entry), Some(43)));
+        assert!(should_remove_embed_for_pid(Some(entry), None));
+        assert!(!should_remove_embed_for_pid(None, Some(42)));
     }
 }

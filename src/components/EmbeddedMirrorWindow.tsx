@@ -8,6 +8,7 @@ import {
   stopMirror,
   listSessions,
   onSessionStarted,
+  onSessionRestarting,
   onSessionReplaced,
   onSessionExited,
   onMirrorClipboardImageResult,
@@ -35,6 +36,8 @@ export function EmbeddedMirrorWindow({
   const [session, setSession] = useState<SessionInfo | null>(null);
   const sessionRef = useRef<SessionInfo | null>(null);
   sessionRef.current = session;
+  const latestSessionIdRef = useRef<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
   const [mode, setMode] = useState<SessionMode>(initialMode);
   const win = getCurrentWebviewWindow();
 
@@ -58,6 +61,7 @@ export function EmbeddedMirrorWindow({
           const found = sessions.find((s) => s.serial === serial);
           if (found) {
             setSession(found);
+            latestSessionIdRef.current = found.id;
             useAppStore.getState().setSessions(sessions);
             if (found.mode) setMode(found.mode as SessionMode);
             return;
@@ -78,8 +82,13 @@ export function EmbeddedMirrorWindow({
   }, [serial, win]);
 
   useEffect(() => {
+    let mounted = true;
     const unlistenPromise = onSessionExited(async (e) => {
       useAppStore.getState().removeSession(e.payload.id);
+      if (e.payload.id && sessionRef.current && e.payload.id !== sessionRef.current.id) {
+        return;
+      }
+      if (mounted) setReconnecting(false);
       if (e.payload.serial === serial || sessionRef.current?.id === e.payload.id) {
         await win.destroy().catch(() => win.close().catch(() => {}));
       } else {
@@ -90,19 +99,29 @@ export function EmbeddedMirrorWindow({
       }
     });
 
+    const unlistenRestartingPromise = onSessionRestarting((e) => {
+      if (e.payload.serial !== serial || !mounted) return;
+      setReconnecting(true);
+    });
+
     const unlistenStartedPromise = onSessionStarted(async (e) => {
-      if (e.payload.serial !== serial) return;
+      if (e.payload.serial !== serial || !mounted) return;
+      latestSessionIdRef.current = e.payload.id;
       setSession(e.payload);
       useAppStore.getState().upsertSession(e.payload);
       if (e.payload.mode) setMode(e.payload.mode as SessionMode);
-      // Re-embed when the session restarts in-place (e.g. screen recording toggle).
+      // Re-embed when the session restarts in-place (e.g. Flex idle recovery or recording toggle).
       for (let attempt = 0; attempt < 12; attempt++) {
+        if (!mounted || latestSessionIdRef.current !== e.payload.id) return;
         try {
           await embedMirror(win.label, serial);
           break;
         } catch {
           await new Promise((r) => setTimeout(r, 400));
         }
+      }
+      if (mounted && latestSessionIdRef.current === e.payload.id) {
+        setReconnecting(false);
       }
     });
 
@@ -120,7 +139,9 @@ export function EmbeddedMirrorWindow({
       await win.destroy().catch(() => win.close().catch(() => {}));
     });
     return () => {
+      mounted = false;
       unlistenPromise.then((un) => un()).catch(() => {});
+      unlistenRestartingPromise.then((un) => un()).catch(() => {});
       unlistenStartedPromise.then((un) => un()).catch(() => {});
       unlistenReplacedPromise.then((un) => un()).catch(() => {});
       unlistenClosePromise.then((un) => un()).catch(() => {});
@@ -292,18 +313,19 @@ export function EmbeddedMirrorWindow({
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (session) {
-                stopMirror(session.id).catch(() => {});
-              } else {
-                listSessions()
-                  .then((sessions) => {
-                    const active = sessions.find((s) => s.serial === serial);
-                    if (active) stopMirror(active.id).catch(() => {});
-                  })
-                  .catch(() => {});
+            onClick={async () => {
+              const maybeHide = (win as { hide?: () => Promise<void> }).hide;
+              if (typeof maybeHide === "function") {
+                await maybeHide.call(win).catch(() => {});
               }
-              win.destroy().catch(() => win.close().catch(() => {}));
+              if (sessionRef.current) {
+                await stopMirror(sessionRef.current.id).catch(() => {});
+              } else {
+                const activeSessions = await listSessions().catch(() => []);
+                const active = activeSessions.find((s) => s.serial === serial);
+                if (active) await stopMirror(active.id).catch(() => {});
+              }
+              await win.destroy().catch(() => win.close().catch(() => {}));
             }}
             className="btn-tactile inline-flex h-7 w-9 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-status-danger-solid hover:text-text-strong"
             aria-label="Close"
@@ -320,7 +342,18 @@ export function EmbeddedMirrorWindow({
           ref={containerRef}
           id="mirror-viewport"
           className="flex-1 h-full bg-black relative"
-        />
+        >
+          {reconnecting && (
+            <div
+              role="status"
+              className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+            >
+              <div className="rounded-lg border border-ink-700 bg-ink-900 px-3.5 py-2 text-xs font-medium text-gold-400 shadow-elevated">
+                Reconnecting…
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Flush Right Toolbar Sidebar */}
         <div className="w-[60px] shrink-0 border-l border-ink-700 bg-ink-900 flex flex-col items-stretch overflow-y-auto overflow-x-hidden">

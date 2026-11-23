@@ -3,10 +3,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmbeddedMirrorWindow } from "./EmbeddedMirrorWindow";
 import { useAppStore } from "@/store/useAppStore";
-import type { SessionInfo } from "@/lib/types";
+import { embedMirror } from "@/lib/tauri";
+import type { SessionExited, SessionInfo } from "@/lib/types";
 
 let startedHandler: ((e: { payload: SessionInfo }) => void) | null = null;
+let restartingHandler: ((e: { payload: { id: string; serial: string; reason: string } }) => void) | null = null;
 let replacedHandler: ((e: { payload: string }) => void) | null = null;
+let exitedHandler: ((e: { payload: SessionExited }) => void) | null = null;
 let clipboardResultHandler:
   | ((e: { payload: { serial: string; dest?: string; error?: string } }) => void)
   | null = null;
@@ -39,11 +42,20 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
       startedHandler = cb;
       return Promise.resolve(() => {});
     }),
+    onSessionRestarting: vi.fn(
+      (cb: (e: { payload: { id: string; serial: string; reason: string } }) => void) => {
+        restartingHandler = cb;
+        return Promise.resolve(() => {});
+      },
+    ),
     onSessionReplaced: vi.fn((cb: (e: { payload: string }) => void) => {
       replacedHandler = cb;
       return Promise.resolve(() => {});
     }),
-    onSessionExited: vi.fn(() => Promise.resolve(() => {})),
+    onSessionExited: vi.fn((cb: (e: { payload: SessionExited }) => void) => {
+      exitedHandler = cb;
+      return Promise.resolve(() => {});
+    }),
     onMirrorClipboardImageResult: vi.fn(
       (cb: (e: { payload: { serial: string; dest?: string; error?: string } }) => void) => {
         clipboardResultHandler = cb;
@@ -62,6 +74,13 @@ describe("EmbeddedMirrorWindow", () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     startedHandler = null;
+    restartingHandler = null;
+    replacedHandler = null;
+    exitedHandler = null;
+    clipboardResultHandler = null;
+    mockWin.destroy.mockClear();
+    mockWin.close.mockClear();
+    vi.mocked(embedMirror).mockClear();
     useAppStore.getState().setSessions([]);
     mockListSessions.mockReset();
     host = document.createElement("div");
@@ -147,5 +166,47 @@ describe("EmbeddedMirrorWindow", () => {
     });
 
     expect(host.textContent).toContain("Image pushed to /sdcard/Download/paste_123.png");
+  });
+
+  it("shows Reconnecting status during in-place restart and ignores stale session exits", async () => {
+    const sess1: SessionInfo = {
+      id: "sess-old",
+      serial: "dev-4",
+      pid: 200,
+      started_at: 1,
+      mode: "display",
+      recording_path: null,
+    };
+    const sess2: SessionInfo = {
+      ...sess1,
+      id: "sess-new",
+      pid: 201,
+      started_at: 2,
+    };
+    mockListSessions.mockResolvedValue([sess1]);
+
+    await act(async () => {
+      root.render(<EmbeddedMirrorWindow serial="dev-4" initialMode="display" flexDisplay={true} />);
+    });
+
+    await act(async () => {
+      restartingHandler?.({ payload: { id: "sess-old", serial: "dev-4", reason: "flex-idle" } });
+    });
+    expect(host.textContent).toContain("Reconnecting…");
+
+    await act(async () => {
+      replacedHandler?.({ payload: "sess-old" });
+      startedHandler?.({ payload: sess2 });
+    });
+    expect(host.textContent).not.toContain("Reconnecting…");
+    expect(embedMirror).toHaveBeenCalledWith("mirror-test", "dev-4");
+
+    // A delayed session-exited from the old session must not destroy the active wrapper window.
+    await act(async () => {
+      exitedHandler?.({
+        payload: { id: "sess-old", serial: "dev-4", code: 0, signal: null, last_error: "", stderr: "" },
+      });
+    });
+    expect(mockWin.destroy).not.toHaveBeenCalled();
   });
 });
