@@ -105,6 +105,36 @@ describe("PhoneMirroringSection", () => {
     expect(sw("Keep phone aspect ratio").hasAttribute("disabled")).toBe(false);
   });
 
+  it("on-screen keyboard switch is disabled with helper text on Flex, but toggles on Mirror and High fidelity", async () => {
+    useAppStore.setState({
+      modeDefaults: {
+        ...defaultModeDefaults(),
+        flex: { ...defaultModeDefaults().flex, noKeyboardIme: false },
+      },
+    });
+    await mount();
+    expect(sw("Use Android on-screen keyboard").hasAttribute("disabled")).toBe(false);
+    await act(async () => sw("Use Android on-screen keyboard").click());
+    expect(useAppStore.getState().modeDefaults.mirror.noKeyboardIme).toBe(true);
+
+    await act(async () => tab("High fidelity").click());
+    expect(sw("Use Android on-screen keyboard").hasAttribute("disabled")).toBe(false);
+    await act(async () => sw("Use Android on-screen keyboard").click());
+    expect(useAppStore.getState().modeDefaults.hifi.noKeyboardIme).toBe(true);
+
+    const callsBeforeFlex = vi.mocked(saveModeDefaults).mock.calls.length;
+    await act(async () => tab("Flex").click());
+    const flexRow = sw("Use Android on-screen keyboard");
+    expect(flexRow.hasAttribute("disabled")).toBe(true);
+    expect(flexRow.getAttribute("aria-checked")).toBe("false");
+    expect(el.textContent).toContain(
+      "Not used in Flex. PC typing works, and the phone's keyboard may appear on the phone while you type in Flex.",
+    );
+    await act(async () => flexRow.click());
+    expect(useAppStore.getState().modeDefaults.flex.noKeyboardIme).toBe(false);
+    expect(vi.mocked(saveModeDefaults).mock.calls.length).toBe(callsBeforeFlex);
+  });
+
   it("every switch has a visible label and the embedded helper names no product", async () => {
     await mount();
     for (const b of el.querySelectorAll<HTMLElement>('[role="switch"]')) {

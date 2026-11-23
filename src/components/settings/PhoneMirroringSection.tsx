@@ -182,7 +182,9 @@ function DisplayModePanel({ mode }: { mode: DisplayMode }) {
         <SwitchRow
           label="Use Android on-screen keyboard"
           hint="Off: type with this PC's keyboard directly."
-          checked={!s.noKeyboardIme}
+          checked={mode === "flex" ? false : !s.noKeyboardIme}
+          disabled={mode === "flex"}
+          disabledReason="Not used in Flex. PC typing works, and the phone's keyboard may appear on the phone while you type in Flex."
           onChange={(v) => set({ noKeyboardIme: !v })}
         />
       </Group>

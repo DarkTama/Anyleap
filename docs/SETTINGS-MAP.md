@@ -65,7 +65,7 @@ The everyday knobs, shown on the main mirror screen.
 | Show touches | `--show-touches` (`-t`) | toggle | |
 | No audio | `--no-audio` | toggle | Audio on by default (Android 11+). |
 | Read-only (view, no control) | `--no-control` (`-n`) | toggle | |
-| Disable virtual keyboard | `--keyboard=uhid` | toggle | Simulates a physical HID keyboard; Android hides on-screen keyboard. |
+| Disable virtual keyboard | `--keyboard=uhid` | toggle | Simulates a physical HID keyboard in Mirror/High fidelity; Android hides on-screen keyboard. Virtual-display (`--new-display` / Flex) sessions omit `--keyboard=uhid` (SDK keyboard) and do not set `--display-ime-policy` so the phone's own keyboard keeps working. |
 
 ## Tier 2 — Video
 

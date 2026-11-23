@@ -382,7 +382,7 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
     if s.no_control {
         a.push("--no-control".into());
     }
-    if s.no_keyboard_ime {
+    if s.no_keyboard_ime && !s.flex_display {
         a.push("--keyboard=uhid".into());
     }
     if s.flex_display {
@@ -2698,12 +2698,49 @@ FLAG_PRESENTATION, FLAG_TRUSTED, real 1080 x 2436, largest app 1080 x 2436, dens
         assert!(args.contains(&"--new-display".to_string()));
         assert!(args.contains(&"--flex-display".to_string()));
         assert!(args.contains(&"--print-fps".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--display-ime-policy")));
 
         s.flex_display_size = "1920x1080/240".into();
         let args = build_scrcpy_args("SER", &s);
         assert!(args.contains(&"--new-display=1920x1080/240".to_string()));
         assert!(!args.contains(&"--new-display".to_string()));
         assert!(args.contains(&"--print-fps".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--display-ime-policy")));
+    }
+
+    #[test]
+    fn flex_uses_sdk_keyboard_without_ime_policy_while_mirror_keeps_uhid() {
+        // Mirror / High fidelity (`flex_display = false`) keep today's behaviour.
+        let mut mirror_off = base_settings();
+        mirror_off.flex_display = false;
+        mirror_off.no_keyboard_ime = false;
+        let args = build_scrcpy_args("SER", &mirror_off);
+        assert!(!args.contains(&"--keyboard=uhid".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--display-ime-policy")));
+
+        let mut mirror_on = base_settings();
+        mirror_on.flex_display = false;
+        mirror_on.no_keyboard_ime = true;
+        let args = build_scrcpy_args("SER", &mirror_on);
+        assert!(args.contains(&"--keyboard=uhid".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--display-ime-policy")));
+
+        // Flex (`flex_display = true`) always omits `--keyboard=uhid` (SDK keyboard)
+        // and omits `--display-ime-policy`, regardless of `no_keyboard_ime`.
+        for no_keyboard_ime in [false, true] {
+            let mut flex = base_settings();
+            flex.flex_display = true;
+            flex.no_keyboard_ime = no_keyboard_ime;
+            let args = build_scrcpy_args("SER", &flex);
+            assert!(
+                !args.contains(&"--keyboard=uhid".to_string()),
+                "flex should not emit --keyboard=uhid when no_keyboard_ime={no_keyboard_ime}"
+            );
+            assert!(
+                !args.iter().any(|a| a.starts_with("--display-ime-policy")),
+                "flex should not emit --display-ime-policy when no_keyboard_ime={no_keyboard_ime}"
+            );
+        }
     }
 
     #[test]
@@ -3873,7 +3910,7 @@ pub(crate) fn build_app_window_args(
     device_label: &str,
 ) -> Vec<String> {
     let mut args = build_scrcpy_args(serial, settings);
-    args.retain(|a| !a.starts_with("--window-title="));
+    args.retain(|a| !a.starts_with("--window-title=") && a != "--keyboard=uhid");
     if !args
         .iter()
         .any(|a| a == "--new-display" || a.starts_with("--new-display="))
@@ -4502,8 +4539,39 @@ mod spec20_tests {
         };
         let app_args = build_app_window_args("SER123", &s, "com.example.app", "Pixel 9");
         assert!(app_args.contains(&"--new-display".to_string()));
+        assert!(!app_args
+            .iter()
+            .any(|a| a.starts_with("--display-ime-policy")));
+        assert!(!app_args.contains(&"--keyboard=uhid".to_string()));
         assert!(app_args.contains(&"--start-app=com.example.app".to_string()));
         assert!(app_args.contains(&"--window-title=com.example.app — Pixel 9".to_string()));
+
+        // Per-app `--new-display` windows must also avoid UHID even if Mirror defaults set no_keyboard_ime.
+        let s_uhid = CoreSettings {
+            max_size: 1280,
+            video_bit_rate: 8_000_000,
+            max_fps: 60,
+            video_codec: "h264".into(),
+            stay_awake: true,
+            turn_screen_off: false,
+            fullscreen: false,
+            show_touches: false,
+            no_audio: false,
+            no_control: false,
+            no_keyboard_ime: true,
+            flex_display: false,
+            flex_display_size: String::new(),
+            no_window_aspect_ratio_lock: false,
+            render_fit: "letterbox".into(),
+            embedded: false,
+            hide_virtual_taskbar: false,
+        };
+        let app_args_uhid = build_app_window_args("SER123", &s_uhid, "com.example.app", "Pixel 9");
+        assert!(app_args_uhid.contains(&"--new-display".to_string()));
+        assert!(!app_args_uhid
+            .iter()
+            .any(|a| a.starts_with("--display-ime-policy")));
+        assert!(!app_args_uhid.contains(&"--keyboard=uhid".to_string()));
 
         let rec_args = toggle_record_args(&app_args, Some("C:\\Videos\\AnyLeap\\rec.mp4"));
         assert!(rec_args.iter().any(|a| a.starts_with("--record=")));
