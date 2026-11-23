@@ -7,6 +7,11 @@ import {
   type ModeDefaultsV2,
 } from "./modeSettings";
 import { normalizeControlConfig, type ControlConfig } from "./controlConfig";
+import {
+  DEFAULT_TRANSFER_FOLDERS,
+  normalizeTransferFolders,
+  type TransferFoldersSettings,
+} from "./transferFolders";
 
 export interface AppPrefs {
   minimizeToTrayOnClose: boolean;
@@ -199,6 +204,31 @@ export async function loadControlConfig(): Promise<ControlConfig> {
 export async function saveControlConfig(config: ControlConfig): Promise<void> {
   const store = await getStore();
   await store.set("controlBar", config);
+  await store.save();
+}
+
+export async function loadTransferFoldersFrom(
+  store: KeyValueStore,
+): Promise<TransferFoldersSettings> {
+  const existing = await store.get<unknown>("transferFolders");
+  if (existing !== undefined && existing !== null) {
+    return normalizeTransferFolders(existing);
+  }
+  const defaults = { ...DEFAULT_TRANSFER_FOLDERS };
+  await store.set("transferFolders", defaults);
+  await store.save();
+  return defaults;
+}
+
+export async function loadTransferFolders(): Promise<TransferFoldersSettings> {
+  return loadTransferFoldersFrom(await getStore());
+}
+
+export async function saveTransferFolders(
+  settings: TransferFoldersSettings,
+): Promise<void> {
+  const store = await getStore();
+  await store.set("transferFolders", normalizeTransferFolders(settings));
   await store.save();
 }
 

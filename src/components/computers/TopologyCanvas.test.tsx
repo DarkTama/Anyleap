@@ -3,6 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TopologyCanvas } from "./TopologyCanvas";
 import { useKvmStore } from "@/stores/kvmStore";
+import { useAppStore } from "@/store/useAppStore";
+import { DEFAULT_TRANSFER_FOLDERS } from "@/lib/transferFolders";
 import * as kvmService from "@/services/kvmService";
 
 function dispatchPointer(
@@ -259,5 +261,16 @@ describe("TopologyCanvas (SPEC-24)", () => {
     expect(labels).toContain("Custom: 60px");
     expect(labels).toContain("Custom: 50ms");
     expect(labels).not.toContain("Custom: 48px");
+  });
+
+  it("reads live receive folder for drop overlay without crashing", async () => {
+    useAppStore.getState().setTransferFolders({
+      ...DEFAULT_TRANSFER_FOLDERS,
+      receiveDir: "D:\\CustomDrop",
+    });
+    await act(async () => {
+      root.render(<TopologyCanvas />);
+    });
+    expect(container.textContent).not.toContain("AnyLeap_Transfers");
   });
 });

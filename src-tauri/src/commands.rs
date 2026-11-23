@@ -408,6 +408,10 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
     if !s.render_fit.is_empty() {
         a.push(format!("--render-fit={}", s.render_fit));
     }
+    a.push(format!(
+        "--push-target={}",
+        crate::transfer_paths::phone_upload_dir()
+    ));
     a.push(format!("--window-title=AnyLeap — {}", serial));
     a
 }
@@ -1205,6 +1209,14 @@ pub(crate) fn spawn_session_inner<'a>(
     })
 }
 
+/// Ensure the target Android shared-storage upload folder exists (best-effort).
+async fn ensure_phone_upload_dir_on_device(app: &AppHandle, serial: &str, dir: &str) {
+    if let Ok(cmd) = adb_cmd(app).await {
+        let shell_cmd = format!("mkdir -p {}", crate::phone_files::sh_quote(dir));
+        let _ = cmd.args(["-s", serial, "shell", &shell_cmd]).output().await;
+    }
+}
+
 /// Launch scrcpy for a device and track the session.
 #[tauri::command]
 pub async fn start_mirror(
@@ -1212,6 +1224,8 @@ pub async fn start_mirror(
     serial: String,
     settings: CoreSettings,
 ) -> Result<SessionInfo, String> {
+    let upload_dir = crate::transfer_paths::phone_upload_dir();
+    ensure_phone_upload_dir_on_device(&app, &serial, &upload_dir).await;
     let args = build_scrcpy_args(&serial, &settings);
     spawn_session(&app, serial, args, false, "display").await
 }
@@ -2358,7 +2372,7 @@ pub fn mirror_rect(title: String) -> Option<MirrorRect> {
     }
 }
 /// Drag-and-drop file/APK push. APKs are installed with `adb install -r`;
-/// other files are pushed to `/sdcard/Download/`.
+/// other files are pushed to the configured phone upload folder.
 #[tauri::command]
 pub async fn handle_dropped_files(
     app: AppHandle,
@@ -2368,6 +2382,12 @@ pub async fn handle_dropped_files(
     if paths.is_empty() {
         return Ok("No files provided".to_string());
     }
+    let target_dir = crate::transfer_paths::phone_upload_dir();
+    let has_non_apk = paths.iter().any(|p| !p.to_lowercase().ends_with(".apk"));
+    if has_non_apk {
+        ensure_phone_upload_dir_on_device(&app, &serial, &target_dir).await;
+    }
+    let push_dest = format!("{target_dir}/");
     let mut installed = 0;
     let mut pushed = 0;
     for path in &paths {
@@ -2391,7 +2411,7 @@ pub async fn handle_dropped_files(
         } else {
             let out = adb_cmd(&app)
                 .await?
-                .args(["-s", &serial, "push", path, "/sdcard/Download/"])
+                .args(["-s", &serial, "push", path, &push_dest])
                 .output()
                 .await
                 .map_err(|e| e.to_string())?;
@@ -2493,12 +2513,10 @@ pub async fn launch_app(
     Ok(())
 }
 
-/// Direct capture of device screen into PNG bytes.
-#[tauri::command]
-pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, String> {
-    let output = adb_cmd(&app)
+async fn capture_screenshot_bytes(app: &AppHandle, serial: &str) -> Result<Vec<u8>, String> {
+    let output = adb_cmd(app)
         .await?
-        .args(["-s", &serial, "exec-out", "screencap", "-p"])
+        .args(["-s", serial, "exec-out", "screencap", "-p"])
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -2513,6 +2531,100 @@ pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, 
     }
 
     Ok(output.stdout)
+}
+
+fn sanitize_screenshot_serial(serial: &str) -> String {
+    let s: String = serial
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = s.trim_matches('_');
+    if trimmed.is_empty() {
+        "device".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub(crate) fn save_screenshot_to_dir(
+    bytes: &[u8],
+    serial: &str,
+    dest_file: Option<&str>,
+    now_secs: u64,
+) -> Result<crate::phone_files::PullResult, String> {
+    let trimmed = dest_file.map(str::trim).filter(|s| !s.is_empty());
+    let (target_path, fallback_from) = if let Some(explicit) = trimmed {
+        let explicit_path = std::path::PathBuf::from(explicit);
+        let parent = explicit_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let resolved = crate::transfer_paths::prepare_receive_dir_at(parent)?;
+        if resolved.fallback_from.is_none() {
+            (explicit_path, None)
+        } else {
+            let fname = explicit_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or("Screenshot.png");
+            (
+                crate::transfer_paths::unique_dest_path(&resolved.path, fname),
+                resolved
+                    .fallback_from
+                    .map(|p| p.to_string_lossy().into_owned()),
+            )
+        }
+    } else {
+        let resolved = crate::transfer_paths::prepare_receive_dir()?;
+        let ts = format_timestamp_yyyymmdd_hhmmss(now_secs);
+        let filename = format!(
+            "Screenshot_{}_{}.png",
+            sanitize_screenshot_serial(serial),
+            ts
+        );
+        let target = crate::transfer_paths::unique_dest_path(&resolved.path, &filename);
+        (
+            target,
+            resolved
+                .fallback_from
+                .map(|p| p.to_string_lossy().into_owned()),
+        )
+    };
+
+    std::fs::write(&target_path, bytes).map_err(|e| format!("Failed to save screenshot: {e}"))?;
+
+    Ok(crate::phone_files::PullResult {
+        saved_path: target_path.to_string_lossy().into_owned(),
+        fallback_from,
+    })
+}
+
+/// Direct capture of device screen into PNG bytes.
+#[tauri::command]
+pub async fn take_screenshot(app: AppHandle, serial: String) -> Result<Vec<u8>, String> {
+    capture_screenshot_bytes(&app, &serial).await
+}
+
+/// Capture device screen PNG and save directly to the resolved receive folder (or explicit file).
+#[tauri::command]
+pub async fn save_screenshot(
+    app: AppHandle,
+    serial: String,
+    dest_file: Option<String>,
+) -> Result<crate::phone_files::PullResult, String> {
+    let bytes = capture_screenshot_bytes(&app, &serial).await?;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    save_screenshot_to_dir(&bytes, &serial, dest_file.as_deref(), now_secs)
 }
 /// Get primary monitor resolution (width, height)
 #[tauri::command]
@@ -2959,9 +3071,63 @@ emulator-5554          device product:sdk_gphone64 model:Pixel_7 device:emulator
         assert_eq!(devs[1].serial, "192.168.1.50:5555");
         assert_eq!(devs[1].state, "unauthorized");
     }
+
+    #[test]
+    fn build_scrcpy_args_includes_push_target() {
+        let args = build_scrcpy_args("SER", &base_settings());
+        assert!(args.iter().any(|a| a.starts_with("--push-target=/sdcard")));
+    }
+
+    #[test]
+    fn save_screenshot_to_dir_writes_unique_png_and_falls_back_when_unwritable() {
+        let base =
+            std::env::temp_dir().join(format!("anyleap-screenshot-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dl = base.join("Downloads");
+        let custom = base.join("CustomShots");
+        std::fs::create_dir_all(&dl).unwrap();
+        crate::transfer_paths::init_defaults(Some(dl));
+        crate::transfer_paths::set_config(
+            Some(custom.to_string_lossy().into_owned()),
+            crate::transfer_paths::DEFAULT_PHONE_UPLOAD_DIR,
+        )
+        .unwrap();
+
+        let r1 = save_screenshot_to_dir(b"png1", "SER:5555", None, 1_700_000_000).unwrap();
+        assert_eq!(r1.fallback_from, None);
+        assert!(r1.saved_path.starts_with(&*custom.to_string_lossy()));
+        assert_eq!(std::fs::read(&r1.saved_path).unwrap(), b"png1");
+
+        // Collision at same second appends (1)
+        let r2 = save_screenshot_to_dir(b"png2", "SER:5555", None, 1_700_000_000).unwrap();
+        assert_ne!(r2.saved_path, r1.saved_path);
+        assert!(r2.saved_path.contains(" (1).png"));
+        assert_eq!(std::fs::read(&r2.saved_path).unwrap(), b"png2");
+
+        // Regular file as configured dir triggers fallback notice data
+        let bad_file = base.join("not_a_dir");
+        std::fs::write(&bad_file, b"x").unwrap();
+        crate::transfer_paths::set_config(
+            Some(bad_file.to_string_lossy().into_owned()),
+            crate::transfer_paths::DEFAULT_PHONE_UPLOAD_DIR,
+        )
+        .unwrap();
+        let r3 = save_screenshot_to_dir(b"png3", "SER1", None, 1_700_000_001).unwrap();
+        assert_eq!(
+            r3.fallback_from.as_deref(),
+            Some(bad_file.to_string_lossy().as_ref())
+        );
+        assert_eq!(std::fs::read(&r3.saved_path).unwrap(), b"png3");
+
+        let _ = crate::transfer_paths::set_config(
+            None,
+            crate::transfer_paths::DEFAULT_PHONE_UPLOAD_DIR,
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
-/// Save and push an image from clipboard directly to device's /sdcard/Download folder
+/// Save and push an image from clipboard directly to the configured phone upload folder
 pub(crate) async fn push_clipboard_image_bytes(
     app: &AppHandle,
     serial: &str,
@@ -2984,7 +3150,9 @@ pub(crate) async fn push_clipboard_image_bytes(
     std::fs::write(&temp_path, &image_bytes)
         .map_err(|e| format!("Failed to write temp file: {e}"))?;
 
-    let device_dest = format!("/sdcard/Download/{}", fname);
+    let target_dir = crate::transfer_paths::phone_upload_dir();
+    ensure_phone_upload_dir_on_device(app, serial, &target_dir).await;
+    let device_dest = format!("{}/{}", target_dir, fname);
     let push_res = adb_cmd(app)
         .await?
         .args([
@@ -3027,7 +3195,7 @@ pub(crate) async fn push_clipboard_image_bytes(
     Ok(device_dest)
 }
 
-/// Save and push an image from clipboard directly to device's /sdcard/Download folder
+/// Save and push an image from clipboard directly to the configured phone upload folder
 #[tauri::command]
 pub async fn push_clipboard_image(
     app: AppHandle,

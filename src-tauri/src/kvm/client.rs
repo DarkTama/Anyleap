@@ -156,7 +156,7 @@ impl KvmClientHandle {
         pin: Option<String>,
         identity: &Identity,
         trust: &TrustStore,
-        download_dir: PathBuf,
+        download_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
         let (endpoint, conn, mut send, mut recv, peer_info) = handshake(
             ip,
@@ -224,7 +224,7 @@ impl KvmClientHandle {
                 tokio::spawn(async move {
                     match super::files::receive_with_events_for_conn(
                         &mut s,
-                        &dir,
+                        dir.as_deref(),
                         Some(&tx),
                         conn_id,
                     )

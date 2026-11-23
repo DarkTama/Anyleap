@@ -1,13 +1,15 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { downloadDir } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Check,
   Download,
   Eye,
   EyeOff,
   Film,
+  FolderOpen,
   Image as ImageIcon,
   Images,
   Loader2,
@@ -16,6 +18,13 @@ import {
   X,
 } from "lucide-react";
 import { pullDeviceFile } from "@/lib/tauri";
+import {
+  applyRangeSelection,
+  emptyRangeSelection,
+  type RangeSelectionModifiers,
+  type RangeSelectionState,
+} from "@/lib/rangeSelection";
+import { useAppStore } from "@/store/useAppStore";
 import { reportDeviceError } from "@/lib/deviceHealth";
 import { selectClass, optionClass } from "@/lib/styles";
 import {
@@ -99,8 +108,8 @@ interface GalleryTileProps {
   isSelected: boolean;
   blurThumbnails: boolean;
   tileSizePx: number;
-  onTileClick: (item: MediaItem) => void;
-  onToggleSelect: (id: string) => void;
+  onTileClick: (item: MediaItem, e: MouseEvent<HTMLButtonElement>) => void;
+  onToggleSelect: (id: string, e: MouseEvent<HTMLButtonElement>) => void;
 }
 
 const GalleryTile = memo(function GalleryTile({
@@ -114,13 +123,13 @@ const GalleryTile = memo(function GalleryTile({
 }: GalleryTileProps) {
   return (
     <div
-      className={`group relative aspect-square w-full overflow-hidden rounded-lg border bg-ink-900 ${
+      className={`group relative aspect-square w-full overflow-hidden rounded-lg border bg-ink-900 select-none ${
         blurThumbnails ? "gallery-tile-blur " : ""
       }${isSelected ? "border-gold-400" : "border-ink-700 hover:border-gold-400"}`}
     >
       <button
         type="button"
-        onClick={() => onTileClick(item)}
+        onClick={(e) => onTileClick(item, e)}
         aria-label={
           item.kind === "video"
             ? `Video ${item.name}, ${formatDuration(item.durationMs)}`
@@ -173,7 +182,7 @@ const GalleryTile = memo(function GalleryTile({
         aria-pressed={isSelected}
         onClick={(e) => {
           e.stopPropagation();
-          onToggleSelect(item.id);
+          onToggleSelect(item.id, e);
         }}
         className={`absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded border text-[10px] cursor-pointer ${
           isSelected
@@ -189,9 +198,9 @@ const GalleryTile = memo(function GalleryTile({
 
 export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
   const lastDownloadDir = usePhoneHubStore((s) => s.lastGalleryDownloadDir);
-  const setLastDownloadDir = usePhoneHubStore((s) => s.setLastGalleryDownloadDir);
   const blurThumbnails = usePhoneHubStore((s) => s.blurThumbnails);
   const setBlurThumbnails = usePhoneHubStore((s) => s.setBlurThumbnails);
+  const transferFolders = useAppStore((s) => s.transferFolders);
 
   const [kind, setKind] = useState<MediaKind>("all");
   const [album, setAlbum] = useState<string>("__all");
@@ -207,10 +216,15 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
   const scrollRafRef = useRef<number | null>(null);
 
   const [viewerItem, setViewerItem] = useState<MediaItem | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selection, setSelection] = useState<RangeSelectionState>(emptyRangeSelection);
+  const selectedIds = selection.selected;
+  const itemsRef = useRef<MediaItem[]>(items);
+  itemsRef.current = items;
   const [downloadStatus, setDownloadStatus] = useState<{
     state: "idle" | "downloading" | "done" | "failed";
     message: string;
+    savedPath?: string;
+    fallbackNotice?: string;
   }>({ state: "idle", message: "" });
   const [statusToast, setStatusToast] = useState<string | null>(null);
 
@@ -292,7 +306,7 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
         setLoadingMore(false);
         setItems([]);
         setTotal(0);
-        setSelectedIds(new Set());
+        setSelection(emptyRangeSelection());
         setScrollTop(0);
         if (scrollContainerRef.current) {
           scrollContainerRef.current.scrollTop = 0;
@@ -469,8 +483,25 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
     [serial],
   );
 
+  const selectWithModifiers = useCallback(
+    (id: string, modifiers: RangeSelectionModifiers) => {
+      const orderedIds = itemsRef.current.map((i) => i.id);
+      setSelection((prev) => applyRangeSelection(orderedIds, prev, id, modifiers));
+    },
+    [],
+  );
+
   const handleTileClick = useCallback(
-    (item: MediaItem) => {
+    (item: MediaItem, e: MouseEvent<HTMLButtonElement>) => {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        selectWithModifiers(item.id, {
+          shiftKey: e.shiftKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          toggleIfSole: false,
+        });
+        return;
+      }
       if (item.kind === "video") {
         // §12: videos open directly in the PC's default player
         void handleOpenOnPc(item);
@@ -478,17 +509,20 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
       }
       setViewerItem(item);
     },
-    [handleOpenOnPc],
+    [handleOpenOnPc, selectWithModifiers],
   );
 
-  const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const toggleSelect = useCallback(
+    (id: string, e: MouseEvent<HTMLButtonElement>) => {
+      selectWithModifiers(id, {
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        toggleIfSole: true,
+      });
+    },
+    [selectWithModifiers],
+  );
 
   const handleScroll = useCallback(() => {
     if (scrollRafRef.current !== null) return;
@@ -503,28 +537,38 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
 
   async function handleDownloadItems(targets: MediaItem[]) {
     if (targets.length === 0) return;
-    let defaultPath = lastDownloadDir ?? undefined;
-    if (!defaultPath) {
-      defaultPath = await downloadDir().catch(() => undefined);
+    let explicitDest: string | null = null;
+    if (transferFolders.askWhereToSave) {
+      let defaultPath = transferFolders.receiveDir ?? lastDownloadDir ?? undefined;
+      if (!defaultPath) {
+        defaultPath = await downloadDir().catch(() => undefined);
+      }
+      const dest = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath,
+      });
+      if (!dest || typeof dest !== "string") return;
+      explicitDest = dest;
     }
-    const dest = await openDialog({
-      directory: true,
-      multiple: false,
-      defaultPath,
-    });
-    if (!dest || typeof dest !== "string") return;
 
-    setLastDownloadDir(dest);
     setDownloadStatus({
       state: "downloading",
       message: `Downloading 0/${targets.length}…`,
     });
 
     let completed = 0;
+    let lastSavedPath: string | undefined;
+    let fallbackNotice: string | undefined;
     try {
       for (const item of targets) {
-        await pullDeviceFile(serial, item.path, dest);
+        const res = await pullDeviceFile(serial, item.path, explicitDest);
         completed += 1;
+        lastSavedPath = res.savedPath;
+        if (res.fallbackFrom && !fallbackNotice) {
+          const actualDir = res.savedPath.replace(/[\\/][^\\/]+$/, "") || res.savedPath;
+          fallbackNotice = `Could not save to "${res.fallbackFrom}" — saved to "${actualDir}" instead.`;
+        }
         setDownloadStatus({
           state: "downloading",
           message: `Downloading ${completed}/${targets.length}…`,
@@ -532,14 +576,18 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
         logActivity({
           kind: "files",
           title: `Downloaded ${item.name}`,
-          detail: dest,
+          detail: res.savedPath,
         });
       }
+      const savedDir =
+        lastSavedPath?.replace(/[\\/][^\\/]+$/, "") || explicitDest || "receive folder";
       setDownloadStatus({
         state: "done",
-        message: `Downloaded ${completed} item${completed > 1 ? "s" : ""} to ${dest}`,
+        message: `Downloaded ${completed} item${completed > 1 ? "s" : ""} to ${savedDir}`,
+        savedPath: lastSavedPath,
+        fallbackNotice,
       });
-      setSelectedIds(new Set());
+      setSelection(emptyRangeSelection());
     } catch (e) {
       setDownloadStatus({
         state: "failed",
@@ -630,7 +678,7 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
             </button>
             <button
               type="button"
-              onClick={() => setSelectedIds(new Set())}
+              onClick={() => setSelection(emptyRangeSelection())}
               className="btn-tactile rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
             >
               Clear
@@ -661,7 +709,7 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
       {downloadStatus.state !== "idle" && (
         <div
           role="status"
-          className={`flex items-center justify-between border-b px-4 py-1.5 text-xs ${
+          className={`flex items-center justify-between gap-2 border-b px-4 py-1.5 text-xs ${
             downloadStatus.state === "failed"
               ? "border-status-danger/40 bg-status-danger-bg text-status-danger"
               : downloadStatus.state === "done"
@@ -669,16 +717,31 @@ export function GalleryView({ serial, onAlbumChange }: GalleryViewProps) {
                 : "border-ink-700 bg-ink-900 text-text-strong"
           }`}
         >
-          <span className="truncate">{downloadStatus.message}</span>
-          {downloadStatus.state !== "downloading" && (
-            <button
-              type="button"
-              onClick={() => setDownloadStatus({ state: "idle", message: "" })}
-              className="ml-2 text-text hover:text-text-strong cursor-pointer"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <span className="truncate">
+            {downloadStatus.fallbackNotice || downloadStatus.message}
+          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            {downloadStatus.state === "done" && downloadStatus.savedPath && (
+              <button
+                type="button"
+                onClick={() => void revealItemInDir(downloadStatus.savedPath!).catch(() => {})}
+                className="btn-tactile inline-flex items-center gap-1 rounded border border-status-success/40 bg-ink-950/60 px-2 py-0.5 text-[11px] font-medium text-text-strong hover:border-status-success cursor-pointer"
+              >
+                <FolderOpen className="h-3 w-3" />
+                Show in folder
+              </button>
+            )}
+            {downloadStatus.state !== "downloading" && (
+              <button
+                type="button"
+                aria-label="Dismiss download status"
+                onClick={() => setDownloadStatus({ state: "idle", message: "" })}
+                className="text-text hover:text-text-strong cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       )}
 

@@ -8,6 +8,14 @@ use tauri::{AppHandle, Manager, State};
 use crate::commands::adb_cmd;
 use crate::phone_hub::apps::{ensure_labels_for_packages, resolve_app_label_for_identity};
 use crate::phone_hub::{resolve_device_identity, PhoneHubState};
+use crate::transfer_paths::{prepare_receive_dir, prepare_receive_dir_at, unique_dest_path};
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PullResult {
+    pub saved_path: String,
+    pub fallback_from: Option<String>,
+}
 
 pub(crate) const DEVICE_ROOT: &str = "/storage/emulated/0";
 const PHOTO_CACHE_CAP_BYTES: u64 = 500 * 1024 * 1024;
@@ -122,33 +130,6 @@ pub(crate) fn sanitize_pc_filename(device_path: &str) -> Result<String, String> 
         return Err(format!("Reserved Windows filename: {component}"));
     }
     Ok(component.to_string())
-}
-
-/// Compute a non-colliding destination path inside `dest_dir`, appending ` (n)` on collision.
-pub(crate) fn unique_dest_path(dest_dir: &Path, filename: &str) -> PathBuf {
-    let candidate = dest_dir.join(filename);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let path = Path::new(filename);
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(filename);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
-
-    let mut n = 1u32;
-    loop {
-        let next = dest_dir.join(format!("{stem} ({n}){ext}"));
-        if !next.exists() {
-            return next;
-        }
-        n += 1;
-    }
 }
 
 /// Parse toybox `stat -c '%F|%s|%Y|%n'` output.
@@ -923,16 +904,17 @@ pub async fn pull_device_file(
     app: AppHandle,
     serial: String,
     device_path: String,
-    dest_dir: String,
-) -> Result<String, String> {
+    dest_dir: Option<String>,
+) -> Result<PullResult, String> {
     validate_serial(&serial)?;
     let norm = normalize_device_path(&device_path)?;
     let filename = sanitize_pc_filename(&norm)?;
-    let dest_dir_path = Path::new(&dest_dir);
-    if !dest_dir_path.is_dir() {
-        return Err("Destination folder does not exist".to_string());
-    }
-    let final_path = unique_dest_path(dest_dir_path, &filename);
+    let trimmed_dest = dest_dir.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let resolved = match trimmed_dest {
+        Some(explicit) => prepare_receive_dir_at(Path::new(explicit))?,
+        None => prepare_receive_dir()?,
+    };
+    let final_path = unique_dest_path(&resolved.path, &filename);
     let final_str = final_path.to_string_lossy().to_string();
 
     let out = adb_cmd(&app)
@@ -949,7 +931,12 @@ pub async fn pull_device_file(
             .trim()
             .to_string());
     }
-    Ok(final_str)
+    Ok(PullResult {
+        saved_path: final_str,
+        fallback_from: resolved
+            .fallback_from
+            .map(|p| p.to_string_lossy().into_owned()),
+    })
 }
 
 #[tauri::command]
@@ -960,7 +947,11 @@ pub async fn push_to_device(
     device_dir: String,
 ) -> Result<(), String> {
     validate_serial(&serial)?;
-    let norm_dir = normalize_device_path(&device_dir)?;
+    let norm_dir = crate::transfer_paths::normalize_phone_upload_dir(&device_dir)?;
+    if !local_paths.is_empty() {
+        let mkdir_cmd = format!("mkdir -p {}", sh_quote(&norm_dir));
+        let _ = run_adb_shell(&app, &serial, &mkdir_cmd).await;
+    }
     for local in local_paths {
         if !Path::new(&local).exists() {
             return Err(format!("Local path does not exist: {local}"));

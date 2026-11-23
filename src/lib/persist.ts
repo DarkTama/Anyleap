@@ -7,6 +7,8 @@ export {
   runFileSyncMigration,
   loadAppPrefs,
   saveAppPrefs,
+  loadTransferFolders,
+  saveTransferFolders,
   getNicknames,
   saveNickname,
   loadActivities,

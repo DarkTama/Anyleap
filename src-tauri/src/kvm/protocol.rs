@@ -324,6 +324,8 @@ pub enum TransferEvent {
     File {
         name: String,
         size: u64,
+        saved_path: std::path::PathBuf,
+        fallback_from: Option<std::path::PathBuf>,
     },
     ClipboardImage {
         data: Vec<u8>,

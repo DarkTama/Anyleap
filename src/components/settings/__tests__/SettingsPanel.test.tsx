@@ -7,8 +7,21 @@ vi.mock("@/lib/persist", async (orig) => ({
   saveModeDefaults: vi.fn(async () => {}),
   saveModeDefaultsNotice: vi.fn(async () => {}),
   saveAppPrefs: vi.fn(async () => {}),
+  saveTransferFolders: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/tauri", () => ({ getSystemResolution: vi.fn(async () => [1920, 1080]) }));
+const mockSetTransferFoldersConfig = vi.fn(async () => {});
+vi.mock("@/lib/tauri", () => ({
+  getSystemResolution: vi.fn(async () => [1920, 1080]),
+  setTransferFoldersConfig: (...args: unknown[]) => mockSetTransferFoldersConfig(...(args as [])),
+}));
+const mockOpenDialog = vi.fn(async () => null as string | null);
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: (...args: unknown[]) => mockOpenDialog(...(args as [])),
+}));
+const mockRevealItemInDir = vi.fn(async () => {});
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: (...args: unknown[]) => mockRevealItemInDir(...(args as [])),
+}));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => {}) }));
 vi.mock("@/services/kvmService", async (orig) => ({
   ...(await orig<typeof import("@/services/kvmService")>()),
@@ -22,8 +35,10 @@ vi.mock("@/services/kvmService", async (orig) => ({
 }));
 
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { useAppStore } from "@/store/useAppStore";
 import { useKvmStore } from "@/stores/kvmStore";
-import { SECTIONS } from "../registry";
+import { DEFAULT_TRANSFER_FOLDERS } from "@/lib/transferFolders";
+import { SECTIONS, entry } from "../registry";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -73,6 +88,11 @@ describe("SettingsPanel rail and filter (SPEC-28 phase 2)", () => {
     vi.clearAllMocks();
     localStorage.clear();
     useKvmStore.getState().reset();
+    useAppStore.getState().setTransferFolders({ ...DEFAULT_TRANSFER_FOLDERS });
+    useAppStore.getState().setDefaultTransferFolders({
+      defaultReceiveDir: "C:\\Users\\Tama\\Downloads\\AnyLeap",
+      defaultPhoneUploadDir: "/sdcard/Download",
+    });
   });
   afterEach(async () => {
     await act(async () => root.unmount());
@@ -170,6 +190,11 @@ describe("relabelled controls keep writing the same stored key", () => {
     vi.clearAllMocks();
     localStorage.clear();
     useKvmStore.getState().reset();
+    useAppStore.getState().setTransferFolders({ ...DEFAULT_TRANSFER_FOLDERS });
+    useAppStore.getState().setDefaultTransferFolders({
+      defaultReceiveDir: "C:\\Users\\Tama\\Downloads\\AnyLeap",
+      defaultPhoneUploadDir: "/sdcard/Download",
+    });
   });
   afterEach(async () => {
     await act(async () => root.unmount());
@@ -258,5 +283,66 @@ describe("relabelled controls keep writing the same stored key", () => {
     await act(async () => links[0].click());
     expect(onOpenComputers).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(useKvmStore.getState().settings)).toBe(before);
+  });
+
+  it("renders F-01..F-03 transfer folder controls, validates phone path, and persists changes", async () => {
+    await mount();
+    await openSection("Clipboard");
+
+    expect(el.textContent).toContain("Save received files to");
+    expect(el.textContent).toContain("C:\\Users\\Tama\\Downloads\\AnyLeap");
+    expect(el.textContent).toContain("Ask where to save each time");
+    expect(el.textContent).toContain("Save files sent to phone in");
+
+    // F-01: Change... and Open and Reset
+    mockOpenDialog.mockResolvedValueOnce("D:\\Incoming\\AnyLeap");
+    const changeBtn = Array.from(el.querySelectorAll("button")).find(
+      (b) => b.textContent === "Change...",
+    )!;
+    await act(async () => changeBtn.click());
+    expect(useAppStore.getState().transferFolders.receiveDir).toBe("D:\\Incoming\\AnyLeap");
+    expect(mockSetTransferFoldersConfig).toHaveBeenCalledWith(
+      "D:\\Incoming\\AnyLeap",
+      "/sdcard/Download",
+    );
+
+    const openBtn = Array.from(el.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Open"),
+    )!;
+    await act(async () => openBtn.click());
+    expect(mockRevealItemInDir).toHaveBeenCalledWith("D:\\Incoming\\AnyLeap");
+
+    // F-02: Ask where to save each time switch
+    const askSwitch = sw("Ask where to save each time");
+    expect(askSwitch.getAttribute("aria-checked")).toBe("false");
+    expect(askSwitch.getAttribute("aria-describedby")).toBeTruthy();
+    await act(async () => askSwitch.click());
+    expect(useAppStore.getState().transferFolders.askWhereToSave).toBe(true);
+
+    // F-03: Preset chips update phoneUploadDir
+    const docsChip = Array.from(el.querySelectorAll("button")).find(
+      (b) => b.textContent === "Documents",
+    )!;
+    await act(async () => docsChip.click());
+    expect(useAppStore.getState().transferFolders.phoneUploadDir).toBe("/sdcard/Documents");
+    expect(mockSetTransferFoldersConfig).toHaveBeenLastCalledWith(
+      "D:\\Incoming\\AnyLeap",
+      "/sdcard/Documents",
+    );
+
+    // F-03: Invalid path shows inline error and does not call backend sync
+    mockSetTransferFoldersConfig.mockClear();
+    const phoneLabel = Array.from(el.querySelectorAll("label")).find(
+      (l) => l.textContent === "Save files sent to phone in",
+    )!;
+    const phoneInput = el.querySelector<HTMLInputElement>(`[id="${phoneLabel.htmlFor}"]`)!;
+    await setInput(phoneInput, "/data/local/tmp");
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain(
+      "Enter a folder inside /sdcard or /storage/emulated/0",
+    );
+    expect(mockSetTransferFoldersConfig).not.toHaveBeenCalled();
+
+    // T-04 helper no longer mentions AnyLeap_Transfers
+    expect(entry("T-04").helper).not.toContain("AnyLeap_Transfers");
   });
 });

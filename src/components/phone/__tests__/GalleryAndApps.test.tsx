@@ -2,6 +2,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
+import { useAppStore } from "@/store/useAppStore";
+import { DEFAULT_TRANSFER_FOLDERS } from "@/lib/transferFolders";
 import type { Album, MediaItem, MediaPage, PhoneApp } from "@/types/phone";
 
 const mockPhoneListAlbums = vi.fn<(...args: unknown[]) => Promise<Album[]>>(() =>
@@ -34,8 +36,11 @@ const mockPhoneSetAppPinned = vi.fn(
   },
 );
 const mockPhoneOpenApp = vi.fn((..._args: unknown[]) => Promise.resolve({}));
-const mockPullDeviceFile = vi.fn((..._args: unknown[]) => Promise.resolve("C:\\Downloads\\item.jpg"));
+const mockPullDeviceFile = vi.fn((..._args: unknown[]) =>
+  Promise.resolve({ savedPath: "C:\\Downloads\\AnyLeap\\IMG_1.jpg", fallbackFrom: null }),
+);
 const mockOpenDialog = vi.fn((..._args: unknown[]) => Promise.resolve("C:\\Downloads"));
+const mockRevealItemInDir = vi.fn((..._args: unknown[]) => Promise.resolve());
 
 vi.mock("@/services/phoneHubService", () => ({
   phoneListAlbums: (...args: unknown[]) => mockPhoneListAlbums(...args),
@@ -55,6 +60,10 @@ vi.mock("@/lib/tauri", () => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => mockOpenDialog(...args),
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: (...args: unknown[]) => mockRevealItemInDir(...args),
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
@@ -104,7 +113,9 @@ describe("GalleryView & AppsView (SPEC-27b Task B4)", () => {
     mockPhoneOpenApp.mockClear();
     mockPullDeviceFile.mockClear();
     mockOpenDialog.mockClear();
+    mockRevealItemInDir.mockClear();
     usePhoneHubStore.getState().reset();
+    useAppStore.getState().setTransferFolders({ ...DEFAULT_TRANSFER_FOLDERS });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -255,13 +266,65 @@ describe("GalleryView & AppsView (SPEC-27b Task B4)", () => {
       downloadBtn?.click();
     });
 
-    expect(mockOpenDialog).toHaveBeenCalled();
+    // Default askWhereToSave: false downloads directly without prompting
+    expect(mockOpenDialog).not.toHaveBeenCalled();
     expect(mockPullDeviceFile).toHaveBeenCalledWith(
       "serial-1",
       "/storage/emulated/0/DCIM/Camera/IMG_1.jpg",
-      "C:\\Downloads",
+      null,
     );
-    expect(usePhoneHubStore.getState().lastGalleryDownloadDir).toBe("C:\\Downloads");
+
+    const showBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Show in folder"),
+    );
+    expect(showBtn).toBeDefined();
+    await act(async () => {
+      showBtn?.click();
+    });
+    expect(mockRevealItemInDir).toHaveBeenCalledWith("C:\\Downloads\\AnyLeap\\IMG_1.jpg");
+  });
+
+  it("prompts for folder when askWhereToSave is enabled and aborts cleanly on cancel", async () => {
+    const items = [makeMediaItem(1, "photo")];
+    mockPhoneListMedia.mockResolvedValue({ items, total: 1 });
+    useAppStore.getState().setTransferFolders({
+      ...DEFAULT_TRANSFER_FOLDERS,
+      receiveDir: "D:\\CustomPhotos",
+      askWhereToSave: true,
+    });
+
+    await act(async () => {
+      root.render(<GalleryView serial="serial-1" />);
+    });
+
+    const selectPhoto = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Select IMG_1.jpg"]',
+    );
+    await act(async () => {
+      selectPhoto?.click();
+    });
+
+    mockOpenDialog.mockResolvedValueOnce(null as unknown as string);
+    const downloadBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Download 1"),
+    );
+    await act(async () => {
+      downloadBtn?.click();
+    });
+    expect(mockOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ directory: true, defaultPath: "D:\\CustomPhotos" }),
+    );
+    expect(mockPullDeviceFile).not.toHaveBeenCalled();
+
+    mockOpenDialog.mockResolvedValueOnce("E:\\Picked");
+    await act(async () => {
+      downloadBtn?.click();
+    });
+    expect(mockPullDeviceFile).toHaveBeenCalledWith(
+      "serial-1",
+      "/storage/emulated/0/DCIM/Camera/IMG_1.jpg",
+      "E:\\Picked",
+    );
   });
 
   it("filters AppsView by search and scope and launches selected app", async () => {
@@ -507,5 +570,53 @@ describe("GalleryView & AppsView (SPEC-27b Task B4)", () => {
     expect(toggleBtn?.getAttribute("aria-pressed")).toBe("false");
     expect(usePhoneHubStore.getState().blurThumbnails).toBe(false);
     expect(container.querySelectorAll(".gallery-tile-blur").length).toBe(0);
+  });
+
+  it("supports Shift+click range selection and Ctrl+click toggle in GalleryView", async () => {
+    const items = Array.from({ length: 5 }, (_, i) => makeMediaItem(i + 1, "photo"));
+    mockPhoneListMedia.mockResolvedValue({ items, total: 5 });
+
+    await act(async () => {
+      root.render(<GalleryView serial="serial-1" />);
+    });
+
+    const selectBtn = (n: number) =>
+      container.querySelector<HTMLButtonElement>(
+        `button[aria-label="Select IMG_${n}.jpg"], button[aria-label="Deselect IMG_${n}.jpg"]`,
+      )!;
+    const isChecked = (n: number) => selectBtn(n).getAttribute("aria-pressed") === "true";
+
+    // Click item 2 -> selects item 2 (anchor = 2)
+    await act(async () => {
+      selectBtn(2).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect([1, 2, 3, 4, 5].map(isChecked)).toEqual([false, true, false, false, false]);
+
+    // Shift+click item 4 -> selects items 2..4
+    await act(async () => {
+      selectBtn(4).dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    });
+    expect([1, 2, 3, 4, 5].map(isChecked)).toEqual([false, true, true, true, false]);
+
+    // Ctrl+click item 1 -> toggles item 1 on
+    await act(async () => {
+      selectBtn(1).dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+    });
+    expect([1, 2, 3, 4, 5].map(isChecked)).toEqual([true, true, true, true, false]);
+
+    // Ctrl+click item 3 -> toggles item 3 off
+    await act(async () => {
+      selectBtn(3).dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+    });
+    expect([1, 2, 3, 4, 5].map(isChecked)).toEqual([true, true, false, true, false]);
+
+    // Shift+click directly on tile 5 -> ranges from anchor (1) to 5
+    const tile5 = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Photo IMG_5.jpg"]',
+    )!;
+    await act(async () => {
+      tile5.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    });
+    expect([1, 2, 3, 4, 5].map(isChecked)).toEqual([true, true, true, true, true]);
   });
 });

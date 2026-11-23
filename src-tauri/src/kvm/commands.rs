@@ -109,14 +109,37 @@ fn release_receiver_inputs(rx_state: &Arc<Mutex<ReceiverSessionState>>, reason: 
     }
 }
 
-fn get_download_dir() -> std::path::PathBuf {
-    std::env::var("USERPROFILE")
-        .map(|p| {
-            std::path::PathBuf::from(p)
-                .join("Downloads")
-                .join("AnyLeap_Transfers")
-        })
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+fn prepare_kvm_fallback_receive_dir(app: &AppHandle) -> std::path::PathBuf {
+    match crate::transfer_paths::prepare_receive_dir() {
+        Ok(resolved) => {
+            if let Some(bad) = resolved.fallback_from {
+                emit_continuity_notice(
+                    app,
+                    &crate::transfer_paths::fallback_notice_message(&bad, &resolved.path),
+                );
+            }
+            resolved.path
+        }
+        Err(_) => crate::transfer_paths::resolve_configured_receive_dir(),
+    }
+}
+
+fn resolve_offer_download_dir(
+    app: &AppHandle,
+    files: &[super::protocol::FileMeta],
+    limit_mb: u32,
+) -> std::path::PathBuf {
+    let total_bytes: u64 = files
+        .iter()
+        .filter(|f| !f.is_dir)
+        .fold(0u64, |acc, f| acc.saturating_add(f.size));
+    if super::staging::choose_transfer_destination(total_bytes, limit_mb)
+        == super::staging::TransferDestination::DownloadsFallback
+    {
+        prepare_kvm_fallback_receive_dir(app)
+    } else {
+        crate::transfer_paths::resolve_configured_receive_dir()
+    }
 }
 
 /// Identity + trust store, created on first use under the app data dir.
@@ -166,6 +189,36 @@ fn emit_clipboard_text(app: &AppHandle, text: &str) {
     );
 }
 
+struct TransferProgressFields<'a> {
+    id: &'a str,
+    kind: &'a str,
+    name: &'a str,
+    pct: u8,
+    state: &'a str,
+    size_bytes: u64,
+    saved_path: Option<&'a str>,
+}
+
+fn emit_transfer_progress_inner(app: &AppHandle, fields: TransferProgressFields<'_>) {
+    let mut payload = serde_json::json!({
+        "id": fields.id,
+        "kind": fields.kind,
+        "name": fields.name,
+        "pct": fields.pct.min(100),
+        "state": fields.state,
+        "sizeBytes": fields.size_bytes,
+    });
+    if let Some(path) = fields.saved_path {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert(
+                "savedPath".to_string(),
+                serde_json::Value::String(path.to_string()),
+            );
+        }
+    }
+    let _ = app.emit("kvm-transfer-progress", payload);
+}
+
 pub(crate) fn emit_transfer_progress(
     app: &AppHandle,
     id: &str,
@@ -175,16 +228,17 @@ pub(crate) fn emit_transfer_progress(
     state: &str,
     size_bytes: u64,
 ) {
-    let _ = app.emit(
-        "kvm-transfer-progress",
-        serde_json::json!({
-            "id": id,
-            "kind": kind,
-            "name": name,
-            "pct": pct.min(100),
-            "state": state,
-            "sizeBytes": size_bytes,
-        }),
+    emit_transfer_progress_inner(
+        app,
+        TransferProgressFields {
+            id,
+            kind,
+            name,
+            pct,
+            state,
+            size_bytes,
+            saved_path: None,
+        },
     );
 }
 
@@ -240,16 +294,44 @@ fn emit_transfer(app: &AppHandle, ev: TransferEvent) {
                 "status": "completed"
             })
         }
-        TransferEvent::File { name, size } => serde_json::json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": now_ms(),
-            "type": "file",
-            "name": name,
-            "sizeBytes": size,
-            "progressPercent": 100,
-            "status": "completed",
-            "savedPath": get_download_dir().display().to_string()
-        }),
+        TransferEvent::File {
+            name,
+            size,
+            saved_path,
+            fallback_from,
+        } => {
+            if let Some(bad) = fallback_from {
+                let actual_dir = saved_path.parent().unwrap_or(&saved_path);
+                emit_continuity_notice(
+                    app,
+                    &crate::transfer_paths::fallback_notice_message(&bad, actual_dir),
+                );
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            let saved_str = saved_path.display().to_string();
+            emit_transfer_progress_inner(
+                app,
+                TransferProgressFields {
+                    id: &id,
+                    kind: "file",
+                    name: &name,
+                    pct: 100,
+                    state: "done",
+                    size_bytes: size,
+                    saved_path: Some(&saved_str),
+                },
+            );
+            serde_json::json!({
+                "id": id,
+                "timestamp": now_ms(),
+                "type": "file",
+                "name": name,
+                "sizeBytes": size,
+                "progressPercent": 100,
+                "status": "completed",
+                "savedPath": saved_str
+            })
+        }
         // --- SPEC-25c ---
         TransferEvent::OpenFile {
             transfer_id,
@@ -399,8 +481,8 @@ fn handle_incoming_drag_offer(
     }
     let button = button.clamp(1, 3);
     let staging_root = super::staging::default_staging_root();
-    let download_dir = get_download_dir();
     let limit_mb = super::staging::staging_limit_mb();
+    let download_dir = resolve_offer_download_dir(app, &files, limit_mb);
     let summary = summarize_offer_name(&files);
     let mut initial_released_early = false;
     if forwarded_button_inject {
@@ -448,7 +530,8 @@ fn handle_incoming_drag_offer(
                 emit_continuity_notice(
                     app,
                     &format!(
-                        "Drag exceeds {limit_mb} MB staging limit — saving \"{summary}\" to Downloads\\AnyLeap_Transfers"
+                        "Drag exceeds {limit_mb} MB staging limit — saving \"{summary}\" to {}",
+                        download_dir.display()
                     ),
                 );
             } else {
@@ -740,8 +823,8 @@ fn handle_incoming_file_clip_offer(
     }
     replace_previous_clip_offer(app, &offer_id);
     let staging_root = super::staging::default_staging_root();
-    let download_dir = get_download_dir();
     let limit_mb = super::staging::staging_limit_mb();
+    let download_dir = resolve_offer_download_dir(app, &files, limit_mb);
     let total_bytes: u64 = files
         .iter()
         .filter(|f| !f.is_dir)
@@ -820,7 +903,8 @@ fn handle_incoming_file_clip_offer(
                 emit_continuity_notice(
                     app,
                     &format!(
-                        "Copied files exceed {limit_mb} MB staging limit — saving \"{summary}\" to Downloads\\AnyLeap_Transfers"
+                        "Copied files exceed {limit_mb} MB staging limit — saving \"{summary}\" to {}",
+                        download_dir.display()
                     ),
                 );
             } else {
@@ -902,11 +986,39 @@ where
                 let pending = pending_target_drag().lock().ok().and_then(|mut g| g.take());
                 let early_hook_release = super::dragdrop::take_pending_target_drag_early_release();
                 if done.destination == super::staging::TransferDestination::DownloadsFallback {
-                    if let Some(ev) = super::dragdrop::global_drag_registry()
-                        .complete_terminal(&drag_id, super::protocol::DragOutcome::Done)
-                    {
-                        emit_drag_progress_payload(app, &ev);
-                    }
+                    let saved_path = done
+                        .top_level_paths
+                        .first()
+                        .unwrap_or(&done.base_dir)
+                        .display()
+                        .to_string();
+                    let _ = super::dragdrop::global_drag_registry()
+                        .complete_terminal(&drag_id, super::protocol::DragOutcome::Done);
+                    emit_transfer_progress_inner(
+                        app,
+                        TransferProgressFields {
+                            id: &drag_id,
+                            kind: "drag",
+                            name: &rel_path,
+                            pct: 100,
+                            state: "done",
+                            size_bytes: done.total_bytes,
+                            saved_path: Some(&saved_path),
+                        },
+                    );
+                    let _ = app.emit(
+                        "kvm-activity",
+                        serde_json::json!({
+                            "id": uuid::Uuid::new_v4().to_string(),
+                            "timestamp": now_ms(),
+                            "type": "file",
+                            "name": rel_path,
+                            "sizeBytes": done.total_bytes,
+                            "progressPercent": 100,
+                            "status": "completed",
+                            "savedPath": saved_path
+                        }),
+                    );
                     send_packet(KvmPacket::DragResult {
                         drag_id,
                         outcome: super::protocol::DragOutcome::Done,
@@ -1000,14 +1112,26 @@ where
                 }
             }
             if let Some(done) = done_opt {
-                emit_transfer_progress(
+                let saved_path_opt = (done.destination
+                    == super::staging::TransferDestination::DownloadsFallback)
+                    .then(|| {
+                        done.top_level_paths
+                            .first()
+                            .unwrap_or(&done.base_dir)
+                            .display()
+                            .to_string()
+                    });
+                emit_transfer_progress_inner(
                     app,
-                    &offer_id,
-                    "clip",
-                    &rel_path,
-                    100,
-                    "done",
-                    done.total_bytes,
+                    TransferProgressFields {
+                        id: &offer_id,
+                        kind: "clip",
+                        name: &rel_path,
+                        pct: 100,
+                        state: "done",
+                        size_bytes: done.total_bytes,
+                        saved_path: saved_path_opt.as_deref(),
+                    },
                 );
                 if done.destination == super::staging::TransferDestination::Staging {
                     match super::clipboard::set_clipboard_files(&done.top_level_paths) {
@@ -1033,19 +1157,24 @@ where
                         }
                     }
                 }
-                let _ = app.emit(
-                    "kvm-activity",
-                    serde_json::json!({
-                        "id": uuid::Uuid::new_v4().to_string(),
-                        "timestamp": now_ms(),
-                        "type": "file",
-                        "name": rel_path,
-                        "sizeBytes": done.total_bytes,
-                        "progressPercent": 100,
-                        "status": "completed",
-                        "savedPath": done.base_dir.display().to_string()
-                    }),
-                );
+                let mut activity = serde_json::json!({
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "timestamp": now_ms(),
+                    "type": "file",
+                    "name": rel_path,
+                    "sizeBytes": done.total_bytes,
+                    "progressPercent": 100,
+                    "status": "completed"
+                });
+                if let Some(ref saved_path) = saved_path_opt {
+                    if let Some(obj) = activity.as_object_mut() {
+                        obj.insert(
+                            "savedPath".to_string(),
+                            serde_json::Value::String(saved_path.clone()),
+                        );
+                    }
+                }
+                let _ = app.emit("kvm-activity", activity);
             }
         }
         TransferEvent::Cancelled { id, kind, .. } => {
@@ -1828,7 +1957,7 @@ async fn start_server_inner(
         id.clone(),
         name.clone(),
         Arc::new(get_local_monitors),
-        get_download_dir(),
+        None,
     )
     .await?;
     let port = server_handle.port;
@@ -2874,7 +3003,7 @@ pub async fn kvm_connect_peer(
         None,
         &identity,
         &trust,
-        get_download_dir(),
+        None,
     )
     .await?;
 
@@ -3855,8 +3984,8 @@ pub async fn kvm_fetch_clip(
 ) -> Result<(), String> {
     if let Some(pending) = super::staging::take_pending_inbound_clip(&offer_id) {
         let staging_root = super::staging::default_staging_root();
-        let download_dir = get_download_dir();
         let limit_mb = super::staging::staging_limit_mb();
+        let download_dir = resolve_offer_download_dir(&app_handle, &pending.files, limit_mb);
         match super::staging::register_transfer_offer(
             &pending.offer_id,
             super::staging::TransferKind::Clip,
@@ -3876,8 +4005,9 @@ pub async fn kvm_fetch_clip(
                     emit_continuity_notice(
                         &app_handle,
                         &format!(
-                            "Copied files exceed {limit_mb} MB staging limit — saving \"{}\" to Downloads\\AnyLeap_Transfers",
-                            pending.summary
+                            "Copied files exceed {limit_mb} MB staging limit — saving \"{}\" to {}",
+                            pending.summary,
+                            download_dir.display()
                         ),
                     );
                 } else {
@@ -3995,7 +4125,7 @@ mod tests {
             "local".into(),
             "Local".into(),
             Arc::new(test_mons),
-            dir.join("dl-local"),
+            Some(dir.join("dl-local")),
         )
         .await
         .unwrap();
@@ -4007,7 +4137,7 @@ mod tests {
             "remote".into(),
             "Remote".into(),
             Arc::new(test_mons),
-            dir.join("dl-remote"),
+            Some(dir.join("dl-remote")),
         )
         .await
         .unwrap();
@@ -4022,7 +4152,7 @@ mod tests {
             Some(remote_srv.pin()),
             &local_id,
             &cli_trust,
-            dir.join("dl-cli"),
+            Some(dir.join("dl-cli")),
         )
         .await
         .unwrap();
@@ -4102,7 +4232,7 @@ mod tests {
             "srv".into(),
             "Server".into(),
             Arc::new(test_mons),
-            dir.join("dl-srv"),
+            Some(dir.join("dl-srv")),
         )
         .await
         .unwrap();
@@ -4117,7 +4247,7 @@ mod tests {
             Some(srv.pin()),
             &cli_id,
             &cli_trust,
-            dir.join("dl-c1"),
+            Some(dir.join("dl-c1")),
         )
         .await
         .unwrap();
@@ -4169,7 +4299,7 @@ mod tests {
             Some(srv_pin),
             &cli_id,
             &cli_trust,
-            dir.join("dl-c2"),
+            Some(dir.join("dl-c2")),
         )
         .await
         .unwrap();
@@ -4208,7 +4338,7 @@ mod tests {
             Some(srv_pin2),
             &cli_id,
             &cli_trust,
-            dir.join("dl-c3"),
+            Some(dir.join("dl-c3")),
         )
         .await
         .unwrap();

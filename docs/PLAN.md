@@ -72,6 +72,10 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 
 Settled: each mirroring mode owns its settings (`modeDefaults`), launch settings are resolved per mode, and the global quality preset is replaced by a derived per-mode Quality choice (ADR-0005). Phases 1 (data model, migration, Phone mirroring section) and 2 (sections, rail, filter, relabels, Advanced) are implemented; phase 3 (mirror window control bar: 60 px grouped icon sidebar, More popover, accessible tooltips) is implemented on its branch. SPEC-30 Phase 1 adds per-mode density-independent scroll speed and style controls on top of `modeDefaults`.
 
+## Default transfer folders (SPEC-31)
+
+Settled: `transferFolders` in `settings.json` + `src-tauri/src/transfer_paths.rs` provide one configurable PC receive folder (default `<Downloads>\AnyLeap`), an opt-in **Ask where to save each time** switch (default off), a configurable phone upload folder (default `/sdcard/Download`), automatic collision renaming (`name (1).ext`), fallback notices on missing/unwritable folders, and **Show in folder** actions across Phone Hub, screenshots, and multi-PC transfers.
+
 ## Milestones
 
 1. **M0 — Docs & decisions** (this commit): plan, architecture, wireless flows, settings map.

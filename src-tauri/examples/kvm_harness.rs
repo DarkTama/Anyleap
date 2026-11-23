@@ -943,7 +943,7 @@ Options:
             cfg.pin.clone(),
             &identity,
             &trust,
-            state_dir.join("downloads"),
+            Some(state_dir.join("downloads")),
         )) {
             Ok(c) => Arc::new(c),
             Err(e) => {

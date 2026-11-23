@@ -88,6 +88,9 @@ export const REGISTRY: SettingEntry[] = [
   e("T-01", "clipboard", "Drag and drop files between PCs (Experimental)", "Drag files across the edge. Some apps reject drops; copy and paste is more reliable.", ["drop", "transfer", "files"]),
   e("T-02", "clipboard", "Copy and paste files between PCs", "Large files wait for Fetch (see Advanced).", ["files", "transfer", "clipboard"]),
   e("T-03", "clipboard", "Match pointer style on the Linked PC", undefined, ["cursor", "scheme", "mouse"]),
+  e("F-01", "clipboard", "Save received files to", "Used for phone downloads, screenshots, and large files from another PC. Default: Downloads\\AnyLeap.", ["folder", "download", "save", "path", "directory", "transfer"]),
+  e("F-02", "clipboard", "Ask where to save each time", "Off: saves straight to your folder without asking. Transfers from another PC always use your folder.", ["prompt", "dialog", "ask", "download", "save"]),
+  e("F-03", "clipboard", "Save files sent to phone in", "Folder on your phone for files dropped onto the mirror window or pasted images. Default: /sdcard/Download.", ["phone", "upload", "android", "sdcard", "push", "mirror"]),
 
   // Audio, media & power
   e("T-06", "audio", "Play Linked PC audio on this PC", undefined, ["sound", "bridge", "speakers"]),
@@ -99,7 +102,7 @@ export const REGISTRY: SettingEntry[] = [
   e("T-12", "audio", 'Add "Open on Linked PC" to the right-click menu', undefined, ["explorer", "context menu", "shell"]),
 
   // Advanced
-  e("T-04", "advanced", "Large files: save to Downloads above", "Files above this size (MB) are saved to Downloads\AnyLeap_Transfers.", ["limit", "size", "mb", "transfer"]),
+  e("T-04", "advanced", "Large files: save to Downloads above", "Files above this size (MB) are saved directly to your receive folder.", ["limit", "size", "mb", "transfer"]),
   e("T-05", "advanced", "Large files: ask before copying above", "Bigger copies wait until you click Fetch. Default 100 MB.", ["limit", "size", "mb", "fetch", "clipboard"]),
   e("K-09", "advanced", "Record a diagnostics log", "Records input decisions and slow events for support. Rotates at 5 MB.", ["debug", "log", "support", "troubleshoot"]),
   e("K-10", "advanced", "Open log folder", undefined, ["debug", "log", "folder"]),

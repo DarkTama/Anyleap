@@ -37,7 +37,7 @@ struct ServerContext {
     local_id: String,
     local_name: String,
     monitor_provider: MonitorProvider,
-    download_dir: PathBuf,
+    download_dir: Option<PathBuf>,
     incoming_tx: broadcast::Sender<KvmPacket>,
     outgoing_tx: broadcast::Sender<Outbound>,
     mouse_delta_tx: broadcast::Sender<UdpMouseDelta>,
@@ -106,7 +106,7 @@ pub async fn start_kvm_server(
     local_id: String,
     local_name: String,
     monitor_provider: MonitorProvider,
-    download_dir: PathBuf,
+    download_dir: Option<PathBuf>,
 ) -> Result<KvmServerHandle, String> {
     let (incoming_tx, _) = broadcast::channel(512);
     let (outgoing_tx, _) = broadcast::channel(512);
@@ -478,7 +478,7 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                 tokio::spawn(async move {
                     match super::files::receive_with_events_for_conn(
                         &mut s,
-                        &dir,
+                        dir.as_deref(),
                         Some(&tx),
                         conn_id,
                     )
@@ -608,7 +608,7 @@ mod tests {
             "srv".into(),
             "Server".into(),
             Arc::new(default_mons),
-            dir.join("dl"),
+            Some(dir.join("dl")),
         )
         .await
         .unwrap();
@@ -640,7 +640,7 @@ mod tests {
             pin,
             &r.cli_id,
             &r.cli_trust,
-            r.dir.join("cli-dl"),
+            Some(r.dir.join("cli-dl")),
         )
         .await
     }
@@ -687,7 +687,7 @@ mod tests {
             "srv".into(),
             "Server".into(),
             Arc::new(move || cur.lock().unwrap().clone()),
-            dir.join("dl"),
+            Some(dir.join("dl")),
         )
         .await
         .unwrap();
@@ -701,7 +701,7 @@ mod tests {
             Some(srv.pin()),
             &cli_id,
             &TrustStore::load(None),
-            dir.join("c1-dl"),
+            Some(dir.join("c1-dl")),
         )
         .await
         .unwrap();
@@ -720,7 +720,7 @@ mod tests {
             Some(srv.pin()),
             &cli2_id,
             &TrustStore::load(None),
-            dir.join("c2-dl"),
+            Some(dir.join("c2-dl")),
         )
         .await
         .unwrap();
@@ -843,7 +843,7 @@ mod tests {
             "o".into(),
             "O".into(),
             Arc::new(default_mons),
-            r.dir.join("dl2"),
+            Some(r.dir.join("dl2")),
         )
         .await
         .unwrap();
@@ -905,8 +905,15 @@ mod tests {
             .unwrap()
             .unwrap()
         {
-            TransferEvent::File { name, size } => {
+            TransferEvent::File {
+                name,
+                size,
+                saved_path,
+                fallback_from,
+            } => {
                 assert_eq!((name.as_str(), size), ("big.bin", data.len() as u64));
+                assert_eq!(saved_path, r.dir.join("dl").join("big.bin"));
+                assert_eq!(fallback_from, None);
             }
             other => panic!("unexpected {other:?}"),
         }
@@ -915,6 +922,103 @@ mod tests {
             data
         );
         let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    #[tokio::test]
+    async fn live_transfer_paths_update_changes_file_destination_without_restart() {
+        let dir = std::env::temp_dir().join(format!("anyleap-live-dl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dir_a = dir.join("dest-a");
+        let dir_b = dir.join("dest-b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        crate::transfer_paths::init_defaults(Some(dir.join("default-dl")));
+        crate::transfer_paths::set_config(
+            Some(dir_a.to_string_lossy().into_owned()),
+            crate::transfer_paths::DEFAULT_PHONE_UPLOAD_DIR,
+        )
+        .unwrap();
+
+        let srv_id = Identity::load_or_create(&dir.join("srv")).unwrap();
+        let cli_id = Identity::load_or_create(&dir.join("cli")).unwrap();
+        let srv = start_kvm_server(
+            0,
+            &srv_id,
+            Arc::new(TrustStore::load(None)),
+            "srv".into(),
+            "Server".into(),
+            Arc::new(default_mons),
+            None,
+        )
+        .await
+        .unwrap();
+        let mut trx = srv.transfer_tx.subscribe();
+        let cli = KvmClientHandle::connect(
+            "127.0.0.1",
+            srv.port,
+            "cli".into(),
+            "Client".into(),
+            default_mons(),
+            Some(srv.pin()),
+            &cli_id,
+            &TrustStore::load(None),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let src_a = dir.join("one.txt");
+        std::fs::write(&src_a, b"alpha").unwrap();
+        send_file(&cli.conn, &src_a).await.unwrap();
+        match timeout(Duration::from_secs(5), trx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            TransferEvent::File {
+                saved_path,
+                fallback_from,
+                ..
+            } => {
+                assert_eq!(saved_path, dir_a.join("one.txt"));
+                assert_eq!(fallback_from, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        // Update destination mid-session without restarting server or client
+        crate::transfer_paths::set_config(
+            Some(dir_b.to_string_lossy().into_owned()),
+            crate::transfer_paths::DEFAULT_PHONE_UPLOAD_DIR,
+        )
+        .unwrap();
+
+        let src_b = dir.join("two.txt");
+        std::fs::write(&src_b, b"beta").unwrap();
+        send_file(&cli.conn, &src_b).await.unwrap();
+        match timeout(Duration::from_secs(5), trx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            TransferEvent::File {
+                saved_path,
+                fallback_from,
+                ..
+            } => {
+                assert_eq!(saved_path, dir_b.join("two.txt"));
+                assert_eq!(fallback_from, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        assert_eq!(std::fs::read(dir_a.join("one.txt")).unwrap(), b"alpha");
+        assert_eq!(std::fs::read(dir_b.join("two.txt")).unwrap(), b"beta");
+        let _ = crate::transfer_paths::set_config(
+            None,
+            crate::transfer_paths::DEFAULT_PHONE_UPLOAD_DIR,
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Verification 4.5: Loopback QUIC input flow, CursorReturn, ReleaseAll, PeerDisconnected
@@ -935,7 +1039,7 @@ mod tests {
             Some(r.srv.pin()),
             &r.cli_id,
             &r.cli_trust,
-            r.dir.join("cli1-dl"),
+            Some(r.dir.join("cli1-dl")),
         )
         .await
         .unwrap();
@@ -952,7 +1056,7 @@ mod tests {
             Some(r.srv.pin()),
             &cli2_id,
             &cli2_trust,
-            r.dir.join("cli2-dl"),
+            Some(r.dir.join("cli2-dl")),
         )
         .await
         .unwrap();
@@ -1170,7 +1274,7 @@ mod tests {
                 let m = linked_mons.clone();
                 Arc::new(move || m.clone())
             },
-            dir.join("dl-srv"),
+            Some(dir.join("dl-srv")),
         )
         .await
         .unwrap();
@@ -1187,7 +1291,7 @@ mod tests {
             Some(srv.pin()),
             &cli_id,
             &cli_trust,
-            dir.join("dl-cli"),
+            Some(dir.join("dl-cli")),
         )
         .await
         .unwrap();

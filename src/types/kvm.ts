@@ -150,7 +150,7 @@ export interface KvmSettingsConfig {
   continuityOpenOnLinkedMenu: boolean;
 }
 
-export type TransferKind = "drag" | "clip" | "open";
+export type TransferKind = "drag" | "clip" | "open" | "file";
 
 export type TransferProgressState =
   | "awaiting_fetch"
@@ -166,6 +166,7 @@ export interface KvmTransferProgressPayload {
   pct: number;
   state?: TransferProgressState;
   sizeBytes?: number;
+  savedPath?: string;
 }
 
 export type LinkedMuteState =

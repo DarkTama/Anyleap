@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import type { EdgeSide, Point, Seam, TopologyConfig } from "@/types/kvm";
 import { useKvmStore } from "@/stores/kvmStore";
+import { useAppStore } from "@/store/useAppStore";
+import { resolveDisplayReceiveDir } from "@/lib/transferFolders";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   computeCanvasLayout,
@@ -67,6 +69,12 @@ export function TopologyCanvas() {
   const setTopology = useKvmStore((s) => s.setTopology);
   const updateSettings = useKvmStore((s) => s.updateSettings);
   const sendFile = useKvmStore((s) => s.sendFile);
+  const transferFolders = useAppStore((s) => s.transferFolders);
+  const defaultTransferFolders = useAppStore((s) => s.defaultTransferFolders);
+  const displayReceiveDir = resolveDisplayReceiveDir(
+    transferFolders.receiveDir,
+    defaultTransferFolders.defaultReceiveDir,
+  );
 
   const primary =
     topology.computers.find((c) => c.is_local) || topology.computers[0];
@@ -474,7 +482,7 @@ export function TopologyCanvas() {
               Drop files to transfer to {peer?.name || "Linked PC"}
             </span>
             <span className="text-[10px] text-text-muted">
-              Saves to Downloads/AnyLeap_Transfers
+              Saves to {displayReceiveDir}
             </span>
           </div>
         )}

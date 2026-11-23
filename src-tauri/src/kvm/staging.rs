@@ -1,7 +1,8 @@
 //! Pre-staging directories, sanitized relative paths, transfer limits, and cleanup (SPEC-25a).
 
-use super::files::{sanitize_name, unique_path};
+use super::files::sanitize_name;
 use super::protocol::FileMeta;
+use crate::transfer_paths::unique_dest_path;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -164,7 +165,7 @@ pub enum TransferDestination {
 }
 
 /// Pure decision: transfers whose total byte size is within `staging_limit_mb`
-/// go to staging; larger transfers fall back to `Downloads\AnyLeap_Transfers`.
+/// go to staging; larger transfers fall back to the configured PC receive folder.
 pub fn choose_transfer_destination(total_bytes: u64, staging_limit_mb: u32) -> TransferDestination {
     if total_bytes <= staging_limit_bytes(staging_limit_mb) {
         TransferDestination::Staging
@@ -520,7 +521,7 @@ pub fn register_transfer_offer(
             };
             let top = first.as_os_str().to_string_lossy().into_owned();
             if let std::collections::hash_map::Entry::Vacant(e) = top_name_map.entry(top) {
-                let unique = unique_path(&base_dir, e.key());
+                let unique = unique_dest_path(&base_dir, e.key());
                 if let Some(u_name) = unique.file_name().and_then(|n| n.to_str()) {
                     e.insert(u_name.to_string());
                 }

@@ -12,6 +12,7 @@ import {
   formatTransferBytes,
   TRANSFER_AWAITING_FETCH_TTL_MS,
   TRANSFER_COMPLETED_LINGER_MS,
+  TRANSFER_SAVED_LINGER_MS,
   TRANSFER_NOTICE_LINGER_MS,
   TRANSFER_STALE_DRAG_MS,
 } from "./transferBarReducer";
@@ -282,5 +283,32 @@ describe("same-text notice after expiry", () => {
     expect(again.notice?.id).toBe("notice-57000");
     expect(again.notice?.id).not.toBe("notice-1000");
     expect(again.notice?.expiresAt).toBe(57_000 + TRANSFER_NOTICE_LINGER_MS);
+  });
+
+  it("lingers 4.5s and labels as Saved when done carries savedPath", () => {
+    let state = upsertTransferProgress(
+      initialTransferBarState,
+      {
+        id: "f1",
+        kind: "file",
+        name: "movie.mkv",
+        pct: 100,
+        state: "done",
+        savedPath: "D:\\Incoming\\movie.mkv",
+      },
+      2000,
+    );
+    expect(state.transfers[0]).toMatchObject({
+      status: "done",
+      savedPath: "D:\\Incoming\\movie.mkv",
+      expiresAt: 2000 + TRANSFER_SAVED_LINGER_MS,
+    });
+    expect(getTransferKindLabel("file", "done", "D:\\Incoming\\movie.mkv")).toBe("Saved");
+    expect(getTransferKindLabel("clip", "done", "D:\\Incoming\\big.zip")).toBe("Saved");
+
+    state = expireTransferBar(state, 2000 + TRANSFER_SAVED_LINGER_MS - 1);
+    expect(state.transfers).toHaveLength(1);
+    state = expireTransferBar(state, 2000 + TRANSFER_SAVED_LINGER_MS);
+    expect(state.transfers).toHaveLength(0);
   });
 });
