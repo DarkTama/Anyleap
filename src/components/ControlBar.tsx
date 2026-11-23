@@ -38,6 +38,7 @@ import {
   stopMirror,
   getPhoneToggles,
   setPhoneToggle,
+  getScrollStyle,
   startRecording,
   stopRecording,
   endCall,
@@ -142,10 +143,19 @@ export function ControlBar({
       .catch(() => {
         // best-effort when device is offline/unauthorized
       });
+    if (!camera) {
+      getScrollStyle(serial)
+        .then((style) => {
+          if (!cancelled && style) {
+            setDeviceToggle(serial, "swipeScroll", style === "paged");
+          }
+        })
+        .catch(() => {});
+    }
     return () => {
       cancelled = true;
     };
-  }, [serial]);
+  }, [serial, camera, setDeviceToggle]);
 
   // End call is only offered during a call: poll the call state while enabled.
   useEffect(() => {

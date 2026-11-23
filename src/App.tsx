@@ -24,6 +24,7 @@ import {
   openUrlOnDevice,
   getPhoneToggles,
   setPhoneToggle,
+  setScrollFeel,
 } from "@/lib/tauri";
 import { MSG_NEEDS_REPAIR, resolveDeviceNickname, resolveDeviceTarget } from "@/lib/deviceStatus";
 import { surfaceAdbError } from "@/lib/adbError";
@@ -36,8 +37,9 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { listSaved } from "@/lib/savedDevices";
 import { loadControlConfig } from "@/lib/controlConfig";
-import { loadModeDefaults, getNicknames, loadAppPrefs, runFileSyncMigration } from "@/lib/persist";
-import { resolveLaunchSettings, type MirrorMode } from "@/lib/modeSettings";
+import { getNicknames, loadAppPrefs, loadModeDefaults, runFileSyncMigration } from "@/lib/persist";
+import { resolveLaunchSettings, toScrollConfig, type MirrorMode } from "@/lib/modeSettings";
+import { launchMode } from "@/lib/modeActions";
 import {
   mirrorLabelForSerial,
   shouldCloseMirrorWindowOnExit,
@@ -245,6 +247,14 @@ function App() {
         const savedMode = restartingModesRef.current.get(e.payload.serial);
         restartingModesRef.current.delete(e.payload.serial);
         upsertSession(e.payload, savedMode);
+        if (e.payload.mode !== "camera") {
+          const st = useAppStore.getState();
+          const sessionMode = st.sessionModes[e.payload.id] ?? savedMode ?? launchMode(st.currentMode);
+          const modeKey = sessionMode === "camera" ? "mirror" : sessionMode;
+          const scroll = st.modeDefaults[modeKey].scroll;
+          void setScrollFeel(e.payload.serial, toScrollConfig(scroll)).catch(() => {});
+          st.setDeviceToggle(e.payload.serial, "swipeScroll", scroll.style === "paged");
+        }
       }),
       onSessionReplaced((e) => removeSession(e.payload)),
       onSessionExited((e) => {
@@ -296,6 +306,15 @@ function App() {
           }
         }
         if (targetSerial) {
+          if (
+            shouldCloseMirrorWindowOnExit({
+              exitedSerial: targetSerial,
+              activeSessions: useAppStore.getState().sessions,
+              restartingSerials: restartingSerialsRef.current,
+            })
+          ) {
+            useAppStore.getState().setDeviceToggle(targetSerial, "swipeScroll", false);
+          }
           const mirrorLabel = mirrorLabelForSerial(targetSerial);
           const closeMirror = () => {
             if (
@@ -378,7 +397,18 @@ function App() {
   // Load persisted quality settings + app prefs on launch; run the update check.
   useEffect(() => {
     loadModeDefaults()
-      .then((m) => setModeDefaults(m.modeDefaults, m.notice))
+      .then((m) => {
+        setModeDefaults(m.modeDefaults, m.notice);
+        const st = useAppStore.getState();
+        for (const s of st.sessions) {
+          if (s.mode === "camera") continue;
+          const sessionMode = st.sessionModes[s.id] ?? launchMode(st.currentMode);
+          const modeKey = sessionMode === "camera" ? "mirror" : sessionMode;
+          const scroll = m.modeDefaults[modeKey].scroll;
+          void setScrollFeel(s.serial, toScrollConfig(scroll)).catch(() => {});
+          st.setDeviceToggle(s.serial, "swipeScroll", scroll.style === "paged");
+        }
+      })
       .catch(() => {});
     loadAppPrefs()
       .then((p) => {

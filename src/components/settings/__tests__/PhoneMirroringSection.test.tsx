@@ -7,12 +7,17 @@ vi.mock("@/lib/persist", async (orig) => ({
   saveModeDefaults: vi.fn(async () => {}),
   saveModeDefaultsNotice: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/tauri", () => ({ getSystemResolution: vi.fn(async () => [1920, 1080]) }));
+vi.mock("@/lib/tauri", () => ({
+  getSystemResolution: vi.fn(async () => [1920, 1080]),
+  getScrollMultiplier: vi.fn(async () => null),
+  setScrollFeel: vi.fn(async () => null),
+}));
 
 import { PhoneMirroringSection } from "../PhoneMirroringSection";
 import { useAppStore } from "@/store/useAppStore";
 import { defaultModeDefaults } from "@/lib/modeSettings";
 import { saveModeDefaults } from "@/lib/persist";
+import { getScrollMultiplier } from "@/lib/tauri";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -168,5 +173,45 @@ describe("PhoneMirroringSection", () => {
     useAppStore.getState().updateMode("mirror", { maxFps: 45 });
     await act(async () => {});
     expect(el.textContent).toContain("Custom");
+  });
+
+  it("renders Scrolling group with Smooth/Paged style and speed select, disables speed under Paged, and hides Phase 2/3 controls", async () => {
+    useAppStore.setState({ sessions: [], sessionModes: {} });
+    await mount();
+    expect(el.textContent).toContain("Scrolling");
+    expect(el.textContent).toContain("Scroll style");
+    expect(el.textContent).toContain("Smooth (reading)");
+    expect(el.textContent).toContain("Paged (short videos)");
+    expect(el.textContent).toContain("Scroll speed");
+    expect(el.textContent).toContain("Matches the phone's normal feel.");
+    expect(el.textContent).not.toContain("Smooth scrolling");
+    expect(el.textContent).not.toContain("Touchpad momentum");
+
+    const speedSelect = Array.from(el.querySelectorAll<HTMLSelectElement>("select")).find((sel) =>
+      Array.from(sel.options).some((o) => o.value === "auto"),
+    )!;
+    expect(speedSelect.value).toBe("auto");
+    expect(speedSelect.disabled).toBe(false);
+
+    const pagedBtn = Array.from(el.querySelectorAll<HTMLElement>('[role="radio"]')).find(
+      (r) => r.textContent === "Paged (short videos)",
+    )!;
+    await act(async () => pagedBtn.click());
+    expect(useAppStore.getState().modeDefaults.mirror.scroll.style).toBe("paged");
+    expect(useAppStore.getState().modeDefaults.flex.scroll.style).toBe("smooth");
+    expect(speedSelect.disabled).toBe(true);
+    expect(el.textContent).toContain("Not used in Paged style.");
+  });
+
+  it("shows live Auto multiplier when a session of the active mode is running", async () => {
+    vi.mocked(getScrollMultiplier).mockResolvedValueOnce(2.5);
+    useAppStore.setState({
+      sessions: [{ id: "s1", serial: "DEV1", pid: 1, started_at: 1, mode: "display" }],
+      sessionModes: { s1: "flex" },
+      currentMode: "flex",
+    });
+    await mount();
+    await act(async () => tab("Flex").click());
+    expect(el.textContent).toContain("Auto matches the phone's normal feel. Currently 2.5x on this screen.");
   });
 });

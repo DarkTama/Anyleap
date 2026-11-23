@@ -57,7 +57,7 @@ export const BUTTON_LABELS: Record<ButtonId, string> = {
   notifications: "Notifications",
   screenOff: "Turn phone screen off (keep mirroring)",
   orientToggle: "Rotate",
-  swipeScroll: "Mouse wheel swipes",
+  swipeScroll: "Paged scrolling",
   record: "Record screen",
   wifi: "Wi-Fi",
   bluetooth: "Bluetooth",

@@ -7,6 +7,7 @@ mod phone_files;
 // --- SPEC-27a ---
 pub mod phone_hub;
 // --- end SPEC-27a ---
+pub mod scroll_feel;
 mod state;
 mod wheel_swipe;
 use state::AppState;
@@ -86,6 +87,9 @@ pub fn run() {
             commands::end_call,
             commands::get_call_active,
             wheel_swipe::set_wheel_swipe,
+            wheel_swipe::set_scroll_feel,
+            wheel_swipe::get_scroll_multiplier,
+            wheel_swipe::get_scroll_style,
             embed::embed_mirror,
             embed::resize_embedded_mirror,
             kvm::commands::kvm_get_status,

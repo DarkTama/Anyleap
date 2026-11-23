@@ -9,8 +9,50 @@ export type DisplayMode = Exclude<MirrorMode, "camera">;
 
 export const MIRROR_MODES: MirrorMode[] = ["mirror", "flex", "camera", "hifi"];
 
-/** Same fields as CoreSettings minus flexDisplay (derived from the mode). */
-export type ModeSettings = Omit<CoreSettings, "flexDisplay">;
+/** Same fields as CoreSettings minus flexDisplay (derived from the mode), plus scroll settings (SPEC-30). */
+export type ScrollStyle = "smooth" | "paged";
+export type ScrollSpeed = "auto" | number;
+export type ScrollInertia = "off" | "low" | "medium" | "high";
+
+export interface ScrollSettings {
+  style: ScrollStyle;
+  speed: ScrollSpeed;
+  smooth: boolean;
+  inertia: ScrollInertia;
+}
+
+export interface ScrollConfigPayload {
+  style: ScrollStyle;
+  speedMode: "auto" | "manual";
+  manual: number;
+  smooth: boolean;
+  inertia: ScrollInertia;
+}
+
+export const SCROLL_SPEED_OPTIONS: number[] = [
+  1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3, 3.25, 3.5, 3.75, 4, 4.25, 4.5, 4.75, 5,
+];
+
+export const DEFAULT_SCROLL: Record<MirrorMode, ScrollSettings> = {
+  mirror: { style: "smooth", speed: "auto", smooth: true, inertia: "off" },
+  flex: { style: "smooth", speed: "auto", smooth: true, inertia: "off" },
+  camera: { style: "smooth", speed: "auto", smooth: false, inertia: "off" },
+  hifi: { style: "smooth", speed: "auto", smooth: false, inertia: "off" },
+};
+
+export function toScrollConfig(s: ScrollSettings): ScrollConfigPayload {
+  return {
+    style: s.style,
+    speedMode: s.speed === "auto" ? "auto" : "manual",
+    manual: typeof s.speed === "number" ? s.speed : 1.0,
+    smooth: s.smooth,
+    inertia: s.inertia,
+  };
+}
+
+export type ModeSettings = Omit<CoreSettings, "flexDisplay"> & {
+  scroll: ScrollSettings;
+};
 
 export type CameraBitrate = "low" | "balanced" | "high";
 
@@ -34,24 +76,26 @@ export const CAMERA_BITRATE_BPS: Record<CameraBitrate, number> = {
   high: 16_000_000,
 };
 
+type CoreModeFields = Omit<CoreSettings, "flexDisplay">;
+
 const MODE_SETTINGS_KEYS = (Object.keys(DEFAULT_SETTINGS) as (keyof CoreSettings)[]).filter(
   (k) => k !== "flexDisplay",
-) as (keyof ModeSettings)[];
+) as (keyof CoreModeFields)[];
 
-function stripFlex(s: CoreSettings): ModeSettings {
-  const out: Partial<ModeSettings> = {};
+function stripFlex(s: CoreSettings): CoreModeFields {
+  const out: Partial<CoreModeFields> = {};
   for (const k of MODE_SETTINGS_KEYS) {
     (out as Record<string, unknown>)[k] = s[k];
   }
-  return out as ModeSettings;
+  return out as CoreModeFields;
 }
 
-const BASE_MODE_SETTINGS: ModeSettings = {
+const BASE_MODE_SETTINGS: CoreModeFields = {
   ...stripFlex(DEFAULT_SETTINGS),
   embedded: true,
 };
 
-/** Fresh-install defaults (SPEC-28 §5.3). Built by a function so callers get fresh objects. */
+/** Fresh-install defaults (SPEC-28 §5.3 + SPEC-30 §3). Built by a function so callers get fresh objects. */
 export function defaultModeDefaults(): ModeDefaultsV2 {
   return {
     version: 2,
@@ -60,12 +104,14 @@ export function defaultModeDefaults(): ModeDefaultsV2 {
       ...PRESET_BUNDLES.medium,
       noWindowAspectRatioLock: false,
       renderFit: "letterbox",
+      scroll: { ...DEFAULT_SCROLL.mirror },
     },
     flex: {
       ...BASE_MODE_SETTINGS,
       ...PRESET_BUNDLES.medium,
       noWindowAspectRatioLock: true,
       renderFit: "unscaled",
+      scroll: { ...DEFAULT_SCROLL.flex },
     },
     hifi: {
       ...BASE_MODE_SETTINGS,
@@ -75,6 +121,7 @@ export function defaultModeDefaults(): ModeDefaultsV2 {
       videoCodec: "h265",
       noWindowAspectRatioLock: false,
       renderFit: "letterbox",
+      scroll: { ...DEFAULT_SCROLL.hifi },
     },
     camera: { playAudio: true, bitrate: "balanced", embedded: true },
   };
@@ -87,7 +134,8 @@ export const DEFAULT_MODE_DEFAULTS: ModeDefaultsV2 = defaultModeDefaults();
  * only `flexDisplay` is forced by the mode.
  */
 export function resolveLaunchSettings(mode: DisplayMode, defaults: ModeDefaultsV2): CoreSettings {
-  return { ...defaults[mode], flexDisplay: mode === "flex" };
+  const { scroll: _scroll, ...core } = defaults[mode];
+  return { ...core, flexDisplay: mode === "flex" };
 }
 
 /** Camera launch dialog pre-fill: persisted defaults, overridden by per-launch choices. */
@@ -105,10 +153,32 @@ export function toCameraSettings(
 
 // --- Normalisation of a persisted object ---------------------------------------------------
 
-function pickModeSettings(raw: unknown, fallback: ModeSettings): ModeSettings {
+function normalizeScrollSettings(raw: unknown, fallback: ScrollSettings): ScrollSettings {
   if (!raw || typeof raw !== "object") return { ...fallback };
-  const merged = { ...fallback, ...(raw as Partial<ModeSettings>) };
-  return stripFlex({ ...merged, flexDisplay: false });
+  const r = raw as Partial<ScrollSettings>;
+  const style: ScrollStyle = r.style === "smooth" || r.style === "paged" ? r.style : fallback.style;
+  const speed: ScrollSpeed =
+    r.speed === "auto"
+      ? "auto"
+      : typeof r.speed === "number" && Number.isFinite(r.speed)
+        ? Math.min(5, Math.max(1, r.speed))
+        : fallback.speed;
+  const smooth = typeof r.smooth === "boolean" ? r.smooth : fallback.smooth;
+  const inertia: ScrollInertia =
+    r.inertia === "off" || r.inertia === "low" || r.inertia === "medium" || r.inertia === "high"
+      ? r.inertia
+      : fallback.inertia;
+  return { style, speed, smooth, inertia };
+}
+
+function pickModeSettings(raw: unknown, fallback: ModeSettings): ModeSettings {
+  if (!raw || typeof raw !== "object") return { ...fallback, scroll: { ...fallback.scroll } };
+  const rawObj = raw as Partial<ModeSettings>;
+  const merged = { ...fallback, ...rawObj };
+  return {
+    ...stripFlex({ ...merged, flexDisplay: false }),
+    scroll: normalizeScrollSettings(rawObj.scroll, fallback.scroll),
+  };
 }
 
 /** Fill gaps in a persisted `modeDefaults` so a partial or older object still loads. */
@@ -175,9 +245,9 @@ export function migrateLegacy(
 
   // 1. Base copy: every mode starts as a copy of S minus flexDisplay.
   const base = stripFlex(S);
-  const mirror: ModeSettings = { ...base };
-  const flex: ModeSettings = { ...base };
-  const hifi: ModeSettings = { ...base };
+  const mirror: ModeSettings = { ...base, scroll: { ...DEFAULT_SCROLL.mirror } };
+  const flex: ModeSettings = { ...base, scroll: { ...DEFAULT_SCROLL.flex } };
+  const hifi: ModeSettings = { ...base, scroll: { ...DEFAULT_SCROLL.hifi } };
 
   // 2. Undo preset residue on quality.
   const hifiSignature =
