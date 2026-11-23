@@ -109,9 +109,12 @@ async function fetchSha256Sums(version) {
 }
 
 async function extractZip(zipPath, targetDir) {
-  // Use PowerShell on Windows or unzip if available
+  // Windows 10+ ships bsdtar, which reads zip. Expand-Archive breaks when a pwsh 7
+  // PSModulePath leaks into Windows PowerShell, and it does not fail the build.
   if (process.platform === 'win32') {
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${targetDir}' -Force"`, { stdio: 'inherit' });
+    // Call it by full path so a GNU tar from Git Bash on PATH doesn't shadow it.
+    const tar = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'tar.exe');
+    execSync(`"${tar}" -xf "${zipPath}" -C "${targetDir}"`, { stdio: 'inherit' });
   } else {
     execSync(`unzip -q -o "${zipPath}" -d "${targetDir}"`, { stdio: 'inherit' });
   }
