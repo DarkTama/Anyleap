@@ -70,7 +70,7 @@ The differentiator is not mirroring (scrcpy already nails that) — it's the **c
 
 ## Per-mode mirroring settings (SPEC-28)
 
-Settled: each mirroring mode owns its settings (`modeDefaults`), launch settings are resolved per mode, and the global quality preset is replaced by a derived per-mode Quality choice (ADR-0005). Phases 1 (data model, migration, Phone mirroring section) and 2 (sections, rail, filter, relabels, Advanced) are implemented; phase 3 (mirror window control bar: 60 px grouped icon sidebar, More popover, accessible tooltips) is implemented on its branch. SPEC-30 Phase 1 adds per-mode density-independent scroll speed and style controls on top of `modeDefaults`.
+Settled: each mirroring mode owns its settings (`modeDefaults`), launch settings are resolved per mode, and the global quality preset is replaced by a derived per-mode Quality choice (ADR-0005). Phases 1 (data model, migration, Phone mirroring section) and 2 (sections, rail, filter, relabels, Advanced) are implemented; phase 3 (mirror window control bar: 60 px grouped icon sidebar, More popover, accessible tooltips) is implemented on its branch. SPEC-30 Phase 1 adds per-mode density-independent scroll speed and style controls on top of `modeDefaults`, and Phase 2 adds optional smooth scrolling (`AxisSmoother`, touchpad bypass, and live **Smooth scrolling** switch).
 
 ## Default transfer folders (SPEC-31)
 

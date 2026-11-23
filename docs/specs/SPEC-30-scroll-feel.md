@@ -1,6 +1,6 @@
 # SPEC-30: Scroll feel (speed, smooth scrolling, inertia)
 
-> **Status:** Phase 1 implemented (2026-11-19). Phases 2 and 3 remain proposed.
+> **Status:** Phase 1 implemented (2026-11-19). Phase 2 implemented (2026-11-23; pending manual device check). Phase 3 remains proposed.
 > **Scope:** wheel and touchpad input over a mirror window (`src-tauri/src/wheel_swipe.rs` hook thread, new `scroll_feel` module beside it), per-mode persisted settings (`src/lib/modeSettings.ts`), the Phone mirroring section and the control bar **More** popover.
 > **Related:** SPEC-28 (per-mode `modeDefaults`, Phone mirroring tabs), ADR-0005, SPEC-24 (input hooks pattern). SPEC-29 is reserved by an open PR, hence the number.
 > **Plan:** `docs/superpowers/plans/2026-11-19-spec30-scroll-feel.md`

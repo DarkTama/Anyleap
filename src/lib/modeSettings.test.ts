@@ -351,19 +351,19 @@ describe("scroll settings (SPEC-30)", () => {
     expect(DEFAULT_SCROLL.camera).toEqual({ style: "smooth", speed: "auto", smooth: false, inertia: "off" });
   });
 
-  it("fills missing scroll settings on older modeDefaults without version bump", () => {
+  it("fills missing scroll settings and missing smooth field on older modeDefaults without version bump", () => {
     const old = {
       version: 2,
       mirror: { maxFps: 30 },
-      flex: { renderFit: "unscaled" },
-      hifi: { maxSize: 0 },
+      flex: { renderFit: "unscaled", scroll: { style: "smooth", speed: "auto" } },
+      hifi: { maxSize: 0, scroll: { style: "smooth", speed: 2 } },
     };
     const n = normalizeModeDefaults(old);
     expect(n.version).toBe(2);
     expect(n.mirror.maxFps).toBe(30);
     expect(n.mirror.scroll).toEqual(DEFAULT_SCROLL.mirror);
-    expect(n.flex.scroll).toEqual(DEFAULT_SCROLL.flex);
-    expect(n.hifi.scroll).toEqual(DEFAULT_SCROLL.hifi);
+    expect(n.flex.scroll).toEqual({ style: "smooth", speed: "auto", smooth: true, inertia: "off" });
+    expect(n.hifi.scroll).toEqual({ style: "smooth", speed: 2, smooth: false, inertia: "off" });
   });
 
   it("clamps manual speed and normalizes invalid scroll values", () => {

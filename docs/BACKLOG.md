@@ -43,7 +43,7 @@ Items observed during M2 testing, to be sequenced into future milestones.
 ## Scroll feel (SPEC-30)
 
 - ~~**Phase 0 & Phase 1:** SDL3 precise-scroll verification spike, density-independent scroll speed (`Auto` / `1x–5x`), per-mode Scrolling group, More popover **Paged scrolling** rename~~ (SPEC-30 phase 1, done).
-- **Phase 2:** optional smooth scrolling (eased step interpolation, touchpad bypass).
+- ~~**Phase 2:** optional smooth scrolling (eased step interpolation, touchpad bypass).~~ (SPEC-30 phase 2, code done; manual device feel/CPU check pending).
 - **Phase 3:** touchpad delta stream measurement and optional inertia.
 
 ## Dependencies

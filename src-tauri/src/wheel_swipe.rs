@@ -62,6 +62,7 @@ pub fn decide(
     over_mirror: bool,
     style: ScrollStyle,
     multiplier: f32,
+    smooth: bool,
     queue_ok: bool,
 ) -> HookDecision {
     if !over_mirror || modifiers.blocks_scaling() || !queue_ok {
@@ -73,7 +74,7 @@ pub fn decide(
             WheelAxis::Horizontal => HookDecision::PassThrough,
         },
         ScrollStyle::Smooth => {
-            if !multiplier.is_finite() || (multiplier - 1.0).abs() <= 1e-4 {
+            if !multiplier.is_finite() || (!smooth && (multiplier - 1.0).abs() <= 1e-4) {
                 HookDecision::PassThrough
             } else {
                 HookDecision::Swallow
@@ -96,6 +97,7 @@ mod imp {
 
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -108,11 +110,14 @@ mod imp {
 
     use super::{decide, HookDecision, ModifierState, WheelAxis};
     use crate::commands::{adb_path, parse_virtual_display};
+    use crate::scroll_feel::smooth::SMOOTH_TICK;
     use crate::scroll_feel::speed::{
         parse_default_display_density, parse_virtual_display_density_for_id, parse_wm_density,
         DEFAULT_NATIVE_DENSITY,
     };
-    use crate::scroll_feel::{effective_multiplier, AxisAccumulator, ScrollConfig, ScrollStyle};
+    use crate::scroll_feel::{
+        effective_multiplier, AxisAccumulator, AxisSmoother, ScrollConfig, ScrollStyle,
+    };
     use crate::state::{poison_error, AppState};
 
     const WHEEL_DELTA: i32 = 120;
@@ -130,6 +135,7 @@ mod imp {
         hwnd: isize,
         style: ScrollStyle,
         multiplier: f32,
+        smooth: bool,
         /// `Some` for flex sessions: inject with `input -d <id>`.
         display_id: Option<u32>,
         w: u32,
@@ -171,6 +177,7 @@ mod imp {
             screen_x: i32,
             screen_y: i32,
             multiplier: f32,
+            smooth: bool,
             at: Instant,
         },
     }
@@ -217,10 +224,9 @@ mod imp {
     }
 
     fn sync_any_enabled(reg: &Registry) {
-        let any = reg
-            .targets
-            .values()
-            .any(|t| t.style == ScrollStyle::Paged || (t.multiplier - 1.0).abs() > 1e-4);
+        let any = reg.targets.values().any(|t| {
+            t.style == ScrollStyle::Paged || t.smooth || (t.multiplier - 1.0).abs() > 1e-4
+        });
         ANY_ENABLED.store(any, Ordering::Relaxed);
     }
 
@@ -301,6 +307,7 @@ mod imp {
                     hwnd,
                     style: ScrollStyle::Paged,
                     multiplier: mult,
+                    smooth: cfg.smooth,
                     display_id,
                     w: size.0,
                     h: size.1,
@@ -309,6 +316,7 @@ mod imp {
         } else if let Some(t) = reg.targets.values_mut().find(|t| &*t.serial == serial) {
             t.style = cfg.style;
             t.multiplier = mult;
+            t.smooth = cfg.smooth;
         }
 
         sync_any_enabled(&reg);
@@ -340,6 +348,7 @@ mod imp {
         if let Some(t) = reg.targets.values_mut().find(|t| &*t.serial == serial) {
             t.style = config.style;
             t.multiplier = mult;
+            t.smooth = config.smooth;
         }
         sync_any_enabled(&reg);
         Ok(Some(mult))
@@ -405,11 +414,11 @@ mod imp {
                         reg.targets
                             .get(&(hwnd.0 as isize))
                             .or_else(|| reg.targets.get(&(root.0 as isize)))
-                            .map(|t| (t.serial.clone(), t.hwnd, t.style, t.multiplier))
+                            .map(|t| (t.serial.clone(), t.hwnd, t.style, t.multiplier, t.smooth))
                     });
 
-                    if let Some((serial, target_hwnd, style, multiplier)) = matched {
-                        if decide(modifiers, axis, true, style, multiplier, true)
+                    if let Some((serial, target_hwnd, style, multiplier, smooth)) = matched {
+                        if decide(modifiers, axis, true, style, multiplier, smooth, true)
                             == HookDecision::Swallow
                         {
                             let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16;
@@ -428,6 +437,7 @@ mod imp {
                                     screen_x: info.pt.x,
                                     screen_y: info.pt.y,
                                     multiplier,
+                                    smooth,
                                     at: Instant::now(),
                                 },
                             };
@@ -629,6 +639,7 @@ mod imp {
                         hwnd,
                         style: cfg.style,
                         multiplier: mult,
+                        smooth: cfg.smooth,
                         display_id: did,
                         w,
                         h,
@@ -709,70 +720,215 @@ mod imp {
 
     // ---- worker side -------------------------------------------------------
 
+    /// Scoped 1 ms Windows timer resolution active only while smooth scrolling animates.
+    struct ScopedTimerPeriod {
+        active: bool,
+    }
+
+    impl ScopedTimerPeriod {
+        fn new() -> Self {
+            Self { active: false }
+        }
+
+        fn set_active(&mut self, want: bool) {
+            if want && !self.active {
+                if unsafe { timeBeginPeriod(1) } == 0 {
+                    self.active = true;
+                }
+            } else if !want && self.active {
+                unsafe {
+                    timeEndPeriod(1);
+                }
+                self.active = false;
+            }
+        }
+    }
+
+    impl Drop for ScopedTimerPeriod {
+        fn drop(&mut self) {
+            self.set_active(false);
+        }
+    }
+
+    #[derive(Default)]
+    struct SmoothChannel {
+        acc: AxisAccumulator,
+        smoother: AxisSmoother,
+        last_key_state: u16,
+        last_screen_x: i32,
+        last_screen_y: i32,
+        last_tick_at: Option<Instant>,
+        next_tick: Option<Instant>,
+    }
+
+    fn post_wheel_deltas(
+        hwnd: isize,
+        axis: WheelAxis,
+        deltas: &[i16],
+        key_state: u16,
+        screen_x: i32,
+        screen_y: i32,
+    ) {
+        if deltas.is_empty() {
+            return;
+        }
+        let msg = match axis {
+            WheelAxis::Vertical => WM_MOUSEWHEEL,
+            WheelAxis::Horizontal => WM_MOUSEHWHEEL,
+        };
+        let lx = (screen_x as i16 as u16) as usize;
+        let ly = (screen_y as i16 as u16) as usize;
+        let lparam = LPARAM(((ly << 16) | lx) as isize);
+        for &d in deltas {
+            let wparam = WPARAM((((d as u16) as usize) << 16) | (key_state as usize));
+            unsafe {
+                let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, wparam, lparam);
+            }
+        }
+    }
+
     fn worker_thread(rx: mpsc::Receiver<WheelEvent>, adb: Option<PathBuf>) {
         // serial -> (last swipe start, wheel-delta accumulator) for Paged mode
         let mut per_serial: HashMap<Arc<str>, (Instant, i32)> = HashMap::new();
-        // (hwnd, axis) -> remainder accumulator for Smooth mode
-        let mut accumulators: HashMap<(isize, WheelAxis), AxisAccumulator> = HashMap::new();
+        // (hwnd, axis) -> direct accumulator and smoother state
+        let mut channels: HashMap<(isize, WheelAxis), SmoothChannel> = HashMap::new();
+        let mut timer_period = ScopedTimerPeriod::new();
 
-        while let Ok(ev) = rx.recv() {
-            match ev {
-                WheelEvent::Smooth {
-                    hwnd,
-                    axis,
-                    delta,
-                    key_state,
-                    screen_x,
-                    screen_y,
-                    multiplier,
-                    at,
-                } => {
-                    let acc = accumulators.entry((hwnd, axis)).or_default();
-                    let deltas = acc.push(delta, multiplier, at);
-                    let msg = match axis {
-                        WheelAxis::Vertical => WM_MOUSEWHEEL,
-                        WheelAxis::Horizontal => WM_MOUSEHWHEEL,
-                    };
-                    let lx = (screen_x as i16 as u16) as usize;
-                    let ly = (screen_y as i16 as u16) as usize;
-                    let lparam = LPARAM(((ly << 16) | lx) as isize);
-                    for d in deltas {
-                        let wparam = WPARAM((((d as u16) as usize) << 16) | (key_state as usize));
-                        unsafe {
-                            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, wparam, lparam);
-                        }
+        loop {
+            let earliest_tick = channels
+                .values()
+                .filter(|ch| ch.smoother.has_pending())
+                .filter_map(|ch| ch.next_tick)
+                .min();
+
+            let ev = match earliest_tick {
+                None => {
+                    timer_period.set_active(false);
+                    if channels.len() > 16 {
+                        channels.retain(|&(hwnd, _), _| unsafe {
+                            IsWindow(Some(HWND(hwnd as *mut _))).as_bool()
+                        });
+                    }
+                    match rx.recv() {
+                        Ok(ev) => Some(ev),
+                        Err(_) => break,
                     }
                 }
-                WheelEvent::Paged { serial, delta, at } => {
-                    let Some(adb) = adb.as_deref() else { continue };
-                    let entry = per_serial
-                        .entry(serial.clone())
-                        .or_insert_with(|| (Instant::now() - SWIPE_COOLDOWN, 0));
+                Some(deadline) => {
+                    timer_period.set_active(true);
+                    let wait = deadline.saturating_duration_since(Instant::now());
+                    match rx.recv_timeout(wait) {
+                        Ok(ev) => Some(ev),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            };
 
-                    // Events generated while a swipe was in flight are stale — the
-                    // user was reacting to the previous state; don't replay them.
-                    if at < entry.0 {
-                        continue;
-                    }
-                    entry.1 += delta as i32;
-                    if entry.1.abs() < WHEEL_DELTA {
-                        continue; // free-spin wheels emit sub-notch deltas; accumulate
-                    }
-                    let wheel_down = entry.1 < 0;
-                    entry.1 = 0;
-                    if entry.0.elapsed() < SWIPE_COOLDOWN {
-                        continue; // at most ~1 fling per cooldown, no backlog buildup
-                    }
+            if let Some(ev) = ev {
+                match ev {
+                    WheelEvent::Smooth {
+                        hwnd,
+                        axis,
+                        delta,
+                        key_state,
+                        screen_x,
+                        screen_y,
+                        multiplier,
+                        smooth,
+                        at,
+                    } => {
+                        let ch = channels.entry((hwnd, axis)).or_default();
+                        ch.last_key_state = key_state;
+                        ch.last_screen_x = screen_x;
+                        ch.last_screen_y = screen_y;
 
-                    let (target, size) = {
-                        let Ok(reg) = lock_registry() else { continue };
-                        match reg.targets.values().find(|t| t.serial == serial) {
-                            Some(t) => (t.display_id, (t.w, t.h)),
-                            None => continue,
+                        if smooth {
+                            let immediate = ch.smoother.push(delta, multiplier, at);
+                            post_wheel_deltas(
+                                hwnd, axis, &immediate, key_state, screen_x, screen_y,
+                            );
+                            if ch.smoother.has_pending() {
+                                if ch.last_tick_at.is_none() {
+                                    ch.last_tick_at = Some(at);
+                                    ch.next_tick = Some(at + SMOOTH_TICK);
+                                }
+                            } else {
+                                ch.last_tick_at = None;
+                                ch.next_tick = None;
+                            }
+                        } else {
+                            if ch.smoother.has_pending() {
+                                let flushed = ch.smoother.flush();
+                                post_wheel_deltas(
+                                    hwnd, axis, &flushed, key_state, screen_x, screen_y,
+                                );
+                                ch.last_tick_at = None;
+                                ch.next_tick = None;
+                            }
+                            let deltas = ch.acc.push(delta, multiplier, at);
+                            post_wheel_deltas(hwnd, axis, &deltas, key_state, screen_x, screen_y);
                         }
-                    };
-                    run_swipe(adb, &serial, target, size, wheel_down);
-                    entry.0 = Instant::now();
+                    }
+                    WheelEvent::Paged { serial, delta, at } => {
+                        let Some(adb) = adb.as_deref() else { continue };
+                        let entry = per_serial
+                            .entry(serial.clone())
+                            .or_insert_with(|| (Instant::now() - SWIPE_COOLDOWN, 0));
+
+                        // Events generated while a swipe was in flight are stale — the
+                        // user was reacting to the previous state; don't replay them.
+                        if at < entry.0 {
+                            continue;
+                        }
+                        entry.1 += delta as i32;
+                        if entry.1.abs() < WHEEL_DELTA {
+                            continue; // free-spin wheels emit sub-notch deltas; accumulate
+                        }
+                        let wheel_down = entry.1 < 0;
+                        entry.1 = 0;
+                        if entry.0.elapsed() < SWIPE_COOLDOWN {
+                            continue; // at most ~1 fling per cooldown, no backlog buildup
+                        }
+
+                        let (target, size) = {
+                            let Ok(reg) = lock_registry() else { continue };
+                            match reg.targets.values().find(|t| t.serial == serial) {
+                                Some(t) => (t.display_id, (t.w, t.h)),
+                                None => continue,
+                            }
+                        };
+                        run_swipe(adb, &serial, target, size, wheel_down);
+                        entry.0 = Instant::now();
+                    }
+                }
+            }
+
+            let now = Instant::now();
+            for (&(hwnd, axis), ch) in channels.iter_mut() {
+                if !ch.smoother.has_pending() {
+                    continue;
+                }
+                let Some(due) = ch.next_tick else { continue };
+                if now < due {
+                    continue;
+                }
+                let dt = now.saturating_duration_since(ch.last_tick_at.unwrap_or(now));
+                let deltas = ch.smoother.tick(dt, now);
+                post_wheel_deltas(
+                    hwnd,
+                    axis,
+                    &deltas,
+                    ch.last_key_state,
+                    ch.last_screen_x,
+                    ch.last_screen_y,
+                );
+                if ch.smoother.has_pending() {
+                    ch.last_tick_at = Some(now);
+                    ch.next_tick = Some(now + SMOOTH_TICK);
+                } else {
+                    ch.last_tick_at = None;
+                    ch.next_tick = None;
                 }
             }
         }
@@ -851,6 +1007,7 @@ mod decision_tests {
                 ScrollStyle::Smooth,
                 2.5,
                 true,
+                true,
             ),
             HookDecision::PassThrough
         );
@@ -861,6 +1018,7 @@ mod decision_tests {
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                true,
                 false,
             ),
             HookDecision::PassThrough
@@ -890,6 +1048,7 @@ mod decision_tests {
                     true,
                     ScrollStyle::Smooth,
                     2.5,
+                    true,
                     true
                 ),
                 HookDecision::PassThrough
@@ -901,6 +1060,7 @@ mod decision_tests {
                     true,
                     ScrollStyle::Paged,
                     1.0,
+                    false,
                     true
                 ),
                 HookDecision::PassThrough
@@ -917,6 +1077,7 @@ mod decision_tests {
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                false,
                 true,
             ),
             HookDecision::Swallow
@@ -924,7 +1085,7 @@ mod decision_tests {
     }
 
     #[test]
-    fn smooth_1x_is_noop_and_higher_swallows_both_axes() {
+    fn smooth_1x_without_smoothing_is_noop_and_smoothing_or_higher_swallows_both_axes() {
         assert_eq!(
             decide(
                 ModifierState::default(),
@@ -932,6 +1093,7 @@ mod decision_tests {
                 true,
                 ScrollStyle::Smooth,
                 1.0,
+                false,
                 true,
             ),
             HookDecision::PassThrough
@@ -943,6 +1105,7 @@ mod decision_tests {
                 true,
                 ScrollStyle::Smooth,
                 1.0,
+                false,
                 true,
             ),
             HookDecision::PassThrough
@@ -953,7 +1116,32 @@ mod decision_tests {
                 WheelAxis::Vertical,
                 true,
                 ScrollStyle::Smooth,
+                1.0,
+                true,
+                true,
+            ),
+            HookDecision::Swallow
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Horizontal,
+                true,
+                ScrollStyle::Smooth,
+                1.0,
+                true,
+                true,
+            ),
+            HookDecision::Swallow
+        );
+        assert_eq!(
+            decide(
+                ModifierState::default(),
+                WheelAxis::Vertical,
+                true,
+                ScrollStyle::Smooth,
                 2.5,
+                false,
                 true,
             ),
             HookDecision::Swallow
@@ -965,6 +1153,7 @@ mod decision_tests {
                 true,
                 ScrollStyle::Smooth,
                 2.5,
+                false,
                 true,
             ),
             HookDecision::Swallow
@@ -981,6 +1170,7 @@ mod decision_tests {
                 ScrollStyle::Paged,
                 1.0,
                 true,
+                true,
             ),
             HookDecision::Swallow
         );
@@ -991,6 +1181,7 @@ mod decision_tests {
                 true,
                 ScrollStyle::Paged,
                 2.5,
+                true,
                 true,
             ),
             HookDecision::PassThrough

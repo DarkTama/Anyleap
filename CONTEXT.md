@@ -103,14 +103,14 @@ The per-mode mirroring settings persisted as `modeDefaults` in `settings.json`. 
 - **Flex keyboard mode (`build_scrcpy_args`, `build_app_window_args`)**: `--new-display` sessions (Flex and per-app windows) omit `--keyboard=uhid` (using the default SDK keyboard) and omit `--display-ime-policy`, so PC typing works while Android does not see a hardware keyboard and keeps the phone's own on-screen keyboard working (the phone's keyboard may appear while typing in Flex). In `PhoneMirroringSection`, the `Use Android on-screen keyboard` switch (`M-12`) is disabled on the Flex tab with helper text explaining this behaviour, while Mirror and High fidelity keep per-mode `noKeyboardIme` (`--keyboard=uhid`).
 - **Single-source rule**: a setting has one editor; other places show it read-only with a link (for example dwell and deadzone are edited in the Computers tab).
 
-### Scroll feel (`SPEC-30`, Phase 1 implemented)
+### Scroll feel (`SPEC-30`, Phases 1 & 2 implemented)
 Per-mode scrolling settings inside `modeDefaults` that shape how the PC wheel or touchpad scrolls a mirrored phone screen. Implemented by re-posting scaled `WM_MOUSEWHEEL` / `WM_MOUSEHWHEEL` messages from the `wheel_swipe.rs` hook thread to the scrcpy window (`set_scroll_feel`, `get_scroll_multiplier`, `get_scroll_style`); it needs scrcpy `sdk` mouse mode.
 - **Scroll style**: `Smooth (reading)` scrolls continuously; `Paged (short videos)` is the existing wheel swipe, one `adb shell input swipe` fling per cooldown (also toggled per session via **Paged scrolling** in the More popover). One style is active per session.
 - **Scroll speed**: `Auto` or a manual 1x to 5x multiplier on wheel delta. Android scrolls about 64 dp per notch, and dp follows display density, so low-density Flex displays scroll slowly while the UI stays small.
 - **Auto multiplier**: `clamp(native_density / session_density, 1, 4)` rounded to 0.25 (`src-tauri/src/scroll_feel/speed.rs`). Native density is the phone's physical density (`wm density`); session density is the mirrored display's (`wm density` override/physical for Mirror, `dumpsys display` virtual display density for Flex).
-- **Smooth scrolling** *(Phase 2, planned)*: eases each notch into small steps over about 100 to 150 ms, merging consecutive notches, with the same total distance. Adds a little latency.
+- **Smooth scrolling** *(Phase 2, `src-tauri/src/scroll_feel/smooth.rs`)*: `AxisSmoother` eases each wheel notch into exponential ease-out steps (`tau = 35 ms`, `8 ms` tick, `150 ms` max settle, `20`-notch cap) with a scoped `1 ms` timer period while animating (zero idle CPU) and exact total-distance conservation. Default on for Mirror and Flex, off for Camera and High fidelity; touchpad-like input (`|delta| % 120 != 0`) bypasses smoothing.
 - **Touchpad momentum (inertia)** *(Phase 3, planned)*: synthesized decaying scroll steps after touchpad input stops, with Low / Medium / High strength.
-- **Pending distance** *(Phase 2, planned)*: the not-yet-emitted scroll delta that smooth scrolling drains each tick.
+- **Pending distance**: the not-yet-emitted scaled scroll delta `P` that `AxisSmoother` drains each `8 ms` tick until `< 1` unit or `150 ms` settle, then flushes.
 
 ### Transfer Folders (`SPEC-31`)
 Unified destination settings stored under `transferFolders` in `settings.json` and resolved live by `src-tauri/src/transfer_paths.rs`:

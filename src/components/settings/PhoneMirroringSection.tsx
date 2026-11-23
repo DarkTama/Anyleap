@@ -291,6 +291,7 @@ function ScrollingGroup({ mode, s }: { mode: DisplayMode; s: ModeSettings }) {
 
   const styleEntry = entry("M-21");
   const speedEntry = entry("M-22");
+  const smoothEntry = entry("M-23");
   const speedHint = isPaged
     ? "Not used in Paged style."
     : isAuto
@@ -340,6 +341,14 @@ function ScrollingGroup({ mode, s }: { mode: DisplayMode; s: ModeSettings }) {
           {speedHint}
         </p>
       </div>
+      <SwitchRow
+        label={smoothEntry.label}
+        hint={smoothEntry.helper}
+        checked={s.scroll.smooth}
+        disabled={isPaged}
+        disabledReason="Not used in Paged style."
+        onChange={(smooth) => editMode(mode, { scroll: { ...s.scroll, smooth } })}
+      />
     </Group>
   );
 }
