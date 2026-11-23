@@ -14,6 +14,7 @@ const controlSerial = params.get("control") ? params.get("serial") : null;
 const mirrorSerial = params.get("mirror") ? params.get("serial") : null;
 const controlFlex = params.get("flex") === "1";
 const mirrorMode = (params.get("mode") as SessionMode) || undefined;
+const mirrorFlex = params.get("flex") === "1";
 const isHudWindow = params.get("kvm_hud") === "1";
 const isTransferBarWindow = params.get("kvm_transfer_bar") === "1";
 
@@ -30,7 +31,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     ) : isHudWindow ? (
       <DesktopHudWindow />
     ) : mirrorSerial ? (
-      <EmbeddedMirrorWindow serial={mirrorSerial} initialMode={mirrorMode} />
+      <EmbeddedMirrorWindow serial={mirrorSerial} initialMode={mirrorMode} flexDisplay={mirrorFlex} />
     ) : controlSerial ? (
       <ControlWindow serial={controlSerial} flexDisplay={controlFlex} />
     ) : (

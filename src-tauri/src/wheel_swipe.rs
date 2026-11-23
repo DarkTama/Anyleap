@@ -192,7 +192,11 @@ mod imp {
             // try_lock: if the refresher holds the lock, pass the event
             // through rather than stall the system-wide hook.
             if let Ok(reg) = registry().try_lock() {
-                if let Some(t) = reg.targets.get(&(root.0 as isize)) {
+                if let Some(t) = reg
+                    .targets
+                    .get(&(hwnd.0 as isize))
+                    .or_else(|| reg.targets.get(&(root.0 as isize)))
+                {
                     if t.enabled {
                         let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16;
                         if let Some(tx) = TX.get() {
@@ -325,6 +329,9 @@ mod imp {
     }
 
     fn resolve_mirror_hwnd(serial: &str) -> Option<isize> {
+        if let Some(hwnd) = crate::embed::get_embedded_scrcpy_hwnd(serial) {
+            return Some(hwnd);
+        }
         let title = format!("AnyLeap — {}", serial);
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let hwnd: HWND = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok()?;

@@ -13,6 +13,7 @@ import {
   getDeviceNotifications,
   listSessions,
   onSessionExited,
+  onSessionReplaced,
   onSessionStarted,
   startMirror,
   stopMirror,
@@ -225,6 +226,7 @@ function App() {
   useEffect(() => {
     const unlisteners = [
       onSessionStarted((e) => upsertSession(e.payload)),
+      onSessionReplaced((e) => removeSession(e.payload)),
       onSessionExited((e) => {
         const state = useAppStore.getState();
         const endedSession = state.sessions.find((x) => x.id === e.payload.id);
@@ -431,7 +433,7 @@ function App() {
           if (!existingMirror) {
             try {
               const w = new WebviewWindow(mirrorLabel, {
-                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}`,
+                url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}&flex=${isFlex ? 1 : 0}`,
                 title: mode === "camera" ? `AnyLeap Camera Studio — ${serial}` : `AnyLeap Workstation — ${serial}`,
                 width: 480,
                 height: 860,

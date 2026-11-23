@@ -41,6 +41,20 @@ export const onSessionStarted = (cb: EventCallback<SessionInfo>): Promise<Unlist
 export const onSessionExited = (cb: EventCallback<SessionExited>): Promise<UnlistenFn> =>
   listen<SessionExited>("session-exited", cb);
 
+export const onSessionReplaced = (cb: EventCallback<string>): Promise<UnlistenFn> =>
+  listen<string>("session-replaced", cb);
+
+export interface MirrorClipboardImageResult {
+  serial: string;
+  dest?: string;
+  error?: string;
+}
+
+export const onMirrorClipboardImageResult = (
+  cb: EventCallback<MirrorClipboardImageResult>,
+): Promise<UnlistenFn> =>
+  listen<MirrorClipboardImageResult>("mirror-clipboard-image-result", cb);
+
 // --- Wireless (M2) ---
 
 export const discoverWireless = () => invoke<MdnsService[]>("discover_wireless");

@@ -7,26 +7,34 @@ import {
   pushClipboardImage,
   stopMirror,
   listSessions,
+  onSessionStarted,
+  onSessionReplaced,
   onSessionExited,
+  onMirrorClipboardImageResult,
 } from "@/lib/tauri";
 import { ControlBar, type ControlBarNotice } from "./ControlBar";
 import { logActivity } from "@/stores/activityStore";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
 import { createEmbedResizeScheduler } from "@/lib/embedResize";
+import { useAppStore } from "@/store/useAppStore";
 import type { SessionInfo, SessionMode } from "@/lib/types";
 
 export function EmbeddedMirrorWindow({
   serial,
   initialMode = "display",
+  flexDisplay = false,
 }: {
   serial: string;
   initialMode?: SessionMode;
+  flexDisplay?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
   const [toast, setToast] = useState<string | null>(null);
   const [notice, setNotice] = useState<ControlBarNotice | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
+  const sessionRef = useRef<SessionInfo | null>(null);
+  sessionRef.current = session;
   const [mode, setMode] = useState<SessionMode>(initialMode);
   const win = getCurrentWebviewWindow();
 
@@ -50,6 +58,7 @@ export function EmbeddedMirrorWindow({
           const found = sessions.find((s) => s.serial === serial);
           if (found) {
             setSession(found);
+            useAppStore.getState().setSessions(sessions);
             if (found.mode) setMode(found.mode as SessionMode);
             return;
           }
@@ -70,7 +79,8 @@ export function EmbeddedMirrorWindow({
 
   useEffect(() => {
     const unlistenPromise = onSessionExited(async (e) => {
-      if (e.payload.serial === serial || session?.id === e.payload.id) {
+      useAppStore.getState().removeSession(e.payload.id);
+      if (e.payload.serial === serial || sessionRef.current?.id === e.payload.id) {
         await win.destroy().catch(() => win.close().catch(() => {}));
       } else {
         const activeSessions = await listSessions().catch(() => []);
@@ -78,6 +88,26 @@ export function EmbeddedMirrorWindow({
           await win.destroy().catch(() => win.close().catch(() => {}));
         }
       }
+    });
+
+    const unlistenStartedPromise = onSessionStarted(async (e) => {
+      if (e.payload.serial !== serial) return;
+      setSession(e.payload);
+      useAppStore.getState().upsertSession(e.payload);
+      if (e.payload.mode) setMode(e.payload.mode as SessionMode);
+      // Re-embed when the session restarts in-place (e.g. screen recording toggle).
+      for (let attempt = 0; attempt < 12; attempt++) {
+        try {
+          await embedMirror(win.label, serial);
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+    });
+
+    const unlistenReplacedPromise = onSessionReplaced((e) => {
+      useAppStore.getState().removeSession(e.payload);
     });
 
     const unlistenClosePromise = win.onCloseRequested(async (e) => {
@@ -91,9 +121,11 @@ export function EmbeddedMirrorWindow({
     });
     return () => {
       unlistenPromise.then((un) => un()).catch(() => {});
+      unlistenStartedPromise.then((un) => un()).catch(() => {});
+      unlistenReplacedPromise.then((un) => un()).catch(() => {});
       unlistenClosePromise.then((un) => un()).catch(() => {});
     };
-  }, [serial, session, win]);
+  }, [serial, win]);
 
   useEffect(() => {
     const label = win.label;
@@ -186,7 +218,25 @@ export function EmbeddedMirrorWindow({
     };
 
     window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
+    const unlistenPasteResult = onMirrorClipboardImageResult((e) => {
+      if (e.payload.serial !== serial) return;
+      if (e.payload.dest) {
+        logActivity({
+          kind: "clipboard",
+          title: "Pushed clipboard image",
+          detail: e.payload.dest,
+        });
+        setToast(`Image pushed to ${e.payload.dest}`);
+        setTimeout(() => setToast(null), 3000);
+      } else if (e.payload.error) {
+        setToast(`Paste failed: ${e.payload.error}`);
+        setTimeout(() => setToast(null), 4000);
+      }
+    });
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+      unlistenPasteResult.then((un) => un()).catch(() => {});
+    };
   }, [serial]);
 
   return (
@@ -278,7 +328,7 @@ export function EmbeddedMirrorWindow({
             serial={serial}
             config={config}
             orientation="vertical"
-            showOrientToggle={true}
+            showOrientToggle={!flexDisplay}
             showSwipeScroll={mode !== "camera"}
             sessionMode={mode}
             onNotice={setNotice}
