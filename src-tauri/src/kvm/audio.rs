@@ -2172,8 +2172,12 @@ mod tests {
         let launch_cmd = format!(
             "(New-Object -ComObject Shell.Application).ShellExecute('powershell.exe', '-NoProfile -WindowStyle Hidden -EncodedCommand {encoded}', '', 'open', 0)"
         );
-        let spawn_out = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &launch_cmd])
+        let spawn_out =
+            crate::proc_util::no_window(std::process::Command::new("powershell").args([
+                "-NoProfile",
+                "-Command",
+                &launch_cmd,
+            ]))
             .output();
         eprintln!(
             "repro: ShellExecute spawn status={:?}",
