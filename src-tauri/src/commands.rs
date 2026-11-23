@@ -989,6 +989,19 @@ pub(crate) fn spawn_session_inner<'a>(
                     }
                     CommandEvent::Error(e) => command_error = Some(e),
                     CommandEvent::Terminated(payload) => {
+                        let restarting = app2
+                            .try_state::<AppState>()
+                            .map(|st| st.take_restarting(&id2))
+                            .unwrap_or(false);
+                        if restarting {
+                            if let Some(st) = app2.try_state::<AppState>() {
+                                if let Ok(mut s) = st.sessions.lock() {
+                                    s.remove(&id2);
+                                }
+                            }
+                            let _ = app2.emit("session-replaced", &id2);
+                            break;
+                        }
                         let user_stopped = app2
                             .try_state::<AppState>()
                             .map(|st| st.take_user_stopped(&id2))
@@ -1183,6 +1196,66 @@ pub async fn start_camera_mirror(
     spawn_session(&app, serial, args, false, "camera").await
 }
 
+#[cfg(windows)]
+struct ShortcutFocusGuard {
+    current_thread: u32,
+    target_thread: u32,
+    attached: bool,
+}
+
+#[cfg(windows)]
+impl Drop for ShortcutFocusGuard {
+    fn drop(&mut self) {
+        if self.attached {
+            extern "system" {
+                fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
+            }
+            unsafe {
+                let _ = AttachThreadInput(self.current_thread, self.target_thread, 0);
+            }
+        }
+    }
+}
+
+/// Focus an embedded or standalone scrcpy window before synthesizing a shortcut.
+/// Always calls `SetForegroundWindow` on the root top-level window (required when
+/// `hwnd` is a reparented `WS_CHILD`) and `SetFocus` on `hwnd` itself.
+#[cfg(windows)]
+unsafe fn focus_scrcpy_for_shortcut(
+    hwnd: windows::Win32::Foundation::HWND,
+) -> (ShortcutFocusGuard, bool) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, GA_ROOT,
+    };
+    extern "system" {
+        fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
+        fn GetCurrentThreadId() -> u32;
+        fn SetFocus(hWnd: HWND) -> HWND;
+    }
+
+    let root = GetAncestor(hwnd, GA_ROOT);
+    let fg_target = if !root.0.is_null() { root } else { hwnd };
+    let target_thread = GetWindowThreadProcessId(hwnd, None);
+    let current_thread = GetCurrentThreadId();
+    let attached = target_thread != 0
+        && target_thread != current_thread
+        && AttachThreadInput(current_thread, target_thread, 1) != 0;
+
+    let _ = SetForegroundWindow(fg_target);
+    let _ = SetFocus(hwnd);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let fg_ok = GetForegroundWindow() == fg_target;
+    (
+        ShortcutFocusGuard {
+            current_thread,
+            target_thread,
+            attached,
+        },
+        fg_ok,
+    )
+}
+
 #[tauri::command]
 pub fn send_camera_shortcut(app: AppHandle, serial: String, action: String) -> Result<(), String> {
     #[cfg(windows)]
@@ -1190,14 +1263,11 @@ pub fn send_camera_shortcut(app: AppHandle, serial: String, action: String) -> R
         use windows::core::BOOL;
         use windows::Win32::Foundation::{HWND, LPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
         };
 
         extern "system" {
-            fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
-            fn GetCurrentThreadId() -> u32;
-            fn SetFocus(hWnd: HWND) -> HWND;
         }
 
         struct EnumData {
@@ -1247,12 +1317,7 @@ pub fn send_camera_shortcut(app: AppHandle, serial: String, action: String) -> R
 
         let hwnd = hwnd.ok_or_else(|| format!("scrcpy camera window for {} not found", serial))?;
         unsafe {
-            let target_thread = GetWindowThreadProcessId(hwnd, None);
-            let current_thread = GetCurrentThreadId();
-            let attached = AttachThreadInput(current_thread, target_thread, 1);
-            let _ = SetForegroundWindow(hwnd);
-            let _ = SetFocus(hwnd);
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            let _focus_guard = focus_scrcpy_for_shortcut(hwnd);
 
             const VK_MENU: u8 = 0x12;
             const VK_SHIFT: u8 = 0x10;
@@ -1304,15 +1369,8 @@ pub fn send_camera_shortcut(app: AppHandle, serial: String, action: String) -> R
                     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
                 }
                 _ => {
-                    if attached != 0 {
-                        let _ = AttachThreadInput(current_thread, target_thread, 0);
-                    }
                     return Err(format!("unknown camera shortcut action: {}", action));
                 }
-            }
-
-            if attached != 0 {
-                let _ = AttachThreadInput(current_thread, target_thread, 0);
             }
         }
     }
@@ -1354,13 +1412,11 @@ pub async fn restart_with_screen_off(
         use windows::core::BOOL;
         use windows::Win32::Foundation::{HWND, LPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
         };
         extern "system" {
-            fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
             fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
-            fn GetCurrentThreadId() -> u32;
-            fn SetFocus(hWnd: HWND) -> HWND;
         }
 
         struct EnumData {
@@ -1402,42 +1458,72 @@ pub async fn restart_with_screen_off(
 
             if let Some(hwnd) = hwnd {
                 unsafe {
-                    let target_thread = GetWindowThreadProcessId(hwnd, None);
-                    let current_thread = GetCurrentThreadId();
-                    let attached = AttachThreadInput(current_thread, target_thread, 1);
-                    let _ = SetForegroundWindow(hwnd);
-                    let _ = SetFocus(hwnd);
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    let (_focus_guard, fg_ok) = focus_scrcpy_for_shortcut(hwnd);
 
                     const VK_MENU: u8 = 0x12;
                     const VK_SHIFT: u8 = 0x10;
                     const VK_O: u8 = 0x4F;
                     const KEYEVENTF_KEYUP: u32 = 0x0002;
 
-                    keybd_event(VK_MENU, 0, 0, 0);
-                    if !off {
-                        keybd_event(VK_SHIFT, 0, 0, 0);
+                    if fg_ok {
+                        keybd_event(VK_MENU, 0x38, 0, 0);
+                        if !off {
+                            keybd_event(VK_SHIFT, 0x2A, 0, 0);
+                        }
+                        keybd_event(VK_O, 0x18, 0, 0);
+                        keybd_event(VK_O, 0x18, KEYEVENTF_KEYUP, 0);
+                        if !off {
+                            keybd_event(VK_SHIFT, 0x2A, KEYEVENTF_KEYUP, 0);
+                        }
+                        keybd_event(VK_MENU, 0x38, KEYEVENTF_KEYUP, 0);
+                    } else {
+                        // Fallback when foreground could not be acquired (e.g. non-active desktop):
+                        // post the full modifier + key sequence directly to the SDL window.
+                        use windows::Win32::Foundation::WPARAM;
+                        let lp_alt_down = LPARAM(1 | (0x38isize << 16));
+                        let lp_alt_up = LPARAM(1 | (0x38isize << 16) | (0xC000_0000u32 as isize));
+                        let lp_shift_down = LPARAM(1 | (0x2Aisize << 16) | (1isize << 29));
+                        let lp_shift_up = LPARAM(
+                            1 | (0x2Aisize << 16) | (1isize << 29) | (0xC000_0000u32 as isize),
+                        );
+                        let lp_o_down = LPARAM(1 | (0x18isize << 16) | (1isize << 29));
+                        let lp_o_up = LPARAM(
+                            1 | (0x18isize << 16) | (1isize << 29) | (0xC000_0000u32 as isize),
+                        );
+                        let _ = PostMessageW(
+                            Some(hwnd),
+                            WM_SYSKEYDOWN,
+                            WPARAM(VK_MENU as usize),
+                            lp_alt_down,
+                        );
+                        if !off {
+                            let _ = PostMessageW(
+                                Some(hwnd),
+                                WM_SYSKEYDOWN,
+                                WPARAM(VK_SHIFT as usize),
+                                lp_shift_down,
+                            );
+                        }
+                        let _ = PostMessageW(
+                            Some(hwnd),
+                            WM_SYSKEYDOWN,
+                            WPARAM(VK_O as usize),
+                            lp_o_down,
+                        );
+                        let _ =
+                            PostMessageW(Some(hwnd), WM_SYSKEYUP, WPARAM(VK_O as usize), lp_o_up);
+                        if !off {
+                            let _ = PostMessageW(
+                                Some(hwnd),
+                                WM_KEYUP,
+                                WPARAM(VK_SHIFT as usize),
+                                lp_shift_up,
+                            );
+                        }
+                        let _ =
+                            PostMessageW(Some(hwnd), WM_KEYUP, WPARAM(VK_MENU as usize), lp_alt_up);
+                        let _ = WM_KEYDOWN;
                     }
-                    keybd_event(VK_O, 0, 0, 0);
-                    keybd_event(VK_O, 0, KEYEVENTF_KEYUP, 0);
-                    if !off {
-                        keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
-                    }
-                    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
-
-                    if attached != 0 {
-                        let _ = AttachThreadInput(current_thread, target_thread, 0);
-                    }
-                    // Also post direct key message as fallback guarantee for SDL window
-                    use windows::Win32::UI::WindowsAndMessaging::{
-                        PostMessageW, WM_SYSKEYDOWN, WM_SYSKEYUP,
-                    };
-                    const VK_O_WPARAM: windows::Win32::Foundation::WPARAM =
-                        windows::Win32::Foundation::WPARAM(0x4F);
-                    const ALT_LPARAM: windows::Win32::Foundation::LPARAM =
-                        windows::Win32::Foundation::LPARAM(1 << 29);
-                    let _ = PostMessageW(Some(hwnd), WM_SYSKEYDOWN, VK_O_WPARAM, ALT_LPARAM);
-                    let _ = PostMessageW(Some(hwnd), WM_SYSKEYUP, VK_O_WPARAM, ALT_LPARAM);
                 }
 
                 let mut map = state.sessions.lock().map_err(poison_error)?;
@@ -2778,10 +2864,9 @@ emulator-5554          device product:sdk_gphone64 model:Pixel_7 device:emulator
 }
 
 /// Save and push an image from clipboard directly to device's /sdcard/Download folder
-#[tauri::command]
-pub async fn push_clipboard_image(
-    app: AppHandle,
-    serial: String,
+pub(crate) async fn push_clipboard_image_bytes(
+    app: &AppHandle,
+    serial: &str,
     image_bytes: Vec<u8>,
     filename: Option<String>,
 ) -> Result<String, String> {
@@ -2802,11 +2887,11 @@ pub async fn push_clipboard_image(
         .map_err(|e| format!("Failed to write temp file: {e}"))?;
 
     let device_dest = format!("/sdcard/Download/{}", fname);
-    let push_res = adb_cmd(&app)
+    let push_res = adb_cmd(app)
         .await?
         .args([
             "-s",
-            &serial,
+            serial,
             "push",
             temp_path.to_str().unwrap_or_default(),
             &device_dest,
@@ -2825,11 +2910,11 @@ pub async fn push_clipboard_image(
     }
 
     // Trigger media scanner so Android Gallery picks it up immediately
-    let _ = adb_cmd(&app)
+    let _ = adb_cmd(app)
         .await?
         .args([
             "-s",
-            &serial,
+            serial,
             "shell",
             "am",
             "broadcast",
@@ -2842,6 +2927,17 @@ pub async fn push_clipboard_image(
         .await;
 
     Ok(device_dest)
+}
+
+/// Save and push an image from clipboard directly to device's /sdcard/Download folder
+#[tauri::command]
+pub async fn push_clipboard_image(
+    app: AppHandle,
+    serial: String,
+    image_bytes: Vec<u8>,
+    filename: Option<String>,
+) -> Result<String, String> {
+    push_clipboard_image_bytes(&app, &serial, image_bytes, filename).await
 }
 #[derive(serde::Serialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct BatteryInfo {
@@ -3971,6 +4067,7 @@ pub async fn start_recording(
     let Some(old) = existing else {
         return Err("No active mirror session to record".into());
     };
+    state.mark_restarting(&old.id);
 
     let model = query_device_model(&app, &serial).await;
     let now_secs = SystemTime::now()
@@ -3986,6 +4083,7 @@ pub async fn start_recording(
     let old_mode = old.mode.clone();
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
+    crate::embed::remove_embedded_scrcpy_hwnd(&serial);
     spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
 }
 
@@ -4010,11 +4108,13 @@ pub async fn stop_recording(
     let Some(old) = existing else {
         return Err("No active recording session".into());
     };
+    state.mark_restarting(&old.id);
 
     let new_args = toggle_record_args(&old.args, None);
     let old_mode = old.mode.clone();
 
     stop_child_gracefully(old.child, old.pid, &serial).await?;
+    crate::embed::remove_embedded_scrcpy_hwnd(&serial);
     spawn_session_inner(&app, serial, new_args, false, &old_mode, true).await
 }
 

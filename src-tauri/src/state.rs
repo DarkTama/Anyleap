@@ -50,6 +50,9 @@ pub struct AppState {
     pub kvm: Mutex<KvmState>,
     /// Session ids the user stopped on purpose; their exit must not surface an error.
     pub user_stopped: Mutex<std::collections::HashSet<String>>,
+    /// Session ids being replaced in-place (e.g. recording start/stop); their exit must
+    /// not emit `session-exited` or tear down an embedded mirror window.
+    pub restarting: Mutex<std::collections::HashSet<String>>,
 }
 
 impl AppState {
@@ -63,6 +66,21 @@ impl AppState {
     /// Consume the user-stopped flag for a session; true if it was set.
     pub fn take_user_stopped(&self, id: &str) -> bool {
         self.user_stopped
+            .lock()
+            .map(|mut set| set.remove(id))
+            .unwrap_or(false)
+    }
+
+    /// Mark a session as being replaced in-place before stopping its child.
+    pub fn mark_restarting(&self, id: &str) {
+        if let Ok(mut set) = self.restarting.lock() {
+            set.insert(id.to_string());
+        }
+    }
+
+    /// Consume the restarting flag for a session; true if it was set.
+    pub fn take_restarting(&self, id: &str) -> bool {
+        self.restarting
             .lock()
             .map(|mut set| set.remove(id))
             .unwrap_or(false)
@@ -88,5 +106,14 @@ mod tests {
         let err = m.lock().unwrap_err();
         let formatted = poison_error(err);
         assert!(formatted.starts_with("Mutex lock poisoned:"));
+    }
+
+    #[test]
+    fn restarting_flag_is_consumed_once() {
+        let st = AppState::default();
+        assert!(!st.take_restarting("s1"));
+        st.mark_restarting("s1");
+        assert!(st.take_restarting("s1"));
+        assert!(!st.take_restarting("s1"));
     }
 }
