@@ -68,6 +68,7 @@ export const REGISTRY: SettingEntry[] = [
   e("M-20b", "phone", "Picture fit", "Letterbox keeps proportions. Stretched fills the window.", ["letterbox", "unscaled", "stretched"]),
   e("M-21", "phone", "Scroll style", "Smooth scrolls like a normal page. Paged turns each wheel notch into a swipe, for short-video feeds.", ["scroll", "wheel", "smooth", "paged", "reading", "short videos"]),
   e("M-22", "phone", "Scroll speed", "Matches the phone's normal feel.", ["scroll", "speed", "multiplier", "auto", "density"]),
+  e("M-23", "phone", "Smooth scrolling", "Glides between wheel notches. Adds a little delay, so turn it off for games.", ["scroll", "smooth", "glide", "ease", "wheel"]),
 
   // Control bar
   e("C-01", "controlbar", "Dock side", undefined, ["position", "left", "right", "undocked"]),

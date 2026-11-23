@@ -17,7 +17,7 @@ import { PhoneMirroringSection } from "../PhoneMirroringSection";
 import { useAppStore } from "@/store/useAppStore";
 import { defaultModeDefaults } from "@/lib/modeSettings";
 import { saveModeDefaults } from "@/lib/persist";
-import { getScrollMultiplier } from "@/lib/tauri";
+import { getScrollMultiplier, setScrollFeel } from "@/lib/tauri";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -175,7 +175,7 @@ describe("PhoneMirroringSection", () => {
     expect(el.textContent).toContain("Custom");
   });
 
-  it("renders Scrolling group with Smooth/Paged style and speed select, disables speed under Paged, and hides Phase 2/3 controls", async () => {
+  it("renders Scrolling group with style, speed, and Smooth scrolling switch, disables controls under Paged, and hides Phase 3", async () => {
     useAppStore.setState({ sessions: [], sessionModes: {} });
     await mount();
     expect(el.textContent).toContain("Scrolling");
@@ -184,9 +184,21 @@ describe("PhoneMirroringSection", () => {
     expect(el.textContent).toContain("Paged (short videos)");
     expect(el.textContent).toContain("Scroll speed");
     expect(el.textContent).toContain("Matches the phone's normal feel.");
-    expect(el.textContent).not.toContain("Smooth scrolling");
+    expect(el.textContent).toContain("Smooth scrolling");
+    expect(el.textContent).toContain(
+      "Glides between wheel notches. Adds a little delay, so turn it off for games.",
+    );
     expect(el.textContent).not.toContain("Touchpad momentum");
 
+    const smoothSwitch = sw("Smooth scrolling");
+    expect(smoothSwitch.getAttribute("aria-checked")).toBe("true");
+    expect(smoothSwitch.hasAttribute("disabled")).toBe(false);
+
+    // High fidelity defaults Smooth scrolling to off.
+    await act(async () => tab("High fidelity").click());
+    expect(sw("Smooth scrolling").getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => tab("Mirror").click());
     const speedSelect = Array.from(el.querySelectorAll<HTMLSelectElement>("select")).find((sel) =>
       Array.from(sel.options).some((o) => o.value === "auto"),
     )!;
@@ -200,7 +212,27 @@ describe("PhoneMirroringSection", () => {
     expect(useAppStore.getState().modeDefaults.mirror.scroll.style).toBe("paged");
     expect(useAppStore.getState().modeDefaults.flex.scroll.style).toBe("smooth");
     expect(speedSelect.disabled).toBe(true);
+    expect(sw("Smooth scrolling").hasAttribute("disabled")).toBe(true);
     expect(el.textContent).toContain("Not used in Paged style.");
+  });
+
+  it("toggling Smooth scrolling writes only the selected mode and updates running sessions live", async () => {
+    useAppStore.setState({
+      sessions: [{ id: "s1", serial: "DEV1", pid: 1, started_at: 1, mode: "display" }],
+      sessionModes: { s1: "mirror" },
+      currentMode: "mirror",
+    });
+    await mount();
+    await act(async () => sw("Smooth scrolling").click());
+    expect(useAppStore.getState().modeDefaults.mirror.scroll.smooth).toBe(false);
+    expect(useAppStore.getState().modeDefaults.flex.scroll.smooth).toBe(true);
+    expect(setScrollFeel).toHaveBeenCalledWith("DEV1", {
+      style: "smooth",
+      speedMode: "auto",
+      manual: 1,
+      smooth: false,
+      inertia: "off",
+    });
   });
 
   it("shows live Auto multiplier when a session of the active mode is running", async () => {
