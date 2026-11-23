@@ -924,6 +924,61 @@ pub fn sweep_expired_pending_outbound_clips(ttl: Duration) -> usize {
     before.saturating_sub(g.len())
 }
 
+/// Display names for outbound clip offers that have a registered progress total.
+static OUTBOUND_OFFER_NAMES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+pub fn remember_outbound_offer_name(offer_id: &str, name: &str) {
+    OUTBOUND_OFFER_NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(offer_id.to_string(), name.to_string());
+}
+
+/// Pure bookkeeping: merges active (registered-total) and pending (awaiting fetch) outbound
+/// offers into terminal entries `(id, name, total_bytes)`.
+pub fn merge_outbound_terminal_entries(
+    active: Vec<(String, u64)>,
+    pending: Vec<PendingOutboundClip>,
+    names: &mut HashMap<String, String>,
+) -> Vec<(String, String, u64)> {
+    let mut out: Vec<(String, String, u64)> = Vec::new();
+    for p in pending {
+        names.remove(&p.offer_id);
+        out.push((p.offer_id, p.summary, p.total_bytes));
+    }
+    for (id, total) in active {
+        if out.iter().any(|(i, _, _)| *i == id) {
+            continue;
+        }
+        // Only clip offers have a remembered name; drag/other totals are left alone.
+        let Some(name) = names.remove(&id) else {
+            continue;
+        };
+        out.push((id, name, total));
+    }
+    out
+}
+
+/// Drains every pending or active outbound clip transfer so the caller can mark it terminal.
+pub fn drain_outbound_clip_transfers() -> Vec<(String, String, u64)> {
+    let active = super::files::drain_outbound_totals();
+    // NOTE: drag totals share the map; they are filtered out in the merge (no remembered name).
+    let pending: Vec<PendingOutboundClip> = pending_outbound_clips()
+        .lock()
+        .unwrap()
+        .drain()
+        .map(|(_, v)| v)
+        .collect();
+    let mut names = OUTBOUND_OFFER_NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let out = merge_outbound_terminal_entries(active, pending, &mut names);
+    names.clear();
+    out
+}
+
 pub fn clear_pending_outbound_clips() {
     pending_outbound_clips().lock().unwrap().clear();
 }
@@ -943,6 +998,51 @@ pub fn cancel_all_transfers() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnect_merges_pending_and_active_outbound_into_terminal_entries() {
+        let pending = vec![PendingOutboundClip {
+            offer_id: "p1".into(),
+            files: vec![],
+            sources: vec![],
+            summary: "big.bin".into(),
+            total_bytes: 9,
+            created_at: Instant::now(),
+        }];
+        let active = vec![
+            ("a1".to_string(), 5u64),
+            ("drag1".to_string(), 7u64),
+            ("p1".to_string(), 9u64),
+        ];
+        let mut names = HashMap::new();
+        names.insert("a1".to_string(), "a.txt".to_string());
+        names.insert("p1".to_string(), "big.bin".to_string());
+        let mut out = merge_outbound_terminal_entries(active, pending, &mut names);
+        out.sort();
+        assert_eq!(
+            out,
+            vec![
+                ("a1".to_string(), "a.txt".to_string(), 5),
+                ("p1".to_string(), "big.bin".to_string(), 9),
+            ]
+        );
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn drain_outbound_clip_transfers_empties_pending_registry() {
+        insert_pending_outbound_clip(PendingOutboundClip {
+            offer_id: "drain-test-1".into(),
+            files: vec![],
+            sources: vec![],
+            summary: "x".into(),
+            total_bytes: 1,
+            created_at: Instant::now(),
+        });
+        let out = drain_outbound_clip_transfers();
+        assert!(out.iter().any(|(id, _, _)| id == "drain-test-1"));
+        assert!(take_pending_outbound_clip("drain-test-1").is_none());
+    }
 
     #[test]
     fn staging_limit_decides_staging_vs_downloads_fallback() {

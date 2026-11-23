@@ -531,6 +531,16 @@ fn send_pkt_from_app(app: &AppHandle, pkt: KvmPacket) {
     }
 }
 
+/// Marks every pending or active outbound clip transfer cancelled and emits it so the
+/// Transfer Bar clears. Called when the linked peer goes away.
+fn cancel_outbound_clip_transfers(app: &AppHandle, reason: &str) {
+    for (id, name, total) in super::staging::drain_outbound_clip_transfers() {
+        super::files::global_cancel_registry().cancel_any_conn(&id);
+        super::debug_log::note(|| format!("CLIP_OFFER_CANCELLED id={id} reason={reason}"));
+        emit_transfer_progress(app, &id, "clip", &name, 0, "cancelled", total);
+    }
+}
+
 fn replace_previous_clip_offer(app: &AppHandle, new_offer_id: &str) {
     let Some(prev_id) = super::staging::swap_previous_clip_offer(new_offer_id) else {
         return;
@@ -595,6 +605,7 @@ fn replace_previous_clip_offer(app: &AppHandle, new_offer_id: &str) {
 
 fn spawn_outbound_pending_clip(app: &AppHandle, pending: super::staging::PendingOutboundClip) {
     super::files::register_outbound_total(&pending.offer_id, pending.total_bytes);
+    super::staging::remember_outbound_offer_name(&pending.offer_id, &pending.summary);
     super::debug_log::note(|| {
         format!(
             "CLIP_FETCH_REQ side=sender id={} files={} bytes={}",
@@ -1159,6 +1170,9 @@ fn cleanup_spec25a_on_disconnect_with_app(app: Option<&AppHandle>) {
     }
     if let Ok(mut g) = pending_outbound_drag().lock() {
         *g = None;
+    }
+    if let Some(app_h) = app {
+        cancel_outbound_clip_transfers(app_h, "peer_disconnected");
     }
     let expired_drags = super::dragdrop::global_drag_registry().drain_active();
     let expired_inbound = super::staging::drain_pending_inbound_clips();
@@ -1829,7 +1843,17 @@ async fn start_server_inner(
 
     // Start server-side clipboard monitor
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::channel::<Outbound>(32);
-    start_clipboard_sync(clip_tx, Arc::clone(&server_handle.is_running));
+    let peer_gate_app = app_handle.clone();
+    start_clipboard_sync(
+        clip_tx,
+        Arc::clone(&server_handle.is_running),
+        Arc::new(move || {
+            peer_gate_app
+                .try_state::<AppState>()
+                .and_then(|s| s.kvm.lock().ok().map(|k| !k.connected_peers.is_empty()))
+                .unwrap_or(false)
+        }),
+    );
     let out_tx = outgoing_tx.clone();
     let srv_clip_app = app_handle.clone();
     tokio::spawn(async move {
@@ -1851,6 +1875,7 @@ async fn start_server_inner(
                 ) == super::staging::ClipOfferMode::Prefetch
                 {
                     super::files::register_outbound_total(offer_id, total_bytes);
+                    super::staging::remember_outbound_offer_name(offer_id, &summary);
                     super::debug_log::note(|| {
                         format!(
                         "CLIP_OFFER_SEND side=server id={offer_id} files={} total_bytes={total_bytes}",
@@ -2854,7 +2879,12 @@ pub async fn kvm_connect_peer(
     .await?;
 
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::channel::<Outbound>(32);
-    start_clipboard_sync(clip_tx, Arc::clone(&client.is_connected));
+    let peer_flag = Arc::clone(&client.is_connected);
+    start_clipboard_sync(
+        clip_tx,
+        Arc::clone(&client.is_connected),
+        Arc::new(move || peer_flag.load(std::sync::atomic::Ordering::Relaxed)),
+    );
     let client_send = client.send_packet_tx.clone();
     let clip_conn = client.conn.clone();
     let clip_app = app_handle.clone();
@@ -2886,6 +2916,7 @@ pub async fn kvm_connect_peer(
                         ) == super::staging::ClipOfferMode::Prefetch
                         {
                             super::files::register_outbound_total(offer_id, total_bytes);
+                            super::staging::remember_outbound_offer_name(offer_id, &summary);
                             super::debug_log::note(|| {
                                 format!(
                                 "CLIP_OFFER_SEND side=client id={offer_id} files={} total_bytes={total_bytes}",
@@ -3248,9 +3279,12 @@ pub async fn kvm_connect_peer(
 }
 
 #[tauri::command]
-pub async fn kvm_disconnect_peer(state: State<'_, AppState>) -> Result<(), String> {
-    let mut kvm = state.kvm.lock().unwrap();
-    disconnect_peer_in_state(&mut kvm);
+pub async fn kvm_disconnect_peer(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut kvm = state.kvm.lock().unwrap();
+        disconnect_peer_in_state(&mut kvm);
+    }
+    cancel_outbound_clip_transfers(&app, "peer_disconnected");
     Ok(())
 }
 
