@@ -1,6 +1,6 @@
 # SPEC-30: Scroll feel (speed, smooth scrolling, inertia)
 
-> **Status:** Phase 1 implemented (2026-11-19). Phase 2 implemented (2026-11-23; pending manual device check). Phase 3 remains proposed.
+> **Status:** Phase 1 & Phase 2 implemented (2026-11-23), plus touchpad separation & **Touchpad speed** follow-up. Phase 3 (synthetic inertia) stays unbuilt (driver supplies flick momentum; see §7.3, §14).
 > **Scope:** wheel and touchpad input over a mirror window (`src-tauri/src/wheel_swipe.rs` hook thread, new `scroll_feel` module beside it), per-mode persisted settings (`src/lib/modeSettings.ts`), the Phone mirroring section and the control bar **More** popover.
 > **Related:** SPEC-28 (per-mode `modeDefaults`, Phone mirroring tabs), ADR-0005, SPEC-24 (input hooks pattern). SPEC-29 is reserved by an open PR, hence the number.
 > **Plan:** `docs/superpowers/plans/2026-11-19-spec30-scroll-feel.md`
@@ -38,18 +38,19 @@ Three independent controls plus the style switch, stored per mode inside each `M
 type ScrollStyle = "smooth" | "paged";
 interface ScrollSettings {
   style: ScrollStyle;                       // "paged" = existing wheel swipe flings
-  speed: "auto" | number;                   // manual multiplier, 1..5, step 0.25
-  smooth: boolean;                          // Phase 2
-  inertia: "off" | "low" | "medium" | "high"; // Phase 3
+  speed: "auto" | number;                   // mouse wheel multiplier: "auto" or 1..5, step 0.25
+  touchpadSpeed: number;                    // touchpad multiplier: 0.5..3, step 0.25, default 1
+  smooth: boolean;                          // Phase 2 (mouse wheel only)
+  inertia: "off" | "low" | "medium" | "high"; // Phase 3 (stays unbuilt)
 }
 ```
 
-| Mode | style | speed | smooth | inertia |
-|---|---|---|---|---|
-| Mirror | smooth | auto | on (Phase 2) | off |
-| Flex | smooth | auto | on (Phase 2) | off |
-| Camera | smooth | auto | off | off |
-| High fidelity | smooth | auto | off | off |
+| Mode | style | speed | touchpadSpeed | smooth | inertia |
+|---|---|---|---|---|---|
+| Mirror | smooth | auto | 1x | on (Phase 2) | off (unbuilt) |
+| Flex | smooth | auto | 1x | on (Phase 2) | off (unbuilt) |
+| Camera | smooth | auto | 1x | off | off (unbuilt) |
+| High fidelity | smooth | auto | 1x | off | off (unbuilt) |
 
 Until Phase 2 ships `smooth` is stored but inert. High fidelity and Camera default smoothing off because those modes are used for games and live monitoring where latency matters (§9).
 
@@ -61,9 +62,10 @@ Settings, Phone mirroring, per-mode tab, group **Scrolling** (no new rail sectio
 
 - **Scroll style**: segmented control `Smooth (reading)` / `Paged (short videos)`. Helper: "Smooth scrolls like a normal page. Paged turns each wheel notch into a swipe, for short-video feeds."
 - **Scroll speed** (shown when style is Smooth): select `Auto` or `1x` to `5x`. Helper with Auto: "Auto matches the phone's normal feel. Currently 2.5x on this screen." The live number appears only while a session of that mode is running; otherwise the helper says "Matches the phone's normal feel."
+- **Touchpad speed** (disabled under Paged): select `0.5x` to `3x` in `0.25` steps (default `1x`). Helper: "Touchpads already scroll precisely, so this has its own speed."
 - **Smooth scrolling** (Phase 2): switch. Helper: "Glides between wheel notches. Adds a little delay, so turn it off for games."
-- **Touchpad momentum** (Phase 3): select `Off / Low / Medium / High`. Helper: "Keeps scrolling briefly after you lift your fingers."
-- When style is Paged, speed, smooth scrolling and momentum are disabled with the note "Not used in Paged style."
+- **Touchpad momentum** (Phase 3): stays unshipped (§7.3).
+- When style is Paged, scroll speed, touchpad speed, and smooth scrolling are disabled with the note "Not used in Paged style."
 - The More popover entry is renamed **Paged scrolling** (was "Mouse wheel swipes") and stays a per-session toggle.
 
 Labels follow SPEC-28 §8.5: positive, sentence case, no jargon. Strings go through the existing label table.
@@ -104,7 +106,7 @@ then rounded to the nearest 0.25. Manual mode uses the chosen value, clamped to 
 - **Style Smooth with effective speed 1x, smooth off, inertia off:** the hook fails open and does nothing. Scrolling is then identical to stock scrcpy.
 - **Remainders:** multiply in `f32` with a per-axis accumulator. The integer part is posted, the fractional remainder carries to the next event. This makes small touchpad deltas (for example 7, 12, 3) scale correctly: 2.5x of 3 is 7.5, posts 7 and carries 0.5, and the long-run sum equals `sum(delta) * multiplier` within 1 unit. The accumulator resets after 250 ms of silence or a change of direction.
 - Posted delta is clamped to the `i16` range per message; a larger value is split across messages.
-- **Precision touchpads** send many small deltas (often 1 to 30 per message, not multiples of 120). They go through the same accumulator. "Touchpad-like" input (`|delta| % 120 != 0` over the last few events) is detected only for Phase 2 (bypass smoothing, §6) and Phase 3 (inertia eligibility).
+- **Touchpad classification & speed separation:** In the `WH_MOUSE_LL` hook, each wheel event is classified non-blockingly using `MSLLHOOKSTRUCT.flags` and `delta` (`classify_wheel_source`): **Touchpad-like** when `LLMHF_INJECTED` is set (such as touchpad drivers that emit injected `±120` wheel events) OR `delta` is not a multiple of `120`; **Mouse wheel** for every non-injected multiple-of-120 event regardless of interval (so fast free-spin mouse bursts stay Mouse wheel). Touchpad-like events never use the Auto multiplier or Phase 2 smoothing: at `1x` `Touchpad speed` they pass through untouched, and at any other `Touchpad speed` (`0.5x`–`3x`) they scale 1:1 through a per-axis remainder accumulator and re-post via `PostMessageW` (which never re-enters `WH_MOUSE_LL`). Note: injected wheel input from AnyLeap's own KVM receiver also carries `LLMHF_INJECTED` and is treated as touchpad-like (`1x` default, no smoothing).
 
 ### 5.4 Hook and threads
 
@@ -156,9 +158,13 @@ Goal: after a touchpad scroll stops, keep scrolling briefly with decay. Mainly f
 
 `inertia`: `off | low | medium | high` maps to `tau_i` of **150 / 300 / 500 ms** and velocity gain 0.8 / 1.0 / 1.2. Coast distance is about `v0 * tau_i`, so High glides about 3x farther than Low. Cancel immediately on any new wheel event, mouse button, key press, or the pointer leaving the mirror window. Hard cap on coast duration 1.2 s.
 
-### 7.3 Caveat
+### 7.3 Caveat (resolved 2026-11-23 — Phase 3 stays unbuilt)
 
-Windows precision touchpad drivers often emit their own inertial wheel deltas after the fingers lift. Synthetic inertia on top would double it. Phase 3 therefore starts with a measurement: record the delta stream from the user's touchpad over a lift. If the driver already supplies a tail, Phase 3 reduces to keeping that tail intact under the Phase 1 multiplier and the Phase 2 bypass, and the inertia setting stays hidden. Synthesized inertia ships only when the stream stops abruptly (open question 3).
+Windows precision touchpad drivers often emit their own inertial wheel deltas after the fingers lift. Synthetic inertia on top would double it. Phase 3 therefore started with a measurement on the user's laptop using a `WH_MOUSE_LL` hook while flicking the touchpad:
+
+- **Recorded evidence:** The touchpad driver does **not** send small precise deltas. It sends **injected** (`LLMHF_INJECTED` set in `MSLLHOOKSTRUCT.flags`) wheel events of **exactly `±120`**, in bursts of about 6 events ~15 ms apart for a flick (for example `6 × -120` within `75 ms`), and single events for slow moves.
+- **Root cause of hypersensitivity:** Because those events were `±120`, the original hook treated them as mouse-wheel notches—applying Flex `/160` Auto scaling (~2.75x) and Phase 2 smoothing, turning 6 notches into ~16 eased notches and an overly long glide that stopped abruptly when pending distance flushed.
+- **Decision:** Because the touchpad driver already produces its own flick momentum stream, **Phase 3 (synthetic inertia) stays unbuilt** and the **Touchpad momentum** setting remains unshipped. Touchpad input is instead separated in the hook via `classify_wheel_source` (`LLMHF_INJECTED` set OR `delta % 120 != 0`), skipping Auto multiplier and smoothing, passing through untouched at `1x`, and using its own per-mode **Touchpad speed** (`0.5x`–`3x`, step `0.25`, default `1x`).
 
 ## 8. Relationship to Paged (wheel swipe)
 
@@ -232,7 +238,7 @@ Each phase ends green: `npx tsc --noEmit`, `npx vitest run`, `cargo test`.
 
 1. **Answered (2026-11-19, bundled scrcpy 5.0.1 / SDL3 on TECNO CM7 Flex `1920x1080/160` Settings list via `uiautomator dump`):** Yes — SDL3 uses precise scroll values. Posted `WM_MOUSEWHEEL` deltas `-120`, `-300` (2.5 notches), and `-60` (0.5 notch) scrolled `192 px`, `480 px` (`2.5x`), and `96 px` (`0.5x`, twice) respectively. Fractional multipliers work continuously; the per-axis `f32` accumulator carries sub-unit remainders into `i16` posted deltas.
 2. **Answered (2026-11-19, same spike):** `PostMessageW` to the `SDL_app` HWND with screen coordinates in `lParam` works even when the cursor is outside the window and without foreground focus. Setting `MK_SHIFT` (`0x0004`) in `wParam` alone without physical Shift held still scrolled vertically `192 px`, showing SDL3 reads keyboard modifier state (`GetKeyState`) rather than `wParam` `MK_SHIFT`; we still forward `MK_SHIFT` in `wParam` and handle `WM_MOUSEHWHEEL` directly.
-3. What does the user's touchpad driver emit after a lift (decaying tail or abrupt stop)? Decides Phase 3.
+3. **Answered (2026-11-23, `WH_MOUSE_LL` recording on user's laptop):** The touchpad driver sends injected (`LLMHF_INJECTED` set) `±120` wheel events—bursts of ~6 events ~15 ms apart for a flick (e.g. `6 × -120` within `75 ms`) and single events for slow moves—so the driver already supplies flick momentum. Phase 3 (synthetic inertia) stays unbuilt and **Touchpad momentum** remains unshipped; touchpad events are separated from mouse-wheel Auto/smoothing and given their own **Touchpad speed** (`0.5x`–`3x`, default `1x`, untouched pass-through at `1x`).
 4. Should Auto depend on the foreground app? Default no.
 5. Should the Auto upper clamp be user-visible?
 6. Should Paged be suggested automatically when a pager app is in the foreground? Out of scope.

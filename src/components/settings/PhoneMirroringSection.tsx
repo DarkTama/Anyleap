@@ -11,6 +11,7 @@ import {
   QUALITY_LABELS,
   RESOLUTION_VALUE,
   SCROLL_SPEED_OPTIONS,
+  TOUCHPAD_SPEED_OPTIONS,
   applyQuality,
   deriveQuality,
   segmentForBitrate,
@@ -292,6 +293,7 @@ function ScrollingGroup({ mode, s }: { mode: DisplayMode; s: ModeSettings }) {
   const styleEntry = entry("M-21");
   const speedEntry = entry("M-22");
   const smoothEntry = entry("M-23");
+  const touchpadEntry = entry("M-24");
   const speedHint = isPaged
     ? "Not used in Paged style."
     : isAuto
@@ -299,6 +301,7 @@ function ScrollingGroup({ mode, s }: { mode: DisplayMode; s: ModeSettings }) {
         ? `Auto matches the phone's normal feel. Currently ${formatScrollMultiplier(liveMultiplier)}x on this screen.`
         : (speedEntry.helper ?? "Matches the phone's normal feel.")
       : "Scrolls at a fixed speed on every screen.";
+  const touchpadHint = isPaged ? "Not used in Paged style." : touchpadEntry.helper;
 
   return (
     <Group title="Scrolling">
@@ -339,6 +342,34 @@ function ScrollingGroup({ mode, s }: { mode: DisplayMode; s: ModeSettings }) {
         </select>
         <p id={`${id}-speed-hint`} className="text-[11px] leading-snug text-text-muted">
           {speedHint}
+        </p>
+      </div>
+      <div className="space-y-1 py-1">
+        <label
+          htmlFor={`${id}-touchpad-speed`}
+          className={`text-sm ${isPaged ? "text-text opacity-70" : "text-text-strong"}`}
+        >
+          {touchpadEntry.label}
+        </label>
+        <select
+          id={`${id}-touchpad-speed`}
+          aria-describedby={`${id}-touchpad-speed-hint`}
+          disabled={isPaged}
+          className={`${selectClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          value={String(s.scroll.touchpadSpeed)}
+          onChange={(e) => {
+            const touchpadSpeed = Number.parseFloat(e.target.value);
+            editMode(mode, { scroll: { ...s.scroll, touchpadSpeed } });
+          }}
+        >
+          {TOUCHPAD_SPEED_OPTIONS.map((v) => (
+            <option key={v} value={String(v)} className={optionClass}>
+              {v}x
+            </option>
+          ))}
+        </select>
+        <p id={`${id}-touchpad-speed-hint`} className="text-[11px] leading-snug text-text-muted">
+          {touchpadHint}
         </p>
       </div>
       <SwitchRow

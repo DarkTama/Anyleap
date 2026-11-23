@@ -15,6 +15,46 @@ const AUTO_MAX_MULTIPLIER: f32 = 4.0;
 const MANUAL_MIN_MULTIPLIER: f32 = 1.0;
 const MANUAL_MAX_MULTIPLIER: f32 = 5.0;
 
+/// Minimum, maximum, and default Touchpad speed multiplier bounds (SPEC-30 follow-up).
+pub const TOUCHPAD_MIN_SPEED: f32 = 0.5;
+pub const TOUCHPAD_MAX_SPEED: f32 = 3.0;
+pub const TOUCHPAD_DEFAULT_SPEED: f32 = 1.0;
+
+/// Windows `MSLLHOOKSTRUCT.flags` bit indicating injected mouse input.
+pub const LLMHF_INJECTED: u32 = 0x0000_0001;
+
+/// Standard Windows wheel delta for one physical mouse-wheel notch.
+pub const WHEEL_DELTA_NOTCH: i16 = 120;
+
+/// Source classification for a low-level mouse-wheel hook event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelSource {
+    MouseWheel,
+    Touchpad,
+}
+
+/// Classify a wheel hook event using only `MSLLHOOKSTRUCT.flags` and wheel `delta`.
+///
+/// - **Touchpad**: `LLMHF_INJECTED` is set (e.g. touchpad drivers that emit injected
+///   `±120` wheel events) OR `delta` is not a multiple of `120` (precision touchpads).
+/// - **MouseWheel**: every non-injected multiple-of-120 event regardless of interval,
+///   so fast free-spin mouse bursts stay classified as mouse wheel.
+///
+/// Note: Injected wheel input from AnyLeap's own KVM receiver also has `LLMHF_INJECTED`
+/// set and is therefore treated as touchpad-like (`1x` default, no smoothing), which is
+/// acceptable.
+pub fn classify_wheel_source(flags: u32, delta: i16) -> WheelSource {
+    if (flags & LLMHF_INJECTED) != 0
+        || !delta
+            .unsigned_abs()
+            .is_multiple_of(WHEEL_DELTA_NOTCH as u16)
+    {
+        WheelSource::Touchpad
+    } else {
+        WheelSource::MouseWheel
+    }
+}
+
 /// Fallback native display density when `wm density` and `dumpsys display` fail.
 pub const DEFAULT_NATIVE_DENSITY: u32 = 400;
 
@@ -61,10 +101,16 @@ pub struct ScrollConfig {
     pub smooth: bool,
     #[serde(default)]
     pub inertia: InertiaLevel,
+    #[serde(default = "default_touchpad_speed", alias = "touchpad_speed")]
+    pub touchpad_speed: f32,
 }
 
 fn default_manual_speed() -> f32 {
     1.0
+}
+
+fn default_touchpad_speed() -> f32 {
+    TOUCHPAD_DEFAULT_SPEED
 }
 
 impl Default for ScrollConfig {
@@ -75,6 +121,7 @@ impl Default for ScrollConfig {
             manual: 1.0,
             smooth: false,
             inertia: InertiaLevel::Off,
+            touchpad_speed: TOUCHPAD_DEFAULT_SPEED,
         }
     }
 }
@@ -116,6 +163,17 @@ pub fn effective_multiplier(
                 1.0
             }
         }
+    }
+}
+
+/// Compute the effective touchpad speed multiplier, clamped to `[0.5, 3.0]`.
+pub fn effective_touchpad_speed(config: &ScrollConfig) -> f32 {
+    if config.touchpad_speed.is_finite() {
+        config
+            .touchpad_speed
+            .clamp(TOUCHPAD_MIN_SPEED, TOUCHPAD_MAX_SPEED)
+    } else {
+        TOUCHPAD_DEFAULT_SPEED
     }
 }
 
@@ -447,5 +505,62 @@ mod tests {
         let neg = acc.push(-10_000, 4.0, t0 + Duration::from_millis(10));
         assert_eq!(neg, vec![-32768, -7232]);
         assert_eq!(neg.iter().map(|&v| v as i64).sum::<i64>(), -40_000);
+    }
+
+    #[test]
+    fn effective_touchpad_speed_clamps_and_defaults() {
+        let mut cfg = ScrollConfig::default();
+        assert_eq!(effective_touchpad_speed(&cfg), 1.0);
+
+        cfg.touchpad_speed = 0.25;
+        assert_eq!(effective_touchpad_speed(&cfg), 0.5);
+
+        cfg.touchpad_speed = 2.25;
+        assert_eq!(effective_touchpad_speed(&cfg), 2.25);
+
+        cfg.touchpad_speed = 5.0;
+        assert_eq!(effective_touchpad_speed(&cfg), 3.0);
+
+        cfg.touchpad_speed = f32::NAN;
+        assert_eq!(effective_touchpad_speed(&cfg), 1.0);
+    }
+
+    #[test]
+    fn classify_wheel_source_recorded_touchpad_and_mouse_patterns() {
+        // Recorded touchpad flick burst: 6 x -120 with LLMHF_INJECTED set, ~15 ms apart.
+        let flick = [
+            (-120i16, 0u64),
+            (-120, 15),
+            (-120, 30),
+            (-120, 45),
+            (-120, 60),
+            (-120, 75),
+        ];
+        for (delta, _t_ms) in flick {
+            assert_eq!(
+                classify_wheel_source(LLMHF_INJECTED, delta),
+                WheelSource::Touchpad
+            );
+        }
+        // Slow single touchpad move with LLMHF_INJECTED set.
+        assert_eq!(
+            classify_wheel_source(LLMHF_INJECTED, 120),
+            WheelSource::Touchpad
+        );
+
+        // Non-injected small precision touchpad deltas (e.g. 40, -15, 7).
+        for delta in [40i16, -15, 7, i16::MIN] {
+            assert_eq!(classify_wheel_source(0, delta), WheelSource::Touchpad);
+        }
+
+        // Real mouse wheel: non-injected ±120 with gaps > 25 ms.
+        for delta in [120i16, -120, 240, -240] {
+            assert_eq!(classify_wheel_source(0, delta), WheelSource::MouseWheel);
+        }
+
+        // Fast free-spin mouse wheel burst: non-injected ±120 at 10-15 ms intervals stays MouseWheel.
+        for _ in 0..6 {
+            assert_eq!(classify_wheel_source(0, -120), WheelSource::MouseWheel);
+        }
     }
 }

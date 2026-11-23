@@ -345,13 +345,37 @@ describe("quality derivation and helpers", () => {
 describe("scroll settings (SPEC-30)", () => {
   it("provides expected per-mode defaults", () => {
     const d = defaultModeDefaults();
-    expect(d.mirror.scroll).toEqual({ style: "smooth", speed: "auto", smooth: true, inertia: "off" });
-    expect(d.flex.scroll).toEqual({ style: "smooth", speed: "auto", smooth: true, inertia: "off" });
-    expect(d.hifi.scroll).toEqual({ style: "smooth", speed: "auto", smooth: false, inertia: "off" });
-    expect(DEFAULT_SCROLL.camera).toEqual({ style: "smooth", speed: "auto", smooth: false, inertia: "off" });
+    expect(d.mirror.scroll).toEqual({
+      style: "smooth",
+      speed: "auto",
+      touchpadSpeed: 1,
+      smooth: true,
+      inertia: "off",
+    });
+    expect(d.flex.scroll).toEqual({
+      style: "smooth",
+      speed: "auto",
+      touchpadSpeed: 1,
+      smooth: true,
+      inertia: "off",
+    });
+    expect(d.hifi.scroll).toEqual({
+      style: "smooth",
+      speed: "auto",
+      touchpadSpeed: 1,
+      smooth: false,
+      inertia: "off",
+    });
+    expect(DEFAULT_SCROLL.camera).toEqual({
+      style: "smooth",
+      speed: "auto",
+      touchpadSpeed: 1,
+      smooth: false,
+      inertia: "off",
+    });
   });
 
-  it("fills missing scroll settings and missing smooth field on older modeDefaults without version bump", () => {
+  it("fills missing scroll settings and missing smooth/touchpadSpeed fields on older modeDefaults without version bump", () => {
     const old = {
       version: 2,
       mirror: { maxFps: 30 },
@@ -362,31 +386,67 @@ describe("scroll settings (SPEC-30)", () => {
     expect(n.version).toBe(2);
     expect(n.mirror.maxFps).toBe(30);
     expect(n.mirror.scroll).toEqual(DEFAULT_SCROLL.mirror);
-    expect(n.flex.scroll).toEqual({ style: "smooth", speed: "auto", smooth: true, inertia: "off" });
-    expect(n.hifi.scroll).toEqual({ style: "smooth", speed: 2, smooth: false, inertia: "off" });
-  });
-
-  it("clamps manual speed and normalizes invalid scroll values", () => {
-    const n = normalizeModeDefaults({
-      mirror: { scroll: { style: "bogus", speed: 99, smooth: "nope", inertia: "mega" } },
-      flex: { scroll: { style: "paged", speed: 0.25 } },
+    expect(n.flex.scroll).toEqual({
+      style: "smooth",
+      speed: "auto",
+      touchpadSpeed: 1,
+      smooth: true,
+      inertia: "off",
     });
-    expect(n.mirror.scroll).toEqual({ style: "smooth", speed: 5, smooth: true, inertia: "off" });
-    expect(n.flex.scroll).toEqual({ style: "paged", speed: 1, smooth: true, inertia: "off" });
+    expect(n.hifi.scroll).toEqual({
+      style: "smooth",
+      speed: 2,
+      touchpadSpeed: 1,
+      smooth: false,
+      inertia: "off",
+    });
   });
 
-  it("toScrollConfig maps auto and manual speeds for IPC", () => {
+  it("clamps manual speed and touchpadSpeed and normalizes invalid scroll values", () => {
+    const n = normalizeModeDefaults({
+      mirror: {
+        scroll: { style: "bogus", speed: 99, touchpadSpeed: 9, smooth: "nope", inertia: "mega" },
+      },
+      flex: { scroll: { style: "paged", speed: 0.25, touchpadSpeed: 0.1 } },
+    });
+    expect(n.mirror.scroll).toEqual({
+      style: "smooth",
+      speed: 5,
+      touchpadSpeed: 3,
+      smooth: true,
+      inertia: "off",
+    });
+    expect(n.flex.scroll).toEqual({
+      style: "paged",
+      speed: 1,
+      touchpadSpeed: 0.5,
+      smooth: true,
+      inertia: "off",
+    });
+  });
+
+  it("toScrollConfig maps auto, manual, and touchpadSpeed for IPC", () => {
     expect(toScrollConfig(DEFAULT_SCROLL.mirror)).toEqual({
       style: "smooth",
       speedMode: "auto",
       manual: 1,
+      touchpadSpeed: 1,
       smooth: true,
       inertia: "off",
     });
-    expect(toScrollConfig({ style: "paged", speed: 2.5, smooth: false, inertia: "off" })).toEqual({
+    expect(
+      toScrollConfig({
+        style: "paged",
+        speed: 2.5,
+        touchpadSpeed: 1.75,
+        smooth: false,
+        inertia: "off",
+      }),
+    ).toEqual({
       style: "paged",
       speedMode: "manual",
       manual: 2.5,
+      touchpadSpeed: 1.75,
       smooth: false,
       inertia: "off",
     });

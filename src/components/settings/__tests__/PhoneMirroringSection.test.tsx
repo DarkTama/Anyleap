@@ -175,7 +175,7 @@ describe("PhoneMirroringSection", () => {
     expect(el.textContent).toContain("Custom");
   });
 
-  it("renders Scrolling group with style, speed, and Smooth scrolling switch, disables controls under Paged, and hides Phase 3", async () => {
+  it("renders Scrolling group with style, speed, Touchpad speed, and Smooth scrolling switch, disables controls under Paged, and hides Phase 3", async () => {
     useAppStore.setState({ sessions: [], sessionModes: {} });
     await mount();
     expect(el.textContent).toContain("Scrolling");
@@ -184,6 +184,10 @@ describe("PhoneMirroringSection", () => {
     expect(el.textContent).toContain("Paged (short videos)");
     expect(el.textContent).toContain("Scroll speed");
     expect(el.textContent).toContain("Matches the phone's normal feel.");
+    expect(el.textContent).toContain("Touchpad speed");
+    expect(el.textContent).toContain(
+      "Touchpads already scroll precisely, so this has its own speed.",
+    );
     expect(el.textContent).toContain("Smooth scrolling");
     expect(el.textContent).toContain(
       "Glides between wheel notches. Adds a little delay, so turn it off for games.",
@@ -205,6 +209,26 @@ describe("PhoneMirroringSection", () => {
     expect(speedSelect.value).toBe("auto");
     expect(speedSelect.disabled).toBe(false);
 
+    const touchpadLabel = Array.from(el.querySelectorAll("label")).find(
+      (l) => l.textContent === "Touchpad speed",
+    )!;
+    const touchpadSelect = el.querySelector<HTMLSelectElement>(`#${touchpadLabel.htmlFor}`)!;
+    expect(touchpadSelect.value).toBe("1");
+    expect(touchpadSelect.disabled).toBe(false);
+    expect(Array.from(touchpadSelect.options).map((o) => o.value)).toEqual([
+      "0.5",
+      "0.75",
+      "1",
+      "1.25",
+      "1.5",
+      "1.75",
+      "2",
+      "2.25",
+      "2.5",
+      "2.75",
+      "3",
+    ]);
+
     const pagedBtn = Array.from(el.querySelectorAll<HTMLElement>('[role="radio"]')).find(
       (r) => r.textContent === "Paged (short videos)",
     )!;
@@ -212,11 +236,12 @@ describe("PhoneMirroringSection", () => {
     expect(useAppStore.getState().modeDefaults.mirror.scroll.style).toBe("paged");
     expect(useAppStore.getState().modeDefaults.flex.scroll.style).toBe("smooth");
     expect(speedSelect.disabled).toBe(true);
+    expect(touchpadSelect.disabled).toBe(true);
     expect(sw("Smooth scrolling").hasAttribute("disabled")).toBe(true);
     expect(el.textContent).toContain("Not used in Paged style.");
   });
 
-  it("toggling Smooth scrolling writes only the selected mode and updates running sessions live", async () => {
+  it("toggling Smooth scrolling and Touchpad speed writes only the selected mode and updates running sessions live", async () => {
     useAppStore.setState({
       sessions: [{ id: "s1", serial: "DEV1", pid: 1, started_at: 1, mode: "display" }],
       sessionModes: { s1: "mirror" },
@@ -230,6 +255,27 @@ describe("PhoneMirroringSection", () => {
       style: "smooth",
       speedMode: "auto",
       manual: 1,
+      touchpadSpeed: 1,
+      smooth: false,
+      inertia: "off",
+    });
+
+    const touchpadLabel = Array.from(el.querySelectorAll("label")).find(
+      (l) => l.textContent === "Touchpad speed",
+    )!;
+    const touchpadSelect = el.querySelector<HTMLSelectElement>(`#${touchpadLabel.htmlFor}`)!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+      setter.call(touchpadSelect, "1.75");
+      touchpadSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(useAppStore.getState().modeDefaults.mirror.scroll.touchpadSpeed).toBe(1.75);
+    expect(useAppStore.getState().modeDefaults.flex.scroll.touchpadSpeed).toBe(1);
+    expect(setScrollFeel).toHaveBeenLastCalledWith("DEV1", {
+      style: "smooth",
+      speedMode: "auto",
+      manual: 1,
+      touchpadSpeed: 1.75,
       smooth: false,
       inertia: "off",
     });
