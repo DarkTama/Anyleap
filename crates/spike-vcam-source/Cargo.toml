@@ -1,0 +1,37 @@
+[workspace]
+
+[package]
+name = "spike-vcam-source"
+version = "0.1.0"
+edition = "2021"
+description = "SPEC-32 Phase 0 Task 0.2 spike: Media Foundation virtual camera COM source + cross-session IPC host"
+
+[lib]
+name = "anyleap_vcam_spike"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vcam-host"
+path = "src/bin/vcam_host.rs"
+
+[dependencies]
+windows-core = "0.61"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Devices_Properties",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_MediaFoundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+] }
