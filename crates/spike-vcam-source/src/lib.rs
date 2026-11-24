@@ -8,26 +8,27 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use windows::core::{implement, ComObjectInterface, IUnknown, Interface, Result, GUID, HRESULT};
-use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, E_NOINTERFACE, E_POINTER, S_FALSE, S_OK,
+use windows::core::{
+    implement, ComObjectInterface, IUnknown, Interface, Result, BOOL, GUID, HRESULT, PCWSTR, PWSTR,
 };
+use windows::Win32::Foundation::{CLASS_E_CLASSNOTAVAILABLE, E_POINTER, S_FALSE, S_OK};
 use windows::Win32::Media::KernelStreaming::{
     IKsControl, IKsControl_Impl, KSIDENTIFIER, PINNAME_VIDEO_CAPTURE,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFGetService, IMFGetService_Impl, IMFMediaEvent, IMFMediaEventGenerator,
-    IMFMediaEventGenerator_Impl, IMFMediaEventQueue, IMFMediaSource, IMFMediaSourceEx,
-    IMFMediaSourceEx_Impl, IMFMediaSource_Impl, IMFMediaStream, IMFMediaStream2,
-    IMFMediaStream2_Impl, IMFMediaStream_Impl, IMFPresentationDescriptor, IMFStreamDescriptor,
-    MEMediaSample, MENewStream, MESourceStarted, MESourceStopped, MEStreamStarted, MEStreamStopped,
-    MFCreateAttributes, MFCreateEventQueue, MFCreateMediaType, MFCreateMemoryBuffer,
-    MFCreatePresentationDescriptor, MFCreateSample, MFCreateStreamDescriptor, MFGetSystemTime,
-    MFMediaType_Video, MFSampleExtension_Token, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
-    MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MFMEDIASOURCE_IS_LIVE,
-    MF_DEVICESTREAM_ATTRIBUTE_FRAMESOURCE_TYPES, MF_DEVICESTREAM_FRAMESERVER_SHARED,
-    MF_DEVICESTREAM_STREAM_CATEGORY, MF_DEVICESTREAM_STREAM_ID, MF_E_INVALIDREQUEST,
-    MF_E_INVALIDSTREAMNUMBER, MF_E_SHUTDOWN, MF_E_UNSUPPORTED_SERVICE,
+    IMFActivate, IMFActivate_Impl, IMFAttributes, IMFAttributes_Impl, IMFGetService,
+    IMFGetService_Impl, IMFMediaEvent, IMFMediaEventGenerator, IMFMediaEventGenerator_Impl,
+    IMFMediaEventQueue, IMFMediaSource, IMFMediaSourceEx, IMFMediaSourceEx_Impl,
+    IMFMediaSource_Impl, IMFMediaStream, IMFMediaStream2, IMFMediaStream2_Impl,
+    IMFMediaStream_Impl, IMFPresentationDescriptor, IMFStreamDescriptor, MEMediaSample,
+    MENewStream, MESourceStarted, MESourceStopped, MEStreamStarted, MEStreamStopped,
+    MEUpdatedStream, MFCreateAttributes, MFCreateEventQueue, MFCreateMediaType,
+    MFCreateMemoryBuffer, MFCreatePresentationDescriptor, MFCreateSample, MFCreateStreamDescriptor,
+    MFGetSystemTime, MFMediaType_Video, MFSampleExtension_Token, MFVideoFormat_NV12,
+    MFVideoInterlace_Progressive, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MFMEDIASOURCE_IS_LIVE,
+    MF_ATTRIBUTES_MATCH_TYPE, MF_ATTRIBUTE_TYPE, MF_DEVICESTREAM_ATTRIBUTE_FRAMESOURCE_TYPES,
+    MF_DEVICESTREAM_FRAMESERVER_SHARED, MF_DEVICESTREAM_STREAM_CATEGORY, MF_DEVICESTREAM_STREAM_ID,
+    MF_E_INVALIDREQUEST, MF_E_INVALIDSTREAMNUMBER, MF_E_SHUTDOWN, MF_E_UNSUPPORTED_SERVICE,
     MF_E_UNSUPPORTED_STATE_TRANSITION, MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_DEFAULT_STRIDE,
     MF_MT_FIXED_SIZE_SAMPLES, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
     MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SAMPLE_SIZE, MF_MT_SUBTYPE, MF_STREAM_STATE,
@@ -428,7 +429,7 @@ struct SpikeMediaSource {
 }
 
 impl SpikeMediaSource {
-    fn create() -> Result<windows::core::ComObject<Self>> {
+    fn create(activate_attrs: Option<&IMFAttributes>) -> Result<windows::core::ComObject<Self>> {
         unsafe {
             let events = MFCreateEventQueue()?;
             let mt = create_nv12_media_type()?;
@@ -450,8 +451,11 @@ impl SpikeMediaSource {
             stream_attrs.SetUINT32(&MF_DEVICESTREAM_ATTRIBUTE_FRAMESOURCE_TYPES, 1)?;
 
             let mut source_attrs: Option<IMFAttributes> = None;
-            MFCreateAttributes(&mut source_attrs, 2)?;
+            MFCreateAttributes(&mut source_attrs, 4)?;
             let source_attrs = source_attrs.unwrap();
+            if let Some(act) = activate_attrs {
+                let _ = act.CopyAllItems(&source_attrs);
+            }
 
             let pd = MFCreatePresentationDescriptor(Some(&[Some(sd.clone())]))?;
             pd.SelectStream(0)?;
@@ -571,16 +575,15 @@ impl IMFMediaSource_Impl for SpikeMediaSource_Impl {
 
         if selected.as_bool() {
             let first = !self.started_once.swap(true, Ordering::SeqCst);
-            if first {
-                let stream_unk: IUnknown = self.stream.to_interface::<IMFMediaStream>().cast()?;
-                unsafe {
-                    self.events.QueueEventParamUnk(
-                        MENewStream.0 as u32,
-                        &GUID::zeroed(),
-                        S_OK,
-                        &stream_unk,
-                    )?;
-                }
+            let stream_unk: IUnknown = self.stream.to_interface::<IMFMediaStream>().cast()?;
+            let met = if first {
+                MENewStream.0 as u32
+            } else {
+                MEUpdatedStream.0 as u32
+            };
+            unsafe {
+                self.events
+                    .QueueEventParamUnk(met, &GUID::zeroed(), S_OK, &stream_unk)?;
             }
             self.stream.start_stream(!first)?;
         }
@@ -632,6 +635,7 @@ impl IMFMediaSource_Impl for SpikeMediaSource_Impl {
 
 impl IMFMediaSourceEx_Impl for SpikeMediaSource_Impl {
     fn GetSourceAttributes(&self) -> Result<IMFAttributes> {
+        append_dll_log("IMFMediaSourceEx::GetSourceAttributes()");
         if self.shutdown.load(Ordering::Acquire) {
             return Err(MF_E_SHUTDOWN.into());
         }
@@ -639,6 +643,9 @@ impl IMFMediaSourceEx_Impl for SpikeMediaSource_Impl {
     }
 
     fn GetStreamAttributes(&self, dwstreamidentifier: u32) -> Result<IMFAttributes> {
+        append_dll_log(&format!(
+            "IMFMediaSourceEx::GetStreamAttributes(stream_id={dwstreamidentifier})"
+        ));
         if self.shutdown.load(Ordering::Acquire) {
             return Err(MF_E_SHUTDOWN.into());
         }
@@ -649,6 +656,7 @@ impl IMFMediaSourceEx_Impl for SpikeMediaSource_Impl {
     }
 
     fn SetD3DManager(&self, _pmanager: windows::core::Ref<'_, IUnknown>) -> Result<()> {
+        append_dll_log("IMFMediaSourceEx::SetD3DManager()");
         Ok(())
     }
 }
@@ -760,6 +768,294 @@ impl Drop for SpikeClassFactory {
     }
 }
 
+fn fmt_guid(g: &GUID) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        g.data1,
+        g.data2,
+        g.data3,
+        g.data4[0],
+        g.data4[1],
+        g.data4[2],
+        g.data4[3],
+        g.data4[4],
+        g.data4[5],
+        g.data4[6],
+        g.data4[7],
+    )
+}
+
+#[implement(IMFActivate)]
+struct SpikeActivate {
+    attrs: IMFAttributes,
+    source: Mutex<Option<windows::core::ComObject<SpikeMediaSource>>>,
+}
+
+impl SpikeActivate {
+    fn create() -> Result<Self> {
+        let mut attrs: Option<IMFAttributes> = None;
+        unsafe { MFCreateAttributes(&mut attrs, 4)? };
+        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_dll_log("SpikeActivate created");
+        Ok(Self {
+            attrs: attrs.unwrap(),
+            source: Mutex::new(None),
+        })
+    }
+}
+
+impl Drop for SpikeActivate {
+    fn drop(&mut self) {
+        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+        append_dll_log("SpikeActivate dropped");
+    }
+}
+
+impl IMFActivate_Impl for SpikeActivate_Impl {
+    fn ActivateObject(&self, riid: *const GUID, ppv: *mut *mut c_void) -> Result<()> {
+        if riid.is_null() || ppv.is_null() {
+            return Err(E_POINTER.into());
+        }
+        unsafe {
+            *ppv = std::ptr::null_mut();
+        }
+        let iid = unsafe { *riid };
+        let mut guard = self.source.lock().unwrap();
+        let need_new = match guard.as_ref() {
+            Some(src) => src.shutdown.load(Ordering::Acquire),
+            None => true,
+        };
+        if need_new {
+            *guard = Some(SpikeMediaSource::create(Some(&self.attrs))?);
+        }
+        let src = guard.as_ref().unwrap();
+        let unk: IUnknown = src.to_interface::<IMFMediaSourceEx>().cast()?;
+        let hr = unsafe { unk.query(riid, ppv) };
+        append_dll_log(&format!(
+            "SpikeActivate::ActivateObject(riid={}) -> {hr:?}",
+            fmt_guid(&iid)
+        ));
+        if hr.is_err() {
+            return Err(hr.into());
+        }
+        Ok(())
+    }
+
+    fn ShutdownObject(&self) -> Result<()> {
+        append_dll_log("SpikeActivate::ShutdownObject()");
+        if let Some(src) = self.source.lock().unwrap().take() {
+            let media_src: IMFMediaSource = src.to_interface();
+            unsafe {
+                let _ = media_src.Shutdown();
+            }
+        }
+        Ok(())
+    }
+
+    fn DetachObject(&self) -> Result<()> {
+        append_dll_log("SpikeActivate::DetachObject()");
+        *self.source.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
+impl IMFAttributes_Impl for SpikeActivate_Impl {
+    fn GetItem(&self, guidkey: *const GUID, pvalue: *mut PROPVARIANT) -> Result<()> {
+        unsafe {
+            let opt = if pvalue.is_null() { None } else { Some(pvalue) };
+            self.attrs.GetItem(guidkey, opt)
+        }
+    }
+
+    fn GetItemType(&self, guidkey: *const GUID) -> Result<MF_ATTRIBUTE_TYPE> {
+        unsafe { self.attrs.GetItemType(guidkey) }
+    }
+
+    fn CompareItem(&self, guidkey: *const GUID, value: *const PROPVARIANT) -> Result<BOOL> {
+        unsafe { self.attrs.CompareItem(guidkey, value) }
+    }
+
+    fn Compare(
+        &self,
+        ptheirs: windows::core::Ref<'_, IMFAttributes>,
+        matchtype: MF_ATTRIBUTES_MATCH_TYPE,
+    ) -> Result<BOOL> {
+        unsafe { self.attrs.Compare(ptheirs.as_ref(), matchtype) }
+    }
+
+    fn GetUINT32(&self, guidkey: *const GUID) -> Result<u32> {
+        unsafe { self.attrs.GetUINT32(guidkey) }
+    }
+
+    fn GetUINT64(&self, guidkey: *const GUID) -> Result<u64> {
+        unsafe { self.attrs.GetUINT64(guidkey) }
+    }
+
+    fn GetDouble(&self, guidkey: *const GUID) -> Result<f64> {
+        unsafe { self.attrs.GetDouble(guidkey) }
+    }
+
+    fn GetGUID(&self, guidkey: *const GUID) -> Result<GUID> {
+        unsafe { self.attrs.GetGUID(guidkey) }
+    }
+
+    fn GetStringLength(&self, guidkey: *const GUID) -> Result<u32> {
+        unsafe { self.attrs.GetStringLength(guidkey) }
+    }
+
+    fn GetString(
+        &self,
+        guidkey: *const GUID,
+        pwszvalue: PWSTR,
+        cchbufsize: u32,
+        pcchlength: *mut u32,
+    ) -> Result<()> {
+        unsafe {
+            (Interface::vtable(&self.attrs).GetString)(
+                self.attrs.as_raw(),
+                guidkey,
+                pwszvalue,
+                cchbufsize,
+                pcchlength,
+            )
+            .ok()
+        }
+    }
+
+    fn GetAllocatedString(
+        &self,
+        guidkey: *const GUID,
+        ppwszvalue: *mut PWSTR,
+        pcchlength: *mut u32,
+    ) -> Result<()> {
+        unsafe {
+            self.attrs
+                .GetAllocatedString(guidkey, ppwszvalue, pcchlength)
+        }
+    }
+
+    fn GetBlobSize(&self, guidkey: *const GUID) -> Result<u32> {
+        unsafe { self.attrs.GetBlobSize(guidkey) }
+    }
+
+    fn GetBlob(
+        &self,
+        guidkey: *const GUID,
+        pbuf: *mut u8,
+        cbbufsize: u32,
+        pcbblobsize: *mut u32,
+    ) -> Result<()> {
+        unsafe {
+            (Interface::vtable(&self.attrs).GetBlob)(
+                self.attrs.as_raw(),
+                guidkey,
+                pbuf,
+                cbbufsize,
+                pcbblobsize,
+            )
+            .ok()
+        }
+    }
+
+    fn GetAllocatedBlob(
+        &self,
+        guidkey: *const GUID,
+        ppbuf: *mut *mut u8,
+        pcbsize: *mut u32,
+    ) -> Result<()> {
+        unsafe { self.attrs.GetAllocatedBlob(guidkey, ppbuf, pcbsize) }
+    }
+
+    fn GetUnknown(
+        &self,
+        guidkey: *const GUID,
+        riid: *const GUID,
+        ppv: *mut *mut c_void,
+    ) -> Result<()> {
+        unsafe {
+            (Interface::vtable(&self.attrs).GetUnknown)(self.attrs.as_raw(), guidkey, riid, ppv)
+                .ok()
+        }
+    }
+
+    fn SetItem(&self, guidkey: *const GUID, value: *const PROPVARIANT) -> Result<()> {
+        unsafe { self.attrs.SetItem(guidkey, value) }
+    }
+
+    fn DeleteItem(&self, guidkey: *const GUID) -> Result<()> {
+        unsafe { self.attrs.DeleteItem(guidkey) }
+    }
+
+    fn DeleteAllItems(&self) -> Result<()> {
+        unsafe { self.attrs.DeleteAllItems() }
+    }
+
+    fn SetUINT32(&self, guidkey: *const GUID, unvalue: u32) -> Result<()> {
+        unsafe { self.attrs.SetUINT32(guidkey, unvalue) }
+    }
+
+    fn SetUINT64(&self, guidkey: *const GUID, unvalue: u64) -> Result<()> {
+        unsafe { self.attrs.SetUINT64(guidkey, unvalue) }
+    }
+
+    fn SetDouble(&self, guidkey: *const GUID, fvalue: f64) -> Result<()> {
+        unsafe { self.attrs.SetDouble(guidkey, fvalue) }
+    }
+
+    fn SetGUID(&self, guidkey: *const GUID, guidvalue: *const GUID) -> Result<()> {
+        unsafe { self.attrs.SetGUID(guidkey, guidvalue) }
+    }
+
+    fn SetString(&self, guidkey: *const GUID, wszvalue: &PCWSTR) -> Result<()> {
+        unsafe {
+            (Interface::vtable(&self.attrs).SetString)(self.attrs.as_raw(), guidkey, *wszvalue).ok()
+        }
+    }
+
+    fn SetBlob(&self, guidkey: *const GUID, pbuf: *const u8, cbbufsize: u32) -> Result<()> {
+        unsafe {
+            (Interface::vtable(&self.attrs).SetBlob)(self.attrs.as_raw(), guidkey, pbuf, cbbufsize)
+                .ok()
+        }
+    }
+
+    fn SetUnknown(
+        &self,
+        guidkey: *const GUID,
+        punknown: windows::core::Ref<'_, IUnknown>,
+    ) -> Result<()> {
+        unsafe { self.attrs.SetUnknown(guidkey, punknown.as_ref()) }
+    }
+
+    fn LockStore(&self) -> Result<()> {
+        unsafe { self.attrs.LockStore() }
+    }
+
+    fn UnlockStore(&self) -> Result<()> {
+        unsafe { self.attrs.UnlockStore() }
+    }
+
+    fn GetCount(&self) -> Result<u32> {
+        unsafe { self.attrs.GetCount() }
+    }
+
+    fn GetItemByIndex(
+        &self,
+        unindex: u32,
+        pguidkey: *mut GUID,
+        pvalue: *mut PROPVARIANT,
+    ) -> Result<()> {
+        unsafe {
+            let opt = if pvalue.is_null() { None } else { Some(pvalue) };
+            self.attrs.GetItemByIndex(unindex, pguidkey, opt)
+        }
+    }
+
+    fn CopyAllItems(&self, pdest: windows::core::Ref<'_, IMFAttributes>) -> Result<()> {
+        unsafe { self.attrs.CopyAllItems(pdest.as_ref()) }
+    }
+}
+
 impl IClassFactory_Impl for SpikeClassFactory_Impl {
     fn CreateInstance(
         &self,
@@ -776,9 +1072,14 @@ impl IClassFactory_Impl for SpikeClassFactory_Impl {
         if !punkouter.is_null() {
             return Err(windows::Win32::Foundation::CLASS_E_NOAGGREGATION.into());
         }
-        let source = SpikeMediaSource::create()?;
-        let unk: IUnknown = source.to_interface::<IMFMediaSourceEx>().cast()?;
+        let iid = unsafe { *riid };
+        let activate = windows::core::ComObject::new(SpikeActivate::create()?);
+        let unk: IUnknown = activate.to_interface();
         let hr = unsafe { unk.query(riid, ppvobject) };
+        append_dll_log(&format!(
+            "IClassFactory::CreateInstance(riid={}) -> {hr:?}",
+            fmt_guid(&iid)
+        ));
         if hr.is_err() {
             return Err(hr.into());
         }
@@ -812,13 +1113,14 @@ pub unsafe extern "system" fn DllGetClassObject(
     if *rclsid != SPIKE_CLSID {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
-    append_dll_log("DllGetClassObject called for SPIKE_CLSID");
+    let iid = *riid;
     let factory = windows::core::ComObject::new(SpikeClassFactory::new());
     let unk: IUnknown = factory.to_interface();
     let hr = unk.query(riid, ppv);
-    if hr.is_err() && hr != E_NOINTERFACE {
-        append_dll_log(&format!("DllGetClassObject QueryInterface failed: {hr:?}"));
-    }
+    append_dll_log(&format!(
+        "DllGetClassObject(SPIKE_CLSID, riid={}) -> {hr:?}",
+        fmt_guid(&iid)
+    ));
     hr
 }
 

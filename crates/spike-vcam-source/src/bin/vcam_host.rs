@@ -170,9 +170,12 @@ fn run_local_com_probe(mut shm: ShmWriter) {
             .ok()
             .expect("DllGetClassObject failed");
         let factory: IClassFactory = Interface::from_raw(factory_raw);
-        let source: IMFMediaSource = factory
+        let activate: IMFActivate = factory
             .CreateInstance(None)
-            .expect("IClassFactory::CreateInstance(IMFMediaSource) failed");
+            .expect("IClassFactory::CreateInstance(IMFActivate) failed");
+        let source: IMFMediaSource = activate
+            .ActivateObject()
+            .expect("IMFActivate::ActivateObject(IMFMediaSource) failed");
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
@@ -279,6 +282,7 @@ fn main() {
             eprintln!("IMFVirtualCamera::Start failed: {e:?}");
             let _ = vcam.Remove();
             let _ = vcam.Shutdown();
+            drop(vcam);
             let _ = MFShutdown();
             CoUninitialize();
             std::process::exit(1);
@@ -326,7 +330,7 @@ fn main() {
                 let mut found_spike = None;
                 for (i, (name, link, act)) in cams.iter().enumerate() {
                     println!("  [{i}] \"{name}\" | {link}");
-                    if name == FRIENDLY_NAME {
+                    if name == FRIENDLY_NAME || name.starts_with(FRIENDLY_NAME) {
                         found_spike = Some(act.clone());
                     }
                 }
@@ -341,13 +345,25 @@ fn main() {
             }
         }
 
+        let duration_secs = std::env::args()
+            .position(|a| a == "--duration")
+            .and_then(|idx| std::env::args().nth(idx + 1))
+            .and_then(|s| s.parse::<u64>().ok());
+
         println!();
         println!(
             "Virtual camera is LIVE. Open the Windows Camera app and select \"{FRIENDLY_NAME}\"."
         );
-        println!("Press ENTER to stop and remove the virtual camera...");
-        let mut line = String::new();
-        let _ = io::stdin().lock().read_line(&mut line);
+        if let Some(secs) = duration_secs {
+            println!(
+                "Running for {secs} seconds before stopping and removing the virtual camera..."
+            );
+            std::thread::sleep(Duration::from_secs(secs));
+        } else {
+            println!("Press ENTER to stop and remove the virtual camera...");
+            let mut line = String::new();
+            let _ = io::stdin().lock().read_line(&mut line);
+        }
 
         stop_flag.store(true, Ordering::Release);
         let _ = writer_handle.join();
@@ -355,6 +371,7 @@ fn main() {
         let _ = vcam.Stop();
         let _ = vcam.Remove();
         let _ = vcam.Shutdown();
+        drop(vcam);
         let _ = MFShutdown();
         CoUninitialize();
         println!("Virtual camera stopped and removed.");
