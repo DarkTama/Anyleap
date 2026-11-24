@@ -56,7 +56,7 @@ A touch-grid interface (phone, tablet, or secondary window) presenting interacti
 The capture, encoding, and transmission pipeline:
 - **Android Display**: `scrcpy` video stream over local ADB forward socket.
 - **PC Display**: DXGI Desktop Duplication API + Windows Media Foundation hardware encoder.
-- **Camera Studio**: Camera sensor capture routed to native Windows virtual camera or OBS virtual camera interface.
+- **Camera Studio**: Camera sensor capture (`scrcpy --video-source=camera`) routed to the native Windows 11 Media Foundation virtual camera (`SPEC-32`, `ADR-0006`) or an external virtual-camera app fallback on Windows 10.
 
 ### Studio Deck Diagnostics & Navigation
 - **Device Hero Card**: Top-of-deck summary showing the selected device's identity, Android version, connection type (`usb`/`wifi`), battery telemetry, live state, and primary actions.
@@ -120,3 +120,12 @@ Unified destination settings stored under `transferFolders` in `settings.json` a
 - **Ask where to save each time (`askWhereToSave`)**: Default `false`. When enabled, user-initiated PC downloads in the UI prompt with a native dialog pre-seeded at the receive folder; background peer KVM receives never block on a dialog.
 - **Phone upload folder (`phoneUploadDir`)**: Android destination (default `/sdcard/Download`) for mirror drag-and-drop and pasted clipboard images.
 - **Show in folder**: Completed PC-side transfers surface `revealItemInDir(savedPath)` across Phone Hub, screenshot toasts, the KVM Transfer Bar, and the Computers activity feed.
+
+### Native Virtual Camera (`SPEC-32`, `ADR-0006`)
+Windows 11 software webcam subsystem exposing `"AnyLeap Camera"` directly to video-call and browser apps via Media Foundation (`MFCreateVirtualCamera`, build 22000+), with no kernel driver and no DirectShow filter:
+- **Media Source DLL (`anyleap_vcam.dll`, `crates/anyleap-vcam`)**: Standalone `cdylib` COM server implementing `IMFMediaSourceEx` and `IMFMediaStream2` (`MFVideoFormat_NV12`), registered under `HKLM\SOFTWARE\Classes\CLSID\{...}\InprocServer32` and loaded in-process by the Windows Camera **Frame Server** (`FrameServer`, `svchost.exe` running as `NT AUTHORITY\LOCAL SERVICE` in Session 0).
+- **Direct Stream Client (`scrcpy_stream.rs`)**: Rust socket client connecting directly to bundled `scrcpy-server` over `adb forward` (`--video-source=camera`) and feeding raw H.264 packets into a Windows Media Foundation hardware decoder MFT (`CLSID_CMSH264DecoderMFT`) to produce `NV12` frames without spawning `scrcpy.exe` or muxing containers.
+- **Shared Frame Buffer (`crates/anyleap-vcam-ipc`)**: Cross-session triple-buffered `NV12` ring buffer + synchronization channel with explicit ACLs (`CurrentUser` write, `LOCAL SERVICE` read-only) bridging `anyleap.exe` (Session 1+) and `anyleap_vcam.dll` (Session 0).
+- **Camera In-Use Indicator**: Live consumer state driven by `consumer_count` in the shared buffer (incremented on `IMFMediaSource::Start`, decremented on `Stop`/`Shutdown`).
+- **Disconnect Placeholder Frame**: Branded `NV12` status card rendered immediately when the phone disconnects or times out so downstream apps never freeze on the last video frame or output black frames.
+- **Windows 10 Fallback**: On Windows 10 (build < 22000) or when virtual-camera COM registration is unavailable, Camera Studio falls back to the existing `scrcpy` window plus external virtual-camera app guide.
