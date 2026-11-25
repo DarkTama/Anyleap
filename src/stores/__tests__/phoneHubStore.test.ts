@@ -172,4 +172,29 @@ describe("phoneHubStore", () => {
     await usePhoneHubStore.getState().loadPersistedSettings();
     expect(usePhoneHubStore.getState().blurThumbnails).toBe(true);
   });
+
+  it("persists sensitivePackages and manages local hiddenNotificationIds", async () => {
+    const store = usePhoneHubStore.getState();
+    store.togglePackageSensitive("com.example.bank");
+    expect(usePhoneHubStore.getState().sensitivePackages).toEqual(["com.example.bank"]);
+    await Promise.resolve();
+    expect(mockStore.set).toHaveBeenCalledWith("phoneHubSensitivePackages", ["com.example.bank"]);
+
+    store.togglePackageSensitive("com.example.bank");
+    expect(usePhoneHubStore.getState().sensitivePackages).toEqual([]);
+
+    store.setPackageSensitive("com.example.wallet", true);
+    store.reset();
+    expect(usePhoneHubStore.getState().sensitivePackages).toEqual([]);
+    await usePhoneHubStore.getState().loadPersistedSettings();
+    expect(usePhoneHubStore.getState().sensitivePackages).toEqual(["com.example.wallet"]);
+
+    usePhoneHubStore.getState().hideNotificationLocal("com.example.wallet::k1::100");
+    usePhoneHubStore.getState().hideNotificationLocal("com.example.wallet::k1::100");
+    expect(usePhoneHubStore.getState().hiddenNotificationIds).toEqual([
+      "com.example.wallet::k1::100",
+    ]);
+    usePhoneHubStore.getState().unhideAllLocal();
+    expect(usePhoneHubStore.getState().hiddenNotificationIds).toEqual([]);
+  });
 });

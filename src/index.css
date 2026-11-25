@@ -169,6 +169,23 @@ body {
   }
 }
 
+/* Notification expand/collapse reveal (SPEC-33 Phase 1): transform + opacity only */
+.notif-expand-panel {
+  transform-origin: top center;
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+  transition:
+    transform 200ms var(--ease-out),
+    opacity 200ms var(--ease-out);
+}
+
+@starting-style {
+  .notif-expand-panel {
+    opacity: 0;
+    transform: translateY(-4px) scaleY(0.96);
+  }
+}
+
 /* Transient HUD pill fade */
 .hud-pill {
   opacity: 1;
@@ -259,6 +276,7 @@ body {
   .modal-panel,
   .drawer-panel,
   .popover-panel,
+  .notif-expand-panel,
   .hud-pill,
   .hud-notice,
   .canvas-snap-transition,
@@ -282,6 +300,7 @@ body {
   .modal-panel,
   .drawer-panel,
   .popover-panel,
+  .notif-expand-panel,
   .hud-notice {
     transform: none;
   }
@@ -290,6 +309,7 @@ body {
     .modal-panel,
     .drawer-panel,
     .popover-panel,
+    .notif-expand-panel,
     .hud-notice {
       transform: none;
     }

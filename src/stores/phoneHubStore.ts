@@ -7,6 +7,7 @@ import type {
 } from "@/types/phone";
 
 const KEY_MUTED_PACKAGES = "phoneHubMutedPackages";
+const KEY_SENSITIVE_PACKAGES = "phoneHubSensitivePackages";
 const KEY_POLL_SECS = "phoneHubNotificationPollSecs";
 const KEY_GALLERY_DOWNLOAD_DIR = "phoneHubLastGalleryDownloadDir";
 const KEY_GALLERY_BLUR_THUMBS = "phoneHubBlurThumbnails";
@@ -36,6 +37,8 @@ export interface PhoneHubState {
   conversationsBySerial: Record<string, Conversation[]>;
   audioPlayingBySerial: Record<string, boolean>;
   mutedPackages: string[];
+  sensitivePackages: string[];
+  hiddenNotificationIds: string[];
   notificationPollSecs: number;
   lastGalleryDownloadDir: string | null;
   blurThumbnails: boolean;
@@ -52,6 +55,13 @@ export interface PhoneHubState {
   mutePackage: (pkg: string) => void;
   unmutePackage: (pkg: string) => void;
   isMuted: (pkg: string) => boolean;
+  setSensitivePackages: (packages: string[]) => void;
+  setPackageSensitive: (pkg: string, sensitive: boolean) => void;
+  togglePackageSensitive: (pkg: string) => void;
+  isSensitive: (pkg: string) => boolean;
+  hideNotificationLocal: (id: string) => void;
+  hideNotificationsLocal: (ids: string[]) => void;
+  unhideAllLocal: () => void;
   setNotificationPollSecs: (secs: number) => void;
   setLastGalleryDownloadDir: (dir: string | null) => void;
   setBlurThumbnails: (blur: boolean) => void;
@@ -66,6 +76,8 @@ const initialDataState = {
   conversationsBySerial: {} as Record<string, Conversation[]>,
   audioPlayingBySerial: {} as Record<string, boolean>,
   mutedPackages: [] as string[],
+  sensitivePackages: [] as string[],
+  hiddenNotificationIds: [] as string[],
   notificationPollSecs: DEFAULT_NOTIFICATION_POLL_SECS,
   lastGalleryDownloadDir: null as string | null,
   blurThumbnails: false,
@@ -162,6 +174,50 @@ export const usePhoneHubStore = create<PhoneHubState>((set, get) => ({
 
   isMuted: (pkg) => get().mutedPackages.includes(pkg),
 
+  setSensitivePackages: (packages) => {
+    const deduped = Array.from(new Set(packages.filter(Boolean)));
+    set({ sensitivePackages: deduped });
+    void persistValue(KEY_SENSITIVE_PACKAGES, deduped);
+  },
+
+  setPackageSensitive: (pkg, sensitive) => {
+    if (!pkg) return;
+    const current = get().sensitivePackages;
+    const exists = current.includes(pkg);
+    if (sensitive === exists) return;
+    const next = sensitive ? [...current, pkg] : current.filter((p) => p !== pkg);
+    set({ sensitivePackages: next });
+    void persistValue(KEY_SENSITIVE_PACKAGES, next);
+  },
+
+  togglePackageSensitive: (pkg) => {
+    if (!pkg) return;
+    const current = get().sensitivePackages;
+    const next = current.includes(pkg)
+      ? current.filter((p) => p !== pkg)
+      : [...current, pkg];
+    set({ sensitivePackages: next });
+    void persistValue(KEY_SENSITIVE_PACKAGES, next);
+  },
+
+  isSensitive: (pkg) => get().sensitivePackages.includes(pkg),
+
+  hideNotificationLocal: (id) => {
+    if (!id) return;
+    const current = get().hiddenNotificationIds;
+    if (current.includes(id)) return;
+    set({ hiddenNotificationIds: [...current, id] });
+  },
+
+  hideNotificationsLocal: (ids) => {
+    const filtered = ids.filter(Boolean);
+    if (filtered.length === 0) return;
+    const next = Array.from(new Set([...get().hiddenNotificationIds, ...filtered]));
+    set({ hiddenNotificationIds: next });
+  },
+
+  unhideAllLocal: () => set({ hiddenNotificationIds: [] }),
+
   setNotificationPollSecs: (secs) => {
     const clamped = clampPollSecs(secs);
     set({ notificationPollSecs: clamped });
@@ -182,11 +238,15 @@ export const usePhoneHubStore = create<PhoneHubState>((set, get) => ({
     try {
       const store = await getSharedStore();
       const muted = await store.get<string[]>(KEY_MUTED_PACKAGES);
+      const sensitive = await store.get<string[]>(KEY_SENSITIVE_PACKAGES);
       const pollSecs = await store.get<number>(KEY_POLL_SECS);
       const downloadDir = await store.get<string | null>(KEY_GALLERY_DOWNLOAD_DIR);
       const blur = await store.get<boolean>(KEY_GALLERY_BLUR_THUMBS);
       set({
         mutedPackages: Array.isArray(muted) ? Array.from(new Set(muted.filter(Boolean))) : [],
+        sensitivePackages: Array.isArray(sensitive)
+          ? Array.from(new Set(sensitive.filter(Boolean)))
+          : [],
         notificationPollSecs:
           typeof pollSecs === "number" ? clampPollSecs(pollSecs) : DEFAULT_NOTIFICATION_POLL_SECS,
         lastGalleryDownloadDir: typeof downloadDir === "string" && downloadDir ? downloadDir : null,

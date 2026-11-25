@@ -5,12 +5,12 @@
 **Goal:** Upgrade Phone Hub notifications with a tidy, privacy-aware UI, add an opt-in Windows DPAPI-encrypted local store with separate notification retention, Money-source configuration, and transaction retention (`1y` / `2y` / `Forever`), parse financial notifications strictly for user-marked Money sources with cross-account transfer matching, and deliver a `Phone → Money` dashboard with Spending vs Cash flow views, liability tracking, MoM/YoY comparisons, salted-hash correction rules, and CSV export.
 
 **Architecture:**
-- Phase 1 improves `NotificationsView.tsx` and adds a non-blocking lazy APK icon cache (`src-tauri/src/phone_hub/icons.rs`) with letter-avatar fallback, keeping the view strictly read-only.
+- Phase 1 improves `NotificationsView.tsx` and adds deterministic per-package colored letter avatars (`src/lib/notificationTidy.ts`), keeping the view strictly read-only. Real APK icon extraction (via `AndroidManifest.xml` + `resources.arsc` lookup) is deferred to a future task because production APKs obfuscate `res/` entry names, and adaptive/vector icons cannot be rendered without a companion app.
 - Phase 2 adds `src-tauri/src/phone_hub/vault.rs` (DPAPI `CryptProtectData` / `CryptUnprotectData` in `app_local_data_dir()`), deduplicating by `(hw_serial, key, posted_unix)`, keeping notification retention (`Don't keep` / `Keep history 7/30/90d` / `Transactions only`) independent of per-app `0..n` Money sources (`Bank` / `E-wallet` / `Paylater` / `Credit card` + rule template) and transaction retention (`1 year` / `2 years` / `Forever`), wired into **Settings → General** (`SPEC-28` single-home rule).
 - Phase 3 adds `src-tauri/src/phone_hub/money.rs` (JSON rule pack, locale number parser, `0..n` source-scoped per-notification classification, transient salted-hash `similarity_hash` and opaque `sub_account` keys, amount-less `bill_paid` `LiabilityEvent` extraction, two-pass deterministic 1:1 transfer & bill-paid matcher, `Possible transfer` & `"Bill paid (amount unknown)"` flagging, plus an `#[ignore]` local real-capture aggregate test harness) and `src/components/phone/MoneyView.tsx` (`Phone → Money` basic dashboard).
 - Phase 4 adds **Spending** *(default)* vs **Cash flow** views, **Paylater / Credit card** source + per-`sub_account` liabilities (`outstanding` + user nicknames + stated bill + **"Due next month"** vs monthly income), MoM/YoY per-category comparisons + **"Where did spending grow"**, manual corrections with `"Apply to similar in the future"` salted-hash rules plus `"Bill paid (amount unknown)"` linking, daily trends, category breakdowns, and formula-safe CSV export via SPEC-31 `transfer_paths`.
 
-**Tech Stack:** Tauri 2 (Rust, `windows` 0.61 `Win32_Security_Cryptography`, `regex`, `sha2` / `rand`, `zip` or minimal APK entry reader, `serde_json`), React 19 + TypeScript + Tailwind (SPEC-26 Ink & Gold tokens), Zustand, Vitest, Cargo test.
+**Tech Stack:** Tauri 2 (Rust, `windows` 0.61 `Win32_Security_Cryptography`, `regex`, `sha2` / `rand`, `serde_json`), React 19 + TypeScript + Tailwind (SPEC-26 Ink & Gold tokens), Zustand, Vitest, Cargo test.
 
 **Specs & ADR:** `docs/specs/SPEC-33-notifications-and-money.md`, `docs/adr/0007-dpapi-encrypted-notification-store.md`.
 
@@ -24,7 +24,7 @@
 
 ---
 
-## Phase 1: Tidy Notification View & Lazy App Icons
+## Phase 1: Tidy Notification View & Deterministic Letter Avatars
 
 ### Task 1.1: Notification preview normalization, stacking, and date bucketing helpers (TDD)
 **Files:** create `src/lib/notificationTidy.ts`, `src/lib/notificationTidy.test.ts`.
@@ -36,21 +36,20 @@
   - `filterNotifications`: filters by selected `package` chip and case-insensitive search query across `appLabel`, `package`, `title`, and `text`.
 - [ ] Implement `src/lib/notificationTidy.ts`; run `npx vitest run src/lib/notificationTidy.test.ts`.
 
-### Task 1.2: Backend lazy app icon cache with letter-avatar fallback (TDD)
-**Files:** create `src-tauri/src/phone_hub/icons.rs`; modify `src-tauri/src/phone_hub/mod.rs`, `src-tauri/src/lib.rs`, `src/services/phoneHubService.ts`.
-- [ ] Write failing unit tests in `icons.rs` for cache path hashing, 48×48 PNG normalization, negative-cache TTL handling, and package validation (`validate_app_package`).
-- [ ] Implement `IconCache` under `app_cache_dir()/phone_hub_icons/<hw_serial_hash>/<package>.png` (100 MB LRU cap via `phone_files::evict_dir_to_cap`), non-blocking `adb shell pm path <pkg>` + APK raster icon extraction (gracefully returning `Ok(None)` when unavailable), and Tauri command `phone_get_app_icon(serial, package)`.
-- [ ] Register command in `src-tauri/src/lib.rs` and add `phoneGetAppIcon` wrapper in `src/services/phoneHubService.ts`.
-- [ ] Run `cargo test --manifest-path src-tauri/Cargo.toml icons`.
+### Task 1.2: Deterministic per-package letter avatars (TDD)
+**Files:** modify `src/lib/notificationTidy.ts`, `src/lib/notificationTidy.test.ts`.
+- [x] Implement `APP_AVATAR_PALETTE` (8–10 dark-theme-friendly background/foreground pairs meeting WCAG AA `>= 4.5:1` contrast), `hashPackageName`, `getAppAvatarColors`, `getAppAvatarLetter` (uppercase first letter of resolved `appLabel`, falling back to first letter of package's last segment for digits/emoji/unresolved labels), and `getAppAvatar`.
+- [x] Add Vitest tests verifying stability across calls, palette spread across different packages, `>= 4.5:1` contrast ratios for every pair, and letter fallback cases.
+- *(Deferred future task)* Real APK icon resolution requires binary `AndroidManifest.xml` + `resources.arsc` lookup due to obfuscated `res/` filenames in production APKs; adaptive/vector icons cannot be rendered without a companion app.
 
 ### Task 1.3: Sensitive app masking, local Hide, and `NotificationsView` UI overhaul (TDD)
 **Files:** modify `src/stores/phoneHubStore.ts`, `src/components/phone/NotificationsView.tsx`, `src/App.tsx`, `src/components/phone/__tests__/NotificationsAndMessages.test.tsx`.
 - [ ] Add ephemeral `sensitivePackages` toggle (persisted preference in `settings.json` / `phoneHubStore`) and local `hiddenNotificationIds` state + actions (`hideNotificationLocal`, `unhideAllLocal`), plus toast preview masking in `src/App.tsx` when an app is marked sensitive.
 - [ ] Update `NotificationsView.tsx`:
   - Top bar: search input (`role="search"`, Escape clears) + app filter chips (`All` + per-app chips with counts) + `"N hidden · Show"` chip when items are locally hidden.
-  - Date sections (**Today**, **Yesterday**, **Earlier**) with collapsible app groups (`aria-expanded`), real app icon (`<img>` when cached, letter avatar fallback), read-only retention pill (`Live only · Settings`), per-app menu (`Open on PC`, `Mark/Unmark sensitive`, `Mute`).
+  - Date sections (**Today**, **Yesterday**, **Earlier**) with collapsible app groups (`aria-expanded`), deterministic colored letter avatar, read-only retention pill (`Live only · Settings`), per-app menu (`Open on PC`, `Mark/Unmark sensitive`, `Mute`).
   - Notification rows: 2-line clamp (`line-clamp-2`) + **"Show more"** / **"Show less"**, stacked `"+N more"` expander for same-app + same-title, local **Hide** button, and click-to-reveal placeholder for sensitive apps (auto-re-masks on unmount/tab switch).
-- [ ] Expand `NotificationsAndMessages.test.tsx` to cover line clamp/Show more, title stacking, collapse, date sections, filter chips + search, sensitive masking/re-mask, local Hide, and letter avatar fallback.
+- [x] Expand `NotificationsAndMessages.test.tsx` to cover line clamp/Show more, title stacking, collapse, date sections, filter chips + search, sensitive masking/re-mask, local Hide, and deterministic colored letter avatars.
 - [ ] Run all 5 `AGENTS.md` §2 gates; commit Phase 1.
 
 ---

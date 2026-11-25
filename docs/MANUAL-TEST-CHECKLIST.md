@@ -143,3 +143,10 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
 - [ ] Set **Save files sent to phone in** to `/sdcard/Documents`, drop a non-APK onto the mirror window and paste an image (`Ctrl+V`) → lands in `/sdcard/Documents/` on phone.
 - [ ] Set PC receive folder to an unavailable path (e.g. `Z:\Missing`), trigger a phone download and a multi-PC transfer → falls back to `Downloads\AnyLeap` with a notice.
 - [ ] Drop a file onto the Computers canvas or paste a large (`> stagingLimitMb`) file across PCs → Transfer Bar and Activity Feed show **Show in folder**.
+
+## J. Tidy Notification View (SPEC-33 Phase 1) — needs phone
+
+- [ ] Notifications appear under **Today / Yesterday / Earlier** with collapsed whitespace, 2-line clamp + **Show more** / **Show less**, and same-title stacks (`+N more`).
+- [ ] App filter chips, search (Escape clears), collapsible app headers, and deterministic colored letter avatars work smoothly.
+- [ ] Mark an app as sensitive via `Mute…` → **Mark `<App>` as sensitive**: notification body and desktop toast preview mask immediately; clicking **Sensitive content hidden — click to reveal** reveals in memory and switching away re-masks automatically.
+- [ ] Click **Hide in AnyLeap** on a notification → removed locally with `<N> hidden · Show` restore control while remaining untouched in Android's notification shade.

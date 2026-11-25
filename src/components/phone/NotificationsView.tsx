@@ -3,10 +3,18 @@ import {
   BellOff,
   Check,
   ChevronDown,
+  ChevronRight,
   Copy,
   ExternalLink,
+  Eye,
+  EyeOff,
   Info,
+  Lock,
   RefreshCw,
+  Search,
+  Shield,
+  ShieldOff,
+  X,
 } from "lucide-react";
 import { phoneOpenApp } from "@/services/phoneHubService";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
@@ -14,7 +22,20 @@ import { useAppStore } from "@/store/useAppStore";
 import { saveAppPrefs } from "@/lib/persist";
 import { describeOpenApp } from "@/lib/openApp";
 import { logActivity } from "@/stores/activityStore";
+import {
+  bucketByLocalDay,
+  collapseNotificationWhitespace,
+  filterNotifications,
+  formatFullNotificationTime,
+  formatRelativeNotificationTime,
+  getAppAvatar,
+  getNotificationHideId,
+  shouldShowNotificationExpand,
+  stackSameTitleNotifications,
+} from "@/lib/notificationTidy";
 import type { PhoneHubNotification } from "@/types/phone";
+
+const VISIBLE_BATCH_SIZE = 50;
 
 interface NotificationsViewProps {
   serial: string;
@@ -22,14 +43,189 @@ interface NotificationsViewProps {
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onOpenSettings?: () => void;
 }
 
-function formatTime(unix: number): string {
-  if (!unix) return "";
-  return new Date(unix * 1000).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+interface AppAvatarProps {
+  label: string;
+  packageName: string;
+  sizeClass?: string;
+}
+
+function AppAvatar({
+  label,
+  packageName,
+  sizeClass = "h-6 w-6 text-[11px]",
+}: AppAvatarProps) {
+  const { letter, bg, fg } = getAppAvatar(label, packageName);
+  return (
+    <span
+      aria-hidden="true"
+      style={{ backgroundColor: bg, color: fg }}
+      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-md border border-ink-700 font-bold`}
+    >
+      {letter}
+    </span>
+  );
+}
+
+interface NotificationRowProps {
+  item: PhoneHubNotification;
+  hideId: string;
+  nowMs: number;
+  isSensitive: boolean;
+  isRevealed: boolean;
+  isBodyExpanded: boolean;
+  isCopied: boolean;
+  isNested?: boolean;
+  onReveal: (id: string) => void;
+  onMask: (id: string) => void;
+  onToggleExpand: (id: string) => void;
+  onCopy: (item: PhoneHubNotification, hideId: string) => void;
+  onHide: (hideId: string) => void;
+}
+
+function NotificationRow({
+  item,
+  hideId,
+  nowMs,
+  isSensitive,
+  isRevealed,
+  isBodyExpanded,
+  isCopied,
+  isNested = false,
+  onReveal,
+  onMask,
+  onToggleExpand,
+  onCopy,
+  onHide,
+}: NotificationRowProps) {
+  const relTime = formatRelativeNotificationTime(item.postedUnix, nowMs);
+  const fullTime = formatFullNotificationTime(item.postedUnix);
+  const collapsedText = collapseNotificationWhitespace(item.text);
+  const canExpand = shouldShowNotificationExpand(item.text, collapsedText);
+
+  return (
+    <div
+      className={`flex items-start justify-between gap-3 ${
+        isNested ? "rounded-lg border border-ink-700 bg-ink-950 px-3 py-2" : ""
+      }`}
+    >
+      <div className="min-w-0 flex-1">
+        {!isRevealed ? (
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded border border-gold-400/40 bg-ink-950 px-1.5 py-0.5 font-mono text-[10px] text-gold-400">
+                <Lock className="h-2.5 w-2.5" />
+                Sensitive
+              </span>
+              {relTime && (
+                <span
+                  title={fullTime}
+                  aria-label={fullTime}
+                  className="shrink-0 font-mono text-[10px] text-text-muted"
+                >
+                  {relTime}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              aria-expanded={false}
+              onClick={() => onReveal(hideId)}
+              className="btn-tactile inline-flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-800 px-2.5 py-1 text-xs text-text hover:border-gold-400 hover:text-text-strong cursor-pointer"
+            >
+              <Eye className="h-3.5 w-3.5 text-gold-400" />
+              Sensitive content hidden — click to reveal
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-xs font-medium text-text-strong">
+                {item.title || "(No title)"}
+              </span>
+              {relTime && (
+                <span
+                  title={fullTime}
+                  aria-label={fullTime}
+                  className="shrink-0 font-mono text-[10px] text-text-muted"
+                >
+                  {relTime}
+                </span>
+              )}
+              {isSensitive && (
+                <button
+                  type="button"
+                  aria-expanded={true}
+                  onClick={() => onMask(hideId)}
+                  className="btn-tactile inline-flex items-center gap-1 rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 text-[10px] text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+                >
+                  <EyeOff className="h-2.5 w-2.5" />
+                  Mask
+                </button>
+              )}
+            </div>
+
+            {collapsedText && (
+              <>
+                <p
+                  className={
+                    isBodyExpanded
+                      ? "notif-expand-panel mt-0.5 whitespace-pre-wrap break-words text-xs text-text"
+                      : "mt-0.5 line-clamp-2 whitespace-pre-line break-words text-xs text-text-muted"
+                  }
+                >
+                  {isBodyExpanded ? item.text : collapsedText}
+                </p>
+                {canExpand && (
+                  <button
+                    type="button"
+                    aria-expanded={isBodyExpanded}
+                    onClick={() => onToggleExpand(hideId)}
+                    className="mt-1 inline-flex items-center gap-1 rounded text-[11px] font-medium text-gold-400 hover:text-text-strong cursor-pointer"
+                  >
+                    {isBodyExpanded ? "Show less" : "Show more"}
+                  </button>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {isRevealed && (
+          <button
+            type="button"
+            onClick={() => onCopy(item, hideId)}
+            className="btn-tactile flex shrink-0 items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-[11px] text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+          >
+            {isCopied ? (
+              <>
+                <Check className="h-3 w-3 text-status-success" />
+                Copied
+              </>
+            ) : (
+              <>
+                <Copy className="h-3 w-3" />
+                Copy
+              </>
+            )}
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label="Hide in AnyLeap"
+          title="Hide in AnyLeap"
+          onClick={() => onHide(hideId)}
+          className="btn-tactile flex shrink-0 items-center justify-center rounded-md border border-ink-700 bg-ink-800 p-1 text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+        >
+          <EyeOff className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function NotificationsView({
@@ -38,10 +234,16 @@ export function NotificationsView({
   loading,
   error,
   onRefresh,
+  onOpenSettings,
 }: NotificationsViewProps) {
   const mutedPackages = usePhoneHubStore((s) => s.mutedPackages);
   const mutePackage = usePhoneHubStore((s) => s.mutePackage);
   const unmutePackage = usePhoneHubStore((s) => s.unmutePackage);
+  const sensitivePackages = usePhoneHubStore((s) => s.sensitivePackages);
+  const togglePackageSensitive = usePhoneHubStore((s) => s.togglePackageSensitive);
+  const hiddenNotificationIds = usePhoneHubStore((s) => s.hiddenNotificationIds);
+  const hideNotificationLocal = usePhoneHubStore((s) => s.hideNotificationLocal);
+  const unhideAllLocal = usePhoneHubStore((s) => s.unhideAllLocal);
 
   const appPrefs = useAppStore((s) => s.appPrefs);
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
@@ -49,12 +251,37 @@ export function NotificationsView({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [openMenuPkg, setOpenMenuPkg] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  const [expandedBodies, setExpandedBodies] = useState<Set<string>>(() => new Set());
+  const [expandedStacks, setExpandedStacks] = useState<Set<string>>(() => new Set());
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(() => new Set());
+  const [visibleLimit, setVisibleLimit] = useState(VISIBLE_BATCH_SIZE);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
   const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const mutedSet = useMemo(() => new Set(mutedPackages), [mutedPackages]);
+  const sensitiveSet = useMemo(() => new Set(sensitivePackages), [sensitivePackages]);
+  const hiddenSet = useMemo(() => new Set(hiddenNotificationIds), [hiddenNotificationIds]);
 
-  // Remember app labels seen in notifications for muted summary display
+  // Re-mask ephemeral reveal state and reset per-device transient UI state on device switch.
+  useEffect(() => {
+    setRevealedIds(new Set());
+    setSelectedPackage(null);
+    setVisibleLimit(VISIBLE_BATCH_SIZE);
+  }, [serial]);
+
+  // Keep relative timestamps fresh every 30s while viewing Notifications.
+  useEffect(() => {
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Remember app labels seen in notifications for muted summary and filter chips.
   const labelByPkg = useMemo(() => {
     const map = new Map<string, string>();
     for (const n of notifications) {
@@ -65,44 +292,127 @@ export function NotificationsView({
     return map;
   }, [notifications]);
 
-  const hiddenCount = useMemo(
+  const mutedHiddenCount = useMemo(
     () => notifications.filter((n) => mutedSet.has(n.package)).length,
     [notifications, mutedSet],
   );
 
-  const groups = useMemo(() => {
-    const sorted = [...notifications]
-      .filter((n) => !mutedSet.has(n.package))
-      .sort((a, b) => b.postedUnix - a.postedUnix);
+  const visibleNotifications = useMemo(
+    () =>
+      notifications
+        .filter((n) => !mutedSet.has(n.package))
+        .filter((n) => !hiddenSet.has(getNotificationHideId(n)))
+        .sort((a, b) => b.postedUnix - a.postedUnix),
+    [notifications, mutedSet, hiddenSet],
+  );
 
+  const locallyHiddenCount = useMemo(
+    () =>
+      notifications.filter(
+        (n) => !mutedSet.has(n.package) && hiddenSet.has(getNotificationHideId(n)),
+      ).length,
+    [notifications, mutedSet, hiddenSet],
+  );
+
+  // Per-app chips computed from non-muted, non-locally-hidden notifications.
+  const appChips = useMemo(() => {
     const map = new Map<
       string,
-      { label: string; hasResolvedLabel: boolean; pkg: string; items: PhoneHubNotification[] }
+      { pkg: string; label: string; count: number; latestUnix: number }
     >();
-    for (const n of sorted) {
+    for (const n of visibleNotifications) {
       const existing = map.get(n.package);
+      const label = labelByPkg.get(n.package) ?? (n.appLabel || n.package);
       if (existing) {
-        existing.items.push(n);
+        existing.count += 1;
+        if (n.postedUnix > existing.latestUnix) existing.latestUnix = n.postedUnix;
       } else {
-        const resolved = Boolean(n.appLabel && n.appLabel !== n.package);
         map.set(n.package, {
-          label: n.appLabel || n.package,
-          hasResolvedLabel: resolved,
           pkg: n.package,
-          items: [n],
+          label,
+          count: 1,
+          latestUnix: n.postedUnix,
         });
       }
     }
-    return Array.from(map.values());
-  }, [notifications, mutedSet]);
+    return Array.from(map.values()).sort((a, b) => b.latestUnix - a.latestUnix);
+  }, [visibleNotifications, labelByPkg]);
 
-  const previewNotification = useMemo(() => {
-    return (
-      [...notifications]
-        .filter((n) => !mutedSet.has(n.package))
-        .sort((a, b) => b.postedUnix - a.postedUnix)[0] ?? null
-    );
-  }, [notifications, mutedSet]);
+  // Clear selected chip if that app no longer has visible notifications.
+  useEffect(() => {
+    if (selectedPackage && !appChips.some((c) => c.pkg === selectedPackage)) {
+      setSelectedPackage(null);
+    }
+  }, [selectedPackage, appChips]);
+
+  // Build masked package set (apps marked sensitive where not all items are revealed)
+  // so search does not leak masked body/title content.
+  const searchMaskedPackages = useMemo(() => {
+    const masked = new Set<string>();
+    for (const pkg of sensitiveSet) {
+      const hasUnrevealed = visibleNotifications.some(
+        (n) => n.package === pkg && !revealedIds.has(getNotificationHideId(n)),
+      );
+      if (hasUnrevealed) masked.add(pkg);
+    }
+    return masked;
+  }, [sensitiveSet, visibleNotifications, revealedIds]);
+
+  const filteredNotifications = useMemo(
+    () =>
+      filterNotifications(visibleNotifications, {
+        selectedPackage,
+        query: searchQuery,
+        maskedPackages: searchMaskedPackages,
+      }),
+    [visibleNotifications, selectedPackage, searchQuery, searchMaskedPackages],
+  );
+
+  const windowedNotifications = useMemo(
+    () => filteredNotifications.slice(0, visibleLimit),
+    [filteredNotifications, visibleLimit],
+  );
+
+  const daySections = useMemo(() => {
+    const buckets = bucketByLocalDay(windowedNotifications, nowMs);
+    return buckets.map((bucket) => {
+      const groupMap = new Map<
+        string,
+        {
+          pkg: string;
+          label: string;
+          hasResolvedLabel: boolean;
+          items: PhoneHubNotification[];
+        }
+      >();
+      for (const n of bucket.items) {
+        const existing = groupMap.get(n.package);
+        if (existing) {
+          existing.items.push(n);
+        } else {
+          const resolvedLabel = labelByPkg.get(n.package) ?? n.appLabel;
+          const hasResolvedLabel = Boolean(resolvedLabel && resolvedLabel !== n.package);
+          groupMap.set(n.package, {
+            pkg: n.package,
+            label: resolvedLabel || n.package,
+            hasResolvedLabel,
+            items: [n],
+          });
+        }
+      }
+      return {
+        id: bucket.id,
+        label: bucket.label,
+        totalCount: bucket.items.length,
+        groups: Array.from(groupMap.values()),
+      };
+    });
+  }, [windowedNotifications, nowMs, labelByPkg]);
+
+  const previewNotification = visibleNotifications[0] ?? null;
+  const previewIsSensitive = previewNotification
+    ? sensitiveSet.has(previewNotification.package)
+    : false;
 
   // Close menu on outside click
   useEffect(() => {
@@ -123,12 +433,12 @@ export function NotificationsView({
     firstBtn?.focus();
   }, [openMenuPkg]);
 
-  async function handleCopy(n: PhoneHubNotification) {
+  async function handleCopy(n: PhoneHubNotification, hideId: string) {
     const content = [n.title, n.text].filter(Boolean).join("\n");
     try {
       await navigator.clipboard.writeText(content);
-      setCopiedKey(n.key);
-      setTimeout(() => setCopiedKey((prev) => (prev === n.key ? null : prev)), 1500);
+      setCopiedKey(hideId);
+      setTimeout(() => setCopiedKey((prev) => (prev === hideId ? null : prev)), 1500);
     } catch {
       // Clipboard write failed
     }
@@ -152,13 +462,31 @@ export function NotificationsView({
     setActionMsg(`${label} muted`);
   }
 
+  function handleToggleSensitive(pkg: string, label: string) {
+    const wasSensitive = sensitiveSet.has(pkg);
+    setOpenMenuPkg(null);
+    togglePackageSensitive(pkg);
+    setRevealedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of prev) {
+        if (id.startsWith(`${pkg}::`)) next.delete(id);
+      }
+      return next;
+    });
+    setActionMsg(
+      wasSensitive
+        ? `${label} unmarked as sensitive`
+        : `${label} marked as sensitive`,
+    );
+  }
+
   function handleToggleToasts() {
     const next = { ...appPrefs, desktopNotifications: !appPrefs.desktopNotifications };
     setAppPrefs(next);
     void saveAppPrefs(next).catch(() => {});
   }
 
-  function handleMenuKeyDown(e: React.KeyboardEvent<HTMLDivElement>, pkg: string) {
+  function handleMenuKeyDown(e: React.KeyboardEvent<HTMLDivElement>, menuKey: string) {
     const items = Array.from(
       e.currentTarget.querySelectorAll<HTMLButtonElement>("button[role='menuitem']"),
     );
@@ -166,7 +494,7 @@ export function NotificationsView({
     if (e.key === "Escape") {
       e.stopPropagation();
       setOpenMenuPkg(null);
-      triggerRefs.current[pkg]?.focus();
+      triggerRefs.current[menuKey]?.focus();
     } else if (e.key === "ArrowDown" && items.length > 0) {
       e.preventDefault();
       items[(idx + 1) % items.length]?.focus();
@@ -178,10 +506,55 @@ export function NotificationsView({
     }
   }
 
+  function toggleGroupCollapsed(groupKey: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }
+
+  function toggleBodyExpand(hideId: string) {
+    setExpandedBodies((prev) => {
+      const next = new Set(prev);
+      if (next.has(hideId)) next.delete(hideId);
+      else next.add(hideId);
+      return next;
+    });
+  }
+
+  function toggleStackExpand(stackId: string) {
+    setExpandedStacks((prev) => {
+      const next = new Set(prev);
+      if (next.has(stackId)) next.delete(stackId);
+      else next.add(stackId);
+      return next;
+    });
+  }
+
+  function revealItem(hideId: string) {
+    setRevealedIds((prev) => new Set(prev).add(hideId));
+  }
+
+  function maskItem(hideId: string) {
+    setRevealedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(hideId);
+      return next;
+    });
+  }
+
+  const remainingWindowCount = filteredNotifications.length - windowedNotifications.length;
+  const hasFiltersActive = Boolean(selectedPackage || searchQuery.trim());
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-ink-700 bg-ink-900 px-4 py-2">
-        <span className="text-xs text-text-muted">
+        <span
+          title="Read-only — replies and dismisses stay on the phone"
+          className="text-xs text-text-muted"
+        >
           Read-only — replies need the phone
         </span>
         <div className="flex items-center gap-2">
@@ -196,7 +569,9 @@ export function NotificationsView({
             onClick={onRefresh}
             className="btn-tactile inline-flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-800 px-2.5 py-1 text-xs text-text hover:border-text-muted hover:text-text-strong disabled:opacity-50 cursor-pointer"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${loading ? "animate-spin motion-reduce:animate-none" : ""}`}
+            />
             Refresh
           </button>
         </div>
@@ -210,163 +585,408 @@ export function NotificationsView({
 
       <div className="flex-1 overflow-y-auto p-4">
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_260px] xl:grid-cols-[minmax(0,1fr)_300px]">
-          {/* Left: notification list */}
+          {/* Left: search, filter chips, and tidy notification sections */}
           <div className="space-y-3">
-            {hiddenCount > 0 && (
+            {/* Search & local-hidden bar */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div
+                role="search"
+                className="relative flex min-w-[200px] flex-1 items-center"
+              >
+                <Search
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-text-muted"
+                />
+                <input
+                  type="search"
+                  aria-label="Search notifications"
+                  placeholder="Search notifications, apps, text…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && searchQuery) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSearchQuery("");
+                    }
+                  }}
+                  className="w-full rounded-lg border border-ink-700 bg-ink-900 py-1.5 pr-8 pl-8 text-xs text-text-strong placeholder:text-text-muted focus:border-gold-400 focus:outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 rounded p-0.5 text-text-muted hover:text-text-strong cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {locallyHiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={unhideAllLocal}
+                  className="btn-tactile inline-flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5 text-xs text-gold-400 hover:border-gold-400 cursor-pointer"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  {locallyHiddenCount} hidden · Show
+                </button>
+              )}
+            </div>
+
+            {/* App filter chips */}
+            {appChips.length > 0 && (
+              <div
+                role="group"
+                aria-label="Filter notifications by app"
+                className="flex flex-wrap items-center gap-1.5"
+              >
+                <button
+                  type="button"
+                  aria-pressed={selectedPackage === null}
+                  onClick={() => setSelectedPackage(null)}
+                  className={`btn-tactile inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium cursor-pointer ${
+                    selectedPackage === null
+                      ? "border-gold-400 bg-ink-800 text-gold-400"
+                      : "border-ink-700 bg-ink-900 text-text hover:border-text-muted hover:text-text-strong"
+                  }`}
+                >
+                  All
+                  <span className="font-mono text-[10px]">{visibleNotifications.length}</span>
+                </button>
+                {appChips.map((chip) => {
+                  const isActive = selectedPackage === chip.pkg;
+                  return (
+                    <button
+                      key={chip.pkg}
+                      type="button"
+                      aria-pressed={isActive}
+                      onClick={() => setSelectedPackage(isActive ? null : chip.pkg)}
+                      className={`btn-tactile inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium cursor-pointer ${
+                        isActive
+                          ? "border-gold-400 bg-ink-800 text-gold-400"
+                          : "border-ink-700 bg-ink-900 text-text hover:border-text-muted hover:text-text-strong"
+                      }`}
+                    >
+                      <AppAvatar
+                        label={chip.label}
+                        packageName={chip.pkg}
+                        sizeClass="h-4 w-4 text-[9px]"
+                      />
+                      <span className="max-w-[140px] truncate">{chip.label}</span>
+                      <span className="font-mono text-[10px]">{chip.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {mutedHiddenCount > 0 && (
               <div className="flex items-start gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs text-text">
                 <BellOff className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" />
                 <span>
-                  {hiddenCount} notification{hiddenCount > 1 ? "s" : ""} from muted apps{" "}
-                  {hiddenCount > 1 ? "are" : "is"} hidden.
+                  {mutedHiddenCount} notification{mutedHiddenCount > 1 ? "s" : ""} from muted apps{" "}
+                  {mutedHiddenCount > 1 ? "are" : "is"} hidden.
                 </span>
               </div>
             )}
 
-            {groups.length === 0 ? (
+            {daySections.length === 0 ? (
               <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-ink-700 p-8 text-center">
                 <BellOff className="mb-2 h-10 w-10 text-ink-700" />
                 <h2 className="text-sm font-semibold text-text-strong">
-                  {notifications.length > 0
-                    ? "No visible notifications"
-                    : "No active notifications"}
+                  {hasFiltersActive
+                    ? "No matching notifications"
+                    : notifications.length > 0
+                      ? "No visible notifications"
+                      : "No active notifications"}
                 </h2>
                 <p className="mt-1 max-w-md text-xs text-text">
-                  {notifications.length > 0
-                    ? "All apps with active notifications are muted. Unmute an app on the right to see them here."
-                    : "Read-only — replies need the phone"}
+                  {hasFiltersActive
+                    ? "Try clearing the search box or choosing All apps."
+                    : mutedHiddenCount > 0 && locallyHiddenCount === 0
+                      ? "All apps with active notifications are muted. Unmute an app on the right to see them here."
+                      : locallyHiddenCount > 0
+                        ? "All visible notifications are hidden locally in AnyLeap."
+                        : "Read-only — replies and dismisses stay on the phone"}
                 </p>
+                {hasFiltersActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedPackage(null);
+                      setSearchQuery("");
+                    }}
+                    className="btn-tactile mt-3 rounded-md border border-ink-700 bg-ink-800 px-3 py-1 text-xs text-text hover:border-gold-400 hover:text-text-strong cursor-pointer"
+                  >
+                    Clear filters
+                  </button>
+                )}
               </div>
             ) : (
-              groups.map((group) => {
-                const isMenuOpen = openMenuPkg === group.pkg;
-                const initial = (group.label[0] || "?").toUpperCase();
-                return (
+              <div className="space-y-4">
+                {daySections.map((section) => (
                   <section
-                    key={group.pkg}
-                    aria-label={group.label}
-                    className="relative rounded-xl border border-ink-700 bg-ink-900"
+                    key={section.id}
+                    aria-labelledby={`notif-day-${section.id}`}
+                    className="space-y-2.5"
                   >
-                    <div className="flex items-center justify-between gap-2 rounded-t-[11px] border-b border-ink-700 bg-ink-800 px-3.5 py-1.5">
-                      <span className="flex min-w-0 items-center gap-2 font-semibold text-text-strong">
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-ink-700 bg-ink-900 text-[11px] font-bold text-text-strong">
-                          {initial}
-                        </span>
-                        {group.hasResolvedLabel ? (
-                          <span className="truncate text-xs">{group.label}</span>
-                        ) : (
-                          <>
-                            <span className="truncate font-mono text-xs font-medium">
-                              {group.pkg}
-                            </span>
-                            <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-text">
-                              name unavailable
-                            </span>
-                          </>
-                        )}
-                        <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[11px] text-text">
-                          {group.items.length}
-                        </span>
+                    <div className="flex items-center justify-between px-0.5">
+                      <h2
+                        id={`notif-day-${section.id}`}
+                        className="font-mono text-[11px] font-bold uppercase tracking-wider text-text-muted"
+                      >
+                        {section.label}
+                      </h2>
+                      <span className="font-mono text-[11px] text-text-muted">
+                        {section.totalCount}
                       </span>
-
-                      <div className="relative">
-                        <button
-                          ref={(el) => {
-                            triggerRefs.current[group.pkg] = el;
-                          }}
-                          type="button"
-                          aria-haspopup="menu"
-                          aria-expanded={isMenuOpen}
-                          aria-label={`Mute… ${group.label}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuPkg(isMenuOpen ? null : group.pkg);
-                          }}
-                          className="btn-tactile inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-900 px-2 py-1 text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
-                        >
-                          <BellOff className="h-3 w-3" />
-                          Mute…
-                          <ChevronDown className="h-3 w-3" />
-                        </button>
-
-                        {isMenuOpen && (
-                          <div
-                            ref={menuRef}
-                            role="menu"
-                            aria-label="App actions"
-                            onKeyDown={(e) => handleMenuKeyDown(e, group.pkg)}
-                            className="popover-panel absolute right-0 top-full z-20 mt-1 min-w-[230px] rounded-[10px] border border-ink-700 bg-ink-900 p-1 shadow-elevated"
-                            style={{ "--transform-origin": "top right" } as React.CSSProperties}
-                          >
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => void handleOpenApp(group.pkg, group.label)}
-                              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-text hover:bg-ink-800 hover:text-text-strong focus-visible:bg-ink-800 focus-visible:text-text-strong cursor-pointer"
-                            >
-                              <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                              Open {group.label} on PC
-                            </button>
-                            <hr className="my-1 border-0 border-t border-ink-700" />
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => handleMuteApp(group.pkg, group.label)}
-                              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-text hover:bg-ink-800 hover:text-text-strong focus-visible:bg-ink-800 focus-visible:text-text-strong cursor-pointer"
-                            >
-                              <BellOff className="h-3.5 w-3.5 shrink-0" />
-                              Mute {group.label}
-                            </button>
-                          </div>
-                        )}
-                      </div>
                     </div>
 
-                    <div className="divide-y divide-ink-700">
-                      {group.items.map((n) => (
-                        <div
-                          key={n.key}
-                          className="flex items-start justify-between gap-3 px-3.5 py-2.5"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="truncate text-xs font-medium text-text-strong">
-                                {n.title || "(No title)"}
-                              </span>
-                              {n.postedUnix > 0 && (
-                                <span className="shrink-0 font-mono text-[10px] text-text-muted">
-                                  {formatTime(n.postedUnix)}
-                                </span>
-                              )}
-                            </div>
-                            {n.text && (
-                              <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-text-muted">
-                                {n.text}
-                              </p>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleCopy(n)}
-                            className="btn-tactile flex shrink-0 items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 text-[11px] text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+                    <div className="space-y-2.5">
+                      {section.groups.map((group) => {
+                        const groupKey = `${section.id}::${group.pkg}`;
+                        const isCollapsed = collapsedGroups.has(groupKey);
+                        const isMenuOpen = openMenuPkg === groupKey;
+                        const isSensitive = sensitiveSet.has(group.pkg);
+                        const stacks = stackSameTitleNotifications(group.items);
+
+                        return (
+                          <section
+                            key={groupKey}
+                            aria-label={group.label}
+                            className="relative rounded-xl border border-ink-700 bg-ink-900"
                           >
-                            {copiedKey === n.key ? (
-                              <>
-                                <Check className="h-3 w-3 text-status-success" />
-                                Copied
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="h-3 w-3" />
-                                Copy
-                              </>
+                            <div
+                              className={`flex flex-wrap items-center justify-between gap-2 bg-ink-800 px-3.5 py-1.5 ${
+                                isCollapsed
+                                  ? "rounded-[11px]"
+                                  : "rounded-t-[11px] border-b border-ink-700"
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                aria-expanded={!isCollapsed}
+                                aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${group.label} notifications`}
+                                onClick={() => toggleGroupCollapsed(groupKey)}
+                                className="flex min-w-0 flex-1 items-center gap-2 text-left font-semibold text-text-strong cursor-pointer"
+                              >
+                                {isCollapsed ? (
+                                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text" />
+                                ) : (
+                                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text" />
+                                )}
+                                <AppAvatar
+                                  label={group.label}
+                                  packageName={group.pkg}
+                                />
+                                {group.hasResolvedLabel ? (
+                                  <span className="truncate text-xs">{group.label}</span>
+                                ) : (
+                                  <>
+                                    <span className="truncate font-mono text-xs font-medium">
+                                      {group.pkg}
+                                    </span>
+                                    <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-text">
+                                      name unavailable
+                                    </span>
+                                  </>
+                                )}
+                                <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[11px] text-text">
+                                  {group.items.length}
+                                </span>
+                              </button>
+
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                {isSensitive && (
+                                  <span className="inline-flex items-center gap-1 rounded border border-gold-400/40 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-gold-400">
+                                    <Lock className="h-2.5 w-2.5" />
+                                    Sensitive
+                                  </span>
+                                )}
+                                {onOpenSettings ? (
+                                  <button
+                                    type="button"
+                                    onClick={onOpenSettings}
+                                    className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-text hover:border-gold-400 hover:text-gold-400 cursor-pointer"
+                                  >
+                                    Live only · Settings
+                                  </button>
+                                ) : (
+                                  <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-text">
+                                    Live only · Settings
+                                  </span>
+                                )}
+
+                                <div className="relative">
+                                  <button
+                                    ref={(el) => {
+                                      triggerRefs.current[groupKey] = el;
+                                    }}
+                                    type="button"
+                                    aria-haspopup="menu"
+                                    aria-expanded={isMenuOpen}
+                                    aria-label={`Mute… ${group.label}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setOpenMenuPkg(isMenuOpen ? null : groupKey);
+                                    }}
+                                    className="btn-tactile inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-900 px-2 py-1 text-[11px] font-medium text-text hover:border-text-muted hover:text-text-strong cursor-pointer"
+                                  >
+                                    <BellOff className="h-3 w-3" />
+                                    Mute…
+                                    <ChevronDown className="h-3 w-3" />
+                                  </button>
+
+                                  {isMenuOpen && (
+                                    <div
+                                      ref={menuRef}
+                                      role="menu"
+                                      aria-label="App actions"
+                                      onKeyDown={(e) => handleMenuKeyDown(e, groupKey)}
+                                      className="popover-panel absolute right-0 top-full z-20 mt-1 min-w-[230px] rounded-[10px] border border-ink-700 bg-ink-900 p-1 shadow-elevated"
+                                      style={
+                                        { "--transform-origin": "top right" } as React.CSSProperties
+                                      }
+                                    >
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => void handleOpenApp(group.pkg, group.label)}
+                                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-text hover:bg-ink-800 hover:text-text-strong focus-visible:bg-ink-800 focus-visible:text-text-strong cursor-pointer"
+                                      >
+                                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                                        Open {group.label} on PC
+                                      </button>
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() =>
+                                          handleToggleSensitive(group.pkg, group.label)
+                                        }
+                                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-text hover:bg-ink-800 hover:text-text-strong focus-visible:bg-ink-800 focus-visible:text-text-strong cursor-pointer"
+                                      >
+                                        {isSensitive ? (
+                                          <>
+                                            <ShieldOff className="h-3.5 w-3.5 shrink-0" />
+                                            Unmark {group.label} as sensitive
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Shield className="h-3.5 w-3.5 shrink-0" />
+                                            Mark {group.label} as sensitive
+                                          </>
+                                        )}
+                                      </button>
+                                      <hr className="my-1 border-0 border-t border-ink-700" />
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => handleMuteApp(group.pkg, group.label)}
+                                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-text hover:bg-ink-800 hover:text-text-strong focus-visible:bg-ink-800 focus-visible:text-text-strong cursor-pointer"
+                                      >
+                                        <BellOff className="h-3.5 w-3.5 shrink-0" />
+                                        Mute {group.label}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {!isCollapsed && (
+                              <div className="notif-expand-panel divide-y divide-ink-700">
+                                {stacks.map((stack) => {
+                                  const latestHideId = getNotificationHideId(stack.latest);
+                                  const latestRevealed =
+                                    !isSensitive || revealedIds.has(latestHideId);
+                                  const isStackExpanded = expandedStacks.has(stack.id);
+
+                                  return (
+                                    <div key={stack.id} className="px-3.5 py-2.5">
+                                      <NotificationRow
+                                        item={stack.latest}
+                                        hideId={latestHideId}
+                                        nowMs={nowMs}
+                                        isSensitive={isSensitive}
+                                        isRevealed={latestRevealed}
+                                        isBodyExpanded={expandedBodies.has(latestHideId)}
+                                        isCopied={copiedKey === latestHideId}
+                                        onReveal={revealItem}
+                                        onMask={maskItem}
+                                        onToggleExpand={toggleBodyExpand}
+                                        onCopy={(item, id) => void handleCopy(item, id)}
+                                        onHide={hideNotificationLocal}
+                                      />
+
+                                      {stack.olderItems.length > 0 && (
+                                        <div className="mt-2">
+                                          <button
+                                            type="button"
+                                            aria-expanded={isStackExpanded}
+                                            onClick={() => toggleStackExpand(stack.id)}
+                                            className="btn-tactile inline-flex items-center gap-1 rounded-md border border-ink-700 bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-text hover:border-gold-400 hover:text-gold-400 cursor-pointer"
+                                          >
+                                            {isStackExpanded
+                                              ? `Show fewer (${stack.olderItems.length})`
+                                              : `+${stack.olderItems.length} more`}
+                                          </button>
+
+                                          {isStackExpanded && (
+                                            <div className="notif-expand-panel mt-2 space-y-2 border-l-2 border-ink-700 pl-3">
+                                              {stack.olderItems.map((older) => {
+                                                const olderHideId = getNotificationHideId(older);
+                                                const olderRevealed =
+                                                  !isSensitive || revealedIds.has(olderHideId);
+                                                return (
+                                                  <NotificationRow
+                                                    key={olderHideId}
+                                                    item={older}
+                                                    hideId={olderHideId}
+                                                    nowMs={nowMs}
+                                                    isSensitive={isSensitive}
+                                                    isRevealed={olderRevealed}
+                                                    isBodyExpanded={expandedBodies.has(olderHideId)}
+                                                    isCopied={copiedKey === olderHideId}
+                                                    isNested
+                                                    onReveal={revealItem}
+                                                    onMask={maskItem}
+                                                    onToggleExpand={toggleBodyExpand}
+                                                    onCopy={(item, id) => void handleCopy(item, id)}
+                                                    onHide={hideNotificationLocal}
+                                                  />
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
-                          </button>
-                        </div>
-                      ))}
+                          </section>
+                        );
+                      })}
                     </div>
                   </section>
-                );
-              })
+                ))}
+
+                {remainingWindowCount > 0 && (
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setVisibleLimit((prev) => prev + VISIBLE_BATCH_SIZE)}
+                      className="btn-tactile rounded-md border border-ink-700 bg-ink-900 px-3 py-1.5 text-xs text-text hover:border-gold-400 hover:text-text-strong cursor-pointer"
+                    >
+                      Show older ({remainingWindowCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -399,9 +1019,10 @@ export function NotificationsView({
                             className="flex items-center justify-between gap-2 py-1.5 first:pt-0 last:pb-0"
                           >
                             <span className="flex min-w-0 items-center gap-2">
-                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-ink-700 bg-ink-800 text-[11px] font-bold text-text-strong">
-                                {(label[0] || "?").toUpperCase()}
-                              </span>
+                              <AppAvatar
+                                label={label}
+                                packageName={pkg}
+                              />
                               <span className="truncate font-medium text-text-strong">
                                 {label}
                               </span>
@@ -483,19 +1104,37 @@ export function NotificationsView({
                     className="rounded-[10px] border border-ink-700 bg-ink-950 p-3 shadow-elevated"
                   >
                     <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-text">
-                      <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-ink-700 bg-ink-800 text-[10px] font-bold text-text-strong">
-                        {((previewNotification.appLabel || previewNotification.package)[0] || "?").toUpperCase()}
-                      </span>
+                      <AppAvatar
+                        label={previewNotification.appLabel || previewNotification.package}
+                        packageName={previewNotification.package}
+                        sizeClass="h-[18px] w-[18px] text-[10px]"
+                      />
                       <span className="truncate">
                         {previewNotification.appLabel || previewNotification.package}
                       </span>
                       <span className="ml-auto text-text-muted">now</span>
                     </div>
-                    <div className="font-semibold text-text-strong">
-                      {previewNotification.title || "(No title)"}
-                    </div>
-                    {previewNotification.text && (
-                      <div className="mt-0.5 text-text">{previewNotification.text}</div>
+                    {previewIsSensitive ? (
+                      <>
+                        <div className="font-semibold text-gold-400">
+                          Sensitive content hidden
+                        </div>
+                        <div className="mt-0.5 text-text">
+                          New notification from{" "}
+                          {previewNotification.appLabel || previewNotification.package}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-semibold text-text-strong">
+                          {previewNotification.title || "(No title)"}
+                        </div>
+                        {previewNotification.text && (
+                          <div className="mt-0.5 text-text">
+                            {collapseNotificationWhitespace(previewNotification.text)}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 ) : (
