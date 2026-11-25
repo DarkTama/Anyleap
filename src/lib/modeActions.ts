@@ -8,7 +8,7 @@ import {
   type ModeSettings,
 } from "./modeSettings";
 import { saveModeDefaults, saveModeDefaultsNotice } from "./persist";
-import { setScrollFeel } from "./tauri";
+import { restartWithAudioBuffer, setScrollFeel } from "./tauri";
 import type { CoreSettings } from "./types";
 
 /** Edit one mode's defaults and persist. Writes only the given mode (SPEC-28 §5.1). */
@@ -29,6 +29,20 @@ export function editMode<M extends MirrorMode>(
       if (sessionMode === mode) {
         void setScrollFeel(s.serial, cfg).catch(() => {});
         state.setDeviceToggle(s.serial, "swipeScroll", scroll.style === "paged");
+      }
+    }
+  }
+
+  if (mode !== "camera" && "audioBuffer" in patch && patch.audioBuffer !== undefined) {
+    const modeState = state.modeDefaults[mode] as ModeSettings;
+    if (!modeState.noAudio) {
+      const buf = modeState.audioBuffer ?? "auto";
+      for (const s of state.sessions) {
+        if (s.mode === "camera") continue;
+        const sessionMode = state.sessionModes[s.id] ?? launchMode(state.currentMode);
+        if (sessionMode === mode) {
+          void restartWithAudioBuffer?.(s.serial, buf)?.catch(() => {});
+        }
       }
     }
   }

@@ -60,6 +60,8 @@ export interface SessionExited {
 
 export type Codec = "h264" | "h265" | "av1";
 
+export type AudioBufferSetting = "auto" | 50 | 100 | 200;
+
 export interface CoreSettings {
   maxSize: number; // --max-size; 0 = native
   videoBitRate: number; // bits/sec
@@ -78,6 +80,7 @@ export interface CoreSettings {
   renderFit: "letterbox" | "unscaled" | "stretched"; // --render-fit
   embedded?: boolean; // Win32 embedded mirror container mode
   hideVirtualTaskbar?: boolean; // --no-vd-system-decorations
+  audioBuffer?: AudioBufferSetting; // --audio-buffer (default "auto")
 }
 
 /** Named quality bundles. The UI shows them per mode as Smooth / Balanced / Sharp / Maximum. */
@@ -111,6 +114,7 @@ export const DEFAULT_SETTINGS: CoreSettings = {
   renderFit: "letterbox",
   embedded: false,
   hideVirtualTaskbar: false,
+  audioBuffer: "auto",
 };
 
 // --- Wireless (M2) ---

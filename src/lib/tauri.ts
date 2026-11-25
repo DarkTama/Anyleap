@@ -3,6 +3,7 @@ import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import type { ScrollConfigPayload, ScrollStyle } from "@/lib/modeSettings";
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AudioBufferSetting,
   CameraDeviceOption,
   CameraSettings,
   CoreSettings,
@@ -91,6 +92,9 @@ export const openNotifications = (serial: string) =>
 
 export const restartWithScreenOff = (serial: string, off: boolean) =>
   invoke<SessionInfo>("restart_with_screen_off", { serial, off });
+
+export const restartWithAudioBuffer = (serial: string, audioBuffer: AudioBufferSetting) =>
+  invoke<SessionInfo | null>("restart_with_audio_buffer", { serial, audioBuffer });
 
 export const mirrorRect = (title: string) =>
   invoke<MirrorRect | null>("mirror_rect", { title });

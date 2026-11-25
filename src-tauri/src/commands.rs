@@ -112,6 +112,101 @@ fn has_active_session_for_serial(app: &AppHandle, serial: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Per-mode audio buffer configuration (`"auto"` or explicit `50 | 100 | 200` ms).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AudioBufferSetting {
+    #[default]
+    Auto,
+    Ms(u32),
+}
+
+impl serde::Serialize for AudioBufferSetting {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            AudioBufferSetting::Auto => serializer.serialize_str("auto"),
+            AudioBufferSetting::Ms(ms) => serializer.serialize_u32(*ms),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AudioBufferSetting {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = AudioBufferSetting;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#""auto" or 50, 100, 200"#)
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                match v {
+                    "auto" => Ok(AudioBufferSetting::Auto),
+                    "50" => Ok(AudioBufferSetting::Ms(50)),
+                    "100" => Ok(AudioBufferSetting::Ms(100)),
+                    "200" => Ok(AudioBufferSetting::Ms(200)),
+                    _ => Ok(AudioBufferSetting::Auto),
+                }
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                match v {
+                    50 | 100 | 200 => Ok(AudioBufferSetting::Ms(v as u32)),
+                    _ => Ok(AudioBufferSetting::Auto),
+                }
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                if let Ok(u) = u64::try_from(v) {
+                    self.visit_u64(u)
+                } else {
+                    Ok(AudioBufferSetting::Auto)
+                }
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                if v == 50.0 || v == 100.0 || v == 200.0 {
+                    Ok(AudioBufferSetting::Ms(v as u32))
+                } else {
+                    Ok(AudioBufferSetting::Auto)
+                }
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(AudioBufferSetting::Auto)
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(AudioBufferSetting::Auto)
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+/// Resolve the `--audio-buffer` delay (ms) for a scrcpy session.
+/// `Auto` uses 50 ms on USB and 150 ms on wireless (`IP:port`).
+pub fn resolve_audio_buffer_ms(serial: &str, setting: AudioBufferSetting) -> u32 {
+    match setting {
+        AudioBufferSetting::Ms(ms) if matches!(ms, 50 | 100 | 200) => ms,
+        AudioBufferSetting::Auto | AudioBufferSetting::Ms(_) => {
+            if crate::device_identity::is_wifi_serial(serial) {
+                150
+            } else {
+                50
+            }
+        }
+    }
+}
+
 /// Core (Tier-1) settings, mirrored from the TypeScript `CoreSettings` type.
 /// Field names arrive camelCase over the IPC boundary.
 #[derive(Deserialize)]
@@ -136,6 +231,8 @@ pub struct CoreSettings {
     pub embedded: bool,
     #[serde(default)]
     pub hide_virtual_taskbar: bool,
+    #[serde(default)]
+    pub audio_buffer: AudioBufferSetting,
 }
 
 fn now_ms() -> i64 {
@@ -378,6 +475,11 @@ fn build_scrcpy_args(serial: &str, s: &CoreSettings) -> Vec<String> {
     }
     if s.no_audio {
         a.push("--no-audio".into());
+    } else {
+        a.push(format!(
+            "--audio-buffer={}",
+            resolve_audio_buffer_ms(serial, s.audio_buffer)
+        ));
     }
     if s.no_control {
         a.push("--no-control".into());
@@ -705,6 +807,7 @@ fn degrade_args(args: &[String]) -> Vec<String> {
                 && !a.starts_with("--video-codec")
                 && !a.starts_with("--camera-size")
                 && !a.starts_with("--camera-fps")
+                && !a.starts_with("--audio-buffer=")
                 && a.as_str() != "--no-audio"
         })
         .cloned()
@@ -2734,7 +2837,7 @@ other _weird._tcp 10.0.0.6:1234\n";
         assert!(parse_mdns_services(text).is_empty());
     }
 
-    fn base_settings() -> CoreSettings {
+    pub(super) fn base_settings() -> CoreSettings {
         CoreSettings {
             max_size: 0,
             video_bit_rate: 0,
@@ -2753,6 +2856,7 @@ other _weird._tcp 10.0.0.6:1234\n";
             render_fit: String::new(),
             embedded: false,
             hide_virtual_taskbar: false,
+            audio_buffer: AudioBufferSetting::Auto,
         }
     }
 
@@ -4400,6 +4504,99 @@ pub async fn stop_recording(
     spawn_session_inner(&app, serial, new_args, false, &old_mode, false).await
 }
 
+pub(crate) fn update_audio_buffer_args(args: &[String], buffer_ms: u32) -> Vec<String> {
+    let mut out: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with("--audio-buffer="))
+        .cloned()
+        .collect();
+    if !out
+        .iter()
+        .any(|a| a == "--no-audio" || a == "--no-audio-playback")
+    {
+        out.push(format!("--audio-buffer={}", buffer_ms));
+    }
+    out
+}
+
+/// Restart an active display mirror session in place (#93 / #108 / #110) with an
+/// updated `--audio-buffer=<ms>` value without closing the embedded mirror window.
+#[tauri::command]
+pub async fn restart_with_audio_buffer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    serial: String,
+    audio_buffer: AudioBufferSetting,
+) -> Result<Option<SessionInfo>, String> {
+    let target_ms = resolve_audio_buffer_ms(&serial, audio_buffer);
+    let target_arg = format!("--audio-buffer={}", target_ms);
+
+    let existing = {
+        let mut map = state.sessions.lock().map_err(poison_error)?;
+        let target_id = map
+            .iter()
+            .find(|(_, s)| {
+                s.serial == serial
+                    && s.mode == "display"
+                    && !s
+                        .args
+                        .iter()
+                        .any(|a| a == "--no-audio" || a == "--no-audio-playback")
+                    && !s.args.iter().any(|a| a == &target_arg)
+            })
+            .map(|(id, _)| id.clone());
+        match target_id {
+            Some(id) => {
+                let removed = map.remove(&id);
+                if let Some(ref s) = removed {
+                    state.mark_restarting(&s.id);
+                }
+                removed
+            }
+            None => return Ok(None),
+        }
+    };
+
+    let Some(old) = existing else {
+        return Ok(None);
+    };
+
+    let old_id = old.id.clone();
+    let old_pid = old.pid;
+    let old_mode = old.mode.clone();
+    let new_args = toggle_record_args(&update_audio_buffer_args(&old.args, target_ms), None);
+
+    let _ = app.emit(
+        "session-restarting",
+        SessionRestarting {
+            id: old_id.clone(),
+            serial: serial.clone(),
+            reason: "audio-buffer".into(),
+        },
+    );
+
+    let _ = stop_child_gracefully(old.child, old_pid, &serial).await;
+    crate::embed::remove_embedded_scrcpy_hwnd_for_pid(&serial, old_pid);
+
+    match spawn_session_inner(&app, serial.clone(), new_args, false, &old_mode, false).await {
+        Ok(info) => Ok(Some(info)),
+        Err(err) => {
+            let _ = app.emit(
+                "session-exited",
+                SessionExited {
+                    id: old_id,
+                    serial,
+                    code: None,
+                    signal: None,
+                    last_error: err.clone(),
+                    stderr: String::new(),
+                },
+            );
+            Err(err)
+        }
+    }
+}
+
 /// Restart a stalled Flex session in place without closing its embedded host window.
 pub(crate) async fn restart_flex_session_in_place(
     app: &AppHandle,
@@ -4704,6 +4901,7 @@ mod spec20_tests {
             render_fit: "letterbox".into(),
             embedded: false,
             hide_virtual_taskbar: false,
+            audio_buffer: AudioBufferSetting::Auto,
         };
         let app_args = build_app_window_args("SER123", &s, "com.example.app", "Pixel 9");
         assert!(app_args.contains(&"--new-display".to_string()));
@@ -4713,6 +4911,7 @@ mod spec20_tests {
         assert!(!app_args.contains(&"--keyboard=uhid".to_string()));
         assert!(app_args.contains(&"--start-app=com.example.app".to_string()));
         assert!(app_args.contains(&"--window-title=com.example.app — Pixel 9".to_string()));
+        assert!(app_args.contains(&"--audio-buffer=50".to_string()));
 
         // Per-app `--new-display` windows must also avoid UHID even if Mirror defaults set no_keyboard_ime.
         let s_uhid = CoreSettings {
@@ -4733,6 +4932,7 @@ mod spec20_tests {
             render_fit: "letterbox".into(),
             embedded: false,
             hide_virtual_taskbar: false,
+            audio_buffer: AudioBufferSetting::Auto,
         };
         let app_args_uhid = build_app_window_args("SER123", &s_uhid, "com.example.app", "Pixel 9");
         assert!(app_args_uhid.contains(&"--new-display".to_string()));
@@ -4858,5 +5058,158 @@ mod spec20_tests {
         assert!(adb_server_listening(port).await);
         drop(listener);
         assert!(!adb_server_listening(port).await);
+    }
+
+    #[test]
+    fn resolve_audio_buffer_ms_handles_auto_and_overrides() {
+        for usb in ["SER123", "emulator-5554", "usb:1-2"] {
+            assert_eq!(resolve_audio_buffer_ms(usb, AudioBufferSetting::Auto), 50);
+            assert_eq!(resolve_audio_buffer_ms(usb, AudioBufferSetting::Ms(50)), 50);
+            assert_eq!(
+                resolve_audio_buffer_ms(usb, AudioBufferSetting::Ms(100)),
+                100
+            );
+            assert_eq!(
+                resolve_audio_buffer_ms(usb, AudioBufferSetting::Ms(200)),
+                200
+            );
+        }
+        for wifi in ["192.168.1.24:36431", "[fe80::1]:5555"] {
+            assert_eq!(resolve_audio_buffer_ms(wifi, AudioBufferSetting::Auto), 150);
+            assert_eq!(
+                resolve_audio_buffer_ms(wifi, AudioBufferSetting::Ms(50)),
+                50
+            );
+            assert_eq!(
+                resolve_audio_buffer_ms(wifi, AudioBufferSetting::Ms(100)),
+                100
+            );
+            assert_eq!(
+                resolve_audio_buffer_ms(wifi, AudioBufferSetting::Ms(200)),
+                200
+            );
+        }
+    }
+
+    #[test]
+    fn core_settings_deserializes_audio_buffer_with_safe_fallback() {
+        let base_json = |extra: &str| {
+            format!(
+                r#"{{
+                    "maxSize": 1280,
+                    "videoBitRate": 8000000,
+                    "maxFps": 60,
+                    "videoCodec": "h264",
+                    "stayAwake": true,
+                    "turnScreenOff": false,
+                    "fullscreen": false,
+                    "showTouches": false,
+                    "noAudio": false,
+                    "noControl": false,
+                    "noKeyboardIme": false,
+                    "flexDisplay": false,
+                    "flexDisplaySize": "",
+                    "noWindowAspectRatioLock": false,
+                    "renderFit": "letterbox"{extra}
+                }}"#
+            )
+        };
+
+        let missing: CoreSettings = serde_json::from_str(&base_json("")).unwrap();
+        assert_eq!(missing.audio_buffer, AudioBufferSetting::Auto);
+
+        let auto: CoreSettings =
+            serde_json::from_str(&base_json(r#", "audioBuffer": "auto""#)).unwrap();
+        assert_eq!(auto.audio_buffer, AudioBufferSetting::Auto);
+
+        for ms in [50u32, 100, 200] {
+            let parsed: CoreSettings =
+                serde_json::from_str(&base_json(&format!(r#", "audioBuffer": {ms}"#))).unwrap();
+            assert_eq!(parsed.audio_buffer, AudioBufferSetting::Ms(ms));
+        }
+
+        for bogus in [r#""bogus""#, "75", "999", "null"] {
+            let parsed: CoreSettings =
+                serde_json::from_str(&base_json(&format!(r#", "audioBuffer": {bogus}"#))).unwrap();
+            assert_eq!(parsed.audio_buffer, AudioBufferSetting::Auto);
+        }
+    }
+
+    #[test]
+    fn build_scrcpy_args_audio_buffer_matrix() {
+        let cases = [
+            (AudioBufferSetting::Auto, "50", "150"),
+            (AudioBufferSetting::Ms(50), "50", "50"),
+            (AudioBufferSetting::Ms(100), "100", "100"),
+            (AudioBufferSetting::Ms(200), "200", "200"),
+        ];
+
+        for (setting, expected_usb, expected_wifi) in cases {
+            for (serial, expected) in [
+                ("USB123", expected_usb),
+                ("192.168.1.24:36431", expected_wifi),
+            ] {
+                let mut on = super::tests::base_settings();
+                on.no_audio = false;
+                on.audio_buffer = setting;
+                let args_on = build_scrcpy_args(serial, &on);
+                assert!(
+                    args_on.contains(&format!("--audio-buffer={expected}")),
+                    "expected --audio-buffer={expected} for {serial} / {setting:?}, got {args_on:?}"
+                );
+                assert!(!args_on.contains(&"--no-audio".to_string()));
+
+                let mut off = super::tests::base_settings();
+                off.no_audio = true;
+                off.audio_buffer = setting;
+                let args_off = build_scrcpy_args(serial, &off);
+                assert!(args_off.contains(&"--no-audio".to_string()));
+                assert!(
+                    !args_off.iter().any(|a| a.starts_with("--audio-buffer=")),
+                    "unexpected --audio-buffer when no_audio=true for {serial} / {setting:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn degrade_args_strips_audio_buffer_and_restart_helpers_preserve_it() {
+        let mut s = super::tests::base_settings();
+        s.audio_buffer = AudioBufferSetting::Ms(200);
+        let args = build_scrcpy_args("192.168.1.24:36431", &s);
+        assert!(args.contains(&"--audio-buffer=200".to_string()));
+
+        // #93 restart helpers preserve the chosen --audio-buffer.
+        let rec = toggle_record_args(&args, Some("C:\\Videos\\AnyLeap\\rec.mp4"));
+        assert!(rec.contains(&"--audio-buffer=200".to_string()));
+        let unrec = toggle_record_args(&rec, None);
+        assert!(unrec.contains(&"--audio-buffer=200".to_string()));
+        let screen_off = restart_screen_off_args(&rec, true);
+        assert!(screen_off.contains(&"--audio-buffer=200".to_string()));
+
+        // update_audio_buffer_args replaces existing --audio-buffer and respects --no-audio.
+        let updated = update_audio_buffer_args(&args, 100);
+        assert_eq!(
+            updated
+                .iter()
+                .filter(|a| a.starts_with("--audio-buffer="))
+                .count(),
+            1
+        );
+        assert!(updated.contains(&"--audio-buffer=100".to_string()));
+
+        let mut muted = super::tests::base_settings();
+        muted.no_audio = true;
+        let muted_args = build_scrcpy_args("192.168.1.24:36431", &muted);
+        let muted_updated = update_audio_buffer_args(&muted_args, 200);
+        assert!(!muted_updated
+            .iter()
+            .any(|a| a.starts_with("--audio-buffer=")));
+        assert!(muted_updated.contains(&"--no-audio".to_string()));
+
+        // degrade_args strips --audio-buffer=* and emits --no-audio.
+        let degraded = degrade_args(&args);
+        assert!(degraded.contains(&"--no-audio".to_string()));
+        assert!(!degraded.iter().any(|a| a.starts_with("--audio-buffer=")));
     }
 }

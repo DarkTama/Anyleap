@@ -150,3 +150,8 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
 - [ ] App filter chips, search (Escape clears), collapsible app headers, and deterministic colored letter avatars work smoothly.
 - [ ] Mark an app as sensitive via `Mute…` → **Mark `<App>` as sensitive**: notification body and desktop toast preview mask immediately; clicking **Sensitive content hidden — click to reveal** reveals in memory and switching away re-masks automatically.
 - [ ] Click **Hide in AnyLeap** on a notification → removed locally with `<N> hidden · Show` restore control while remaining untouched in Android's notification shade.
+
+## SPEC-34 Phase 1 (Adaptive Audio Buffer)
+- [ ] **USB baseline (`Auto` = 50 ms):** Connect a phone over USB, launch Mirror with **Audio buffer** set to `Auto` (`Currently 50 ms on USB.`), and verify audio plays with crisp lip-sync.
+- [ ] **Wireless (`Auto` = 150 ms) & weak Wi-Fi check:** Connect over wireless ADB (`IP:port`), confirm `Auto` shows `Currently 150 ms on Wi-Fi.`, reproduce crackling at `50 ms` on busy Wi-Fi, then switch to `Auto` or `200 ms` and verify playback stabilizes.
+- [ ] **In-place restart while mirroring:** With an embedded mirror session running and audio on, change **Audio buffer** in **Settings → Phone mirroring** (e.g., `Auto` → `200 ms`); verify the session restarts in place inside the same embedded window (no new window opens) and `No audio` disables the control.

@@ -36,11 +36,14 @@ pub fn can_start_audio_only(
 }
 
 pub fn build_audio_only_args(serial: &str) -> Vec<String> {
+    let buffer_ms =
+        crate::commands::resolve_audio_buffer_ms(serial, crate::commands::AudioBufferSetting::Auto);
     vec![
         "--serial".to_string(),
         serial.to_string(),
         "--no-video".to_string(),
         "--no-window".to_string(),
+        format!("--audio-buffer={buffer_ms}"),
     ]
 }
 
@@ -248,10 +251,28 @@ mod tests {
         assert!(can_start_audio_only(false, false).is_ok());
         assert!(can_start_audio_only(false, true).is_ok());
 
-        let args = build_audio_only_args("SER123");
+        let usb_args = build_audio_only_args("SER123");
         assert_eq!(
-            args,
-            vec!["--serial", "SER123", "--no-video", "--no-window"]
+            usb_args,
+            vec![
+                "--serial",
+                "SER123",
+                "--no-video",
+                "--no-window",
+                "--audio-buffer=50"
+            ]
+        );
+
+        let wifi_args = build_audio_only_args("192.168.1.24:36431");
+        assert_eq!(
+            wifi_args,
+            vec![
+                "--serial",
+                "192.168.1.24:36431",
+                "--no-video",
+                "--no-window",
+                "--audio-buffer=150"
+            ]
         );
     }
 }

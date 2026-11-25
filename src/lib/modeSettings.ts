@@ -1,6 +1,12 @@
 // SPEC-28 / ADR-0005: per-mode mirroring defaults, resolver, migration and UI helpers.
 // Pure module: no I/O. Persistence lives in settingsStore.ts.
-import type { CameraSettings, CoreSettings, PresetVideo, QualityBundleId } from "./types";
+import type {
+  AudioBufferSetting,
+  CameraSettings,
+  CoreSettings,
+  PresetVideo,
+  QualityBundleId,
+} from "./types";
 import { DEFAULT_SETTINGS, PRESET_BUNDLES } from "./types";
 
 export type MirrorMode = "mirror" | "flex" | "camera" | "hifi";
@@ -142,7 +148,11 @@ export const DEFAULT_MODE_DEFAULTS: ModeDefaultsV2 = defaultModeDefaults();
  */
 export function resolveLaunchSettings(mode: DisplayMode, defaults: ModeDefaultsV2): CoreSettings {
   const { scroll: _scroll, ...core } = defaults[mode];
-  return { ...core, flexDisplay: mode === "flex" };
+  return {
+    ...core,
+    audioBuffer: normalizeAudioBuffer(core.audioBuffer, "auto"),
+    flexDisplay: mode === "flex",
+  };
 }
 
 /** Camera launch dialog pre-fill: persisted defaults, overridden by per-launch choices. */
@@ -159,6 +169,13 @@ export function toCameraSettings(
 }
 
 // --- Normalisation of a persisted object ---------------------------------------------------
+
+export function normalizeAudioBuffer(
+  raw: unknown,
+  fallback: AudioBufferSetting = "auto",
+): AudioBufferSetting {
+  return raw === "auto" || raw === 50 || raw === 100 || raw === 200 ? raw : fallback;
+}
 
 function normalizeScrollSettings(raw: unknown, fallback: ScrollSettings): ScrollSettings {
   if (!raw || typeof raw !== "object") return { ...fallback };
@@ -188,6 +205,7 @@ function pickModeSettings(raw: unknown, fallback: ModeSettings): ModeSettings {
   const merged = { ...fallback, ...rawObj };
   return {
     ...stripFlex({ ...merged, flexDisplay: false }),
+    audioBuffer: normalizeAudioBuffer(rawObj.audioBuffer, fallback.audioBuffer ?? "auto"),
     scroll: normalizeScrollSettings(rawObj.scroll, fallback.scroll),
   };
 }
@@ -248,7 +266,11 @@ export function migrateLegacy(
   if (!legacy || typeof legacy !== "object") {
     return { modeDefaults: defaultModeDefaults(), audioNotice: false };
   }
-  const S: CoreSettings = { ...DEFAULT_SETTINGS, ...legacy };
+  const S: CoreSettings = {
+    ...DEFAULT_SETTINGS,
+    ...legacy,
+    audioBuffer: normalizeAudioBuffer(legacy.audioBuffer, "auto"),
+  };
   const bundleId: QualityBundleId =
     preset === "low" || preset === "medium" || preset === "high" || preset === "highest"
       ? preset
