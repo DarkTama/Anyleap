@@ -12,6 +12,12 @@ import {
   normalizeTransferFolders,
   type TransferFoldersSettings,
 } from "./transferFolders";
+import {
+  DEFAULT_NOTIFICATION_STORAGE,
+  migrateInvalidPerAppEntries,
+  normalizeNotificationStorage,
+  type NotificationStorageSettings,
+} from "./notificationStorage";
 
 export interface AppPrefs {
   minimizeToTrayOnClose: boolean;
@@ -229,6 +235,42 @@ export async function saveTransferFolders(
 ): Promise<void> {
   const store = await getStore();
   await store.set("transferFolders", normalizeTransferFolders(settings));
+  await store.save();
+}
+
+export async function loadNotificationStorageFrom(
+  store: KeyValueStore,
+  savedPackages?: ReadonlySet<string>,
+): Promise<NotificationStorageSettings> {
+  const existing = await store.get<unknown>("notificationStorage");
+  if (existing !== undefined && existing !== null) {
+    const normalized = normalizeNotificationStorage(existing);
+    if (savedPackages !== undefined) {
+      const migrated = migrateInvalidPerAppEntries(normalized, savedPackages);
+      if (migrated.dropped.length > 0) {
+        await store.set("notificationStorage", migrated.settings);
+        await store.save();
+        return migrated.settings;
+      }
+    }
+    return normalized;
+  }
+  return {
+    ...DEFAULT_NOTIFICATION_STORAGE,
+    largeIncomeThresholdByCurrency: {},
+    perApp: {},
+  };
+}
+
+export async function loadNotificationStorage(): Promise<NotificationStorageSettings> {
+  return loadNotificationStorageFrom(await getStore());
+}
+
+export async function saveNotificationStorage(
+  settings: NotificationStorageSettings,
+): Promise<void> {
+  const store = await getStore();
+  await store.set("notificationStorage", normalizeNotificationStorage(settings));
   await store.save();
 }
 

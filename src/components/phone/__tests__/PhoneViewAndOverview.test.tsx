@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/store/useAppStore";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
 import { DEFAULT_TRANSFER_FOLDERS } from "@/lib/transferFolders";
+import { DEFAULT_NOTIFICATION_STORAGE } from "@/lib/notificationStorage";
 import type { DeviceEntry } from "@/lib/types";
 import type { PhoneOverview } from "@/types/phone";
 
@@ -26,6 +27,12 @@ const mockPhoneGetOverview = vi.fn<(...args: unknown[]) => Promise<PhoneOverview
   }),
 );
 const mockPhoneGetConversations = vi.fn((..._args: unknown[]) => Promise.resolve([]));
+const mockPhoneGetSavedNotificationDevices = vi.fn<() => Promise<string[]>>(() =>
+  Promise.resolve([]),
+);
+const mockPhoneGetNotificationHistory = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(() =>
+  Promise.resolve([]),
+);
 const mockGetPhoneToggles = vi.fn((..._args: unknown[]) =>
   Promise.resolve({ wifi: true, bluetooth: false, dnd: false }),
 );
@@ -74,11 +81,29 @@ vi.mock("@/services/phoneHubService", () => ({
   phoneHubUnwatch: (...args: unknown[]) => mockPhoneHubUnwatch(...args),
   phoneGetOverview: (...args: unknown[]) => mockPhoneGetOverview(...args),
   phoneGetConversations: (...args: unknown[]) => mockPhoneGetConversations(...args),
+  phoneGetSavedNotificationDevices: () => mockPhoneGetSavedNotificationDevices(),
+  phoneGetNotificationHistory: (...args: unknown[]) =>
+    mockPhoneGetNotificationHistory(...args),
+  phoneSetNotificationHidden: vi.fn(() => Promise.resolve()),
+  phoneDeleteAllNotificationData: vi.fn(() => Promise.resolve({})),
+  phoneOpenApp: vi.fn(() => Promise.resolve({})),
   phoneAudioStart: vi.fn(() => Promise.resolve()),
   phoneAudioStop: vi.fn(() => Promise.resolve()),
   onPhoneOverview: vi.fn(() => Promise.resolve(() => {})),
   onPhoneAudioState: vi.fn(() => Promise.resolve(() => {})),
   onPhoneMessagesUpdated: vi.fn(() => Promise.resolve(() => {})),
+  onPhoneNotifications: vi.fn(() => Promise.resolve(() => {})),
+  phoneGetTransactions: vi.fn(() =>
+    Promise.resolve({
+      transactions: [],
+      liabilityEvents: [],
+      subAccountNicknames: {},
+      currencies: [],
+      ruleWarnings: [],
+    }),
+  ),
+  phoneResolveLiabilityEvent: vi.fn(() => Promise.resolve({})),
+  phoneApplyTransactionCorrection: vi.fn(() => Promise.resolve({})),
 }));
 
 vi.mock("@/lib/tauri", () => ({
@@ -105,6 +130,10 @@ describe("PhoneView & OverviewView (SPEC-27b Task B2)", () => {
     mockPhoneHubUnwatch.mockClear();
     mockPhoneGetOverview.mockClear();
     mockPhoneGetConversations.mockClear();
+    mockPhoneGetSavedNotificationDevices.mockReset();
+    mockPhoneGetSavedNotificationDevices.mockResolvedValue([]);
+    mockPhoneGetNotificationHistory.mockReset();
+    mockPhoneGetNotificationHistory.mockResolvedValue([]);
     mockGetPhoneToggles.mockClear();
     mockSetPhoneToggle.mockClear();
     mockPushToDevice.mockClear();
@@ -113,6 +142,12 @@ describe("PhoneView & OverviewView (SPEC-27b Task B2)", () => {
     dragListeners = [];
     mockOnDragDropEvent.mockClear();
     usePhoneHubStore.getState().reset();
+    useAppStore.getState().setNotificationStorage({
+      ...DEFAULT_NOTIFICATION_STORAGE,
+      largeIncomeThresholdByCurrency: {},
+      perApp: {},
+    });
+    useAppStore.getState().setSavedDevices([]);
     useAppStore.getState().setTransferFolders({ ...DEFAULT_TRANSFER_FOLDERS });
     useAppStore.setState({
       devices: [
@@ -387,5 +422,93 @@ describe("PhoneView & OverviewView (SPEC-27b Task B2)", () => {
       "/storage/emulated/0/Work",
     );
     expect(container.textContent).toContain("Uploaded 1 item(s) to /storage/emulated/0/Work");
+  });
+
+  it("shows saved offline notification history for a known device when persistence is enabled", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    useAppStore.setState({
+      devices: [],
+      savedDevices: [
+        {
+          id: "HW_OFFLINE_1",
+          hw_serial: "HW_OFFLINE_1",
+          label: "Pixel Saved",
+          host: "192.168.1.99",
+          port: 5555,
+          lastSerial: "192.168.1.99:5555",
+        },
+      ],
+      notificationStorage: {
+        ...DEFAULT_NOTIFICATION_STORAGE,
+        historyEnabled: true,
+        largeIncomeThresholdByCurrency: {},
+        perApp: {},
+      },
+    });
+    mockPhoneGetNotificationHistory.mockResolvedValueOnce([
+      {
+        dedupeId: `HW_OFFLINE_1::k1::${nowSec - 30}`,
+        hwSerial: "HW_OFFLINE_1",
+        key: "k1",
+        package: "com.example.chat",
+        appLabel: "Example Chat",
+        title: "Saved offline message",
+        text: "Still encrypted locally",
+        postedUnix: nowSec - 30,
+        capturedUnix: nowSec - 25,
+        hiddenLocal: false,
+      },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <PhoneView
+          subTab="notifications"
+          onSubTabChange={() => {}}
+          selectedSerial={null}
+          onSelectSerial={() => {}}
+          notifications={[]}
+          notificationsLoading={false}
+          notificationsError={null}
+          onRefreshNotifications={() => {}}
+        />,
+      );
+    });
+
+    expect(mockPhoneHubWatch).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Offline — showing saved history");
+    expect(container.textContent).toContain("Still encrypted locally");
+  });
+
+  it("renders Money tab below Notifications and wires Settings navigation from setup state", async () => {
+    const onOpenSettings = vi.fn();
+    await act(async () => {
+      root.render(
+        <PhoneView
+          subTab="money"
+          onSubTabChange={() => {}}
+          selectedSerial="192.168.1.50:5555"
+          onSelectSerial={() => {}}
+          notifications={[]}
+          notificationsLoading={false}
+          notificationsError={null}
+          onRefreshNotifications={() => {}}
+          onOpenSettings={onOpenSettings}
+        />,
+      );
+    });
+
+    const navButtons = Array.from(container.querySelectorAll('nav[aria-label="Phone sections"] button'));
+    const labels = navButtons.map((b) => b.textContent?.trim());
+    expect(labels.indexOf("Money")).toBe(labels.indexOf("Notifications") + 1);
+
+    const openSettingsBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Open Settings"),
+    );
+    expect(openSettingsBtn).toBeTruthy();
+    await act(async () => {
+      openSettingsBtn!.click();
+    });
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });

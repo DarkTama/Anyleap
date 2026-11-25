@@ -6,7 +6,7 @@ import { MouseKeyboardSection } from "@/components/settings/MouseKeyboardSection
 import { ClipboardFilesSection } from "@/components/settings/ClipboardFilesSection";
 import { AudioMediaPowerSection } from "@/components/settings/AudioMediaPowerSection";
 import { AdvancedSection } from "@/components/settings/AdvancedSection";
-import { SettingsShell } from "@/components/settings/SettingsShell";
+import { SettingsShell, type SettingsFocusTarget } from "@/components/settings/SettingsShell";
 import { useKvmStore } from "@/stores/kvmStore";
 import { kvmSetSyncSettings } from "@/services/kvmService";
 
@@ -15,7 +15,13 @@ import { kvmSetSyncSettings } from "@/services/kvmService";
  * `onOpenComputers` switches to the Computers tab, the single editor for crossing
  * delay and corner dead zone (§9.2).
  */
-export function SettingsPanel({ onOpenComputers }: { onOpenComputers?: () => void }) {
+export function SettingsPanel({
+  onOpenComputers,
+  focusTarget,
+}: {
+  onOpenComputers?: () => void;
+  focusTarget?: SettingsFocusTarget | null;
+}) {
   const text = useKvmStore((s) => s.settings.syncClipboardText);
   const image = useKvmStore((s) => s.settings.syncClipboardImage);
 
@@ -26,6 +32,7 @@ export function SettingsPanel({ onOpenComputers }: { onOpenComputers?: () => voi
 
   return (
     <SettingsShell
+      focusTarget={focusTarget}
       sections={{
         general: ({ show }) => <GeneralSection show={show} />,
         phone: () => <PhoneMirroringSection />,

@@ -12,13 +12,25 @@ export type SectionRender = (ctx: {
   filtering: boolean;
 }) => ReactNode;
 
+export interface SettingsFocusTarget {
+  section: SectionId;
+  anchorId?: string;
+  nonce: number;
+}
+
 /**
  * Settings layout (SPEC-28 §7, §10): filter box, skip link, left rail and a pane.
  * With no query the pane shows the current section; with a query it shows every section
  * that has matches (matching rows only) and the rail lists just those sections.
  * Filtering never changes values.
  */
-export function SettingsShell({ sections }: { sections: Record<SectionId, SectionRender> }) {
+export function SettingsShell({
+  sections,
+  focusTarget,
+}: {
+  sections: Record<SectionId, SectionRender>;
+  focusTarget?: SettingsFocusTarget | null;
+}) {
   const [query, setQuery] = useState("");
   const [current, setCurrent] = useState<SectionId>("general");
   const [focusTick, setFocusTick] = useState(0);
@@ -30,6 +42,27 @@ export function SettingsShell({ sections }: { sections: Record<SectionId, Sectio
 
   const shown: SectionId[] = filtering ? result.sections : [current];
   const show: ShowFn = (id) => result.matches.has(id);
+
+  // Navigate to a specific section + anchor when requested from another view (e.g. Money -> Settings).
+  useEffect(() => {
+    if (!focusTarget) return;
+    setQuery("");
+    setCurrent(focusTarget.section);
+  }, [focusTarget]);
+
+  const scrolledNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focusTarget || !focusTarget.anchorId) return;
+    if (current !== focusTarget.section) return;
+    if (scrolledNonceRef.current === focusTarget.nonce) return;
+    const el =
+      paneRef.current?.querySelector<HTMLElement>(`#${focusTarget.anchorId}`) ??
+      document.getElementById(focusTarget.anchorId);
+    if (el) {
+      scrolledNonceRef.current = focusTarget.nonce;
+      el.scrollIntoView?.({ block: "start" });
+    }
+  }, [focusTarget, current]);
 
   // Opening a section moves focus to its heading (not on first render).
   useEffect(() => {

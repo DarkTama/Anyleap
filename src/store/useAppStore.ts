@@ -22,6 +22,10 @@ import {
   DEFAULT_TRANSFER_FOLDERS,
   type TransferFoldersSettings,
 } from "@/lib/transferFolders";
+import {
+  DEFAULT_NOTIFICATION_STORAGE,
+  type NotificationStorageSettings,
+} from "@/lib/notificationStorage";
 import type { DefaultTransferFolders } from "@/lib/tauri";
 import type { StudioMode } from "@/components/deck/LaunchMatrix";
 
@@ -39,6 +43,8 @@ interface AppStore {
   appPrefs: AppPrefs;
   transferFolders: TransferFoldersSettings;
   defaultTransferFolders: DefaultTransferFolders;
+  notificationStorage: NotificationStorageSettings;
+  vaultError: string | null;
   error: string | null;
   deviceToggles: Record<string, { screenOff?: boolean; asleep?: boolean; swipeScroll?: boolean }>;
   nicknames: Record<string, string>;
@@ -82,6 +88,8 @@ interface AppStore {
   setTransferFolders: (t: TransferFoldersSettings) => void;
   updateTransferFolders: (patch: Partial<TransferFoldersSettings>) => void;
   setDefaultTransferFolders: (d: DefaultTransferFolders) => void;
+  setNotificationStorage: (n: NotificationStorageSettings) => void;
+  setVaultError: (err: string | null) => void;
   setError: (e: string | null) => void;
   setDeviceToggle: (serial: string, key: "screenOff" | "asleep" | "swipeScroll", val: boolean) => void;
 }
@@ -100,6 +108,12 @@ export const useAppStore = create<AppStore>((set) => ({
     defaultReceiveDir: "",
     defaultPhoneUploadDir: DEFAULT_PHONE_UPLOAD_DIR,
   },
+  notificationStorage: {
+    ...DEFAULT_NOTIFICATION_STORAGE,
+    largeIncomeThresholdByCurrency: {},
+    perApp: {},
+  },
+  vaultError: null,
   error: null,
   deviceToggles: {},
   nicknames: {},
@@ -210,6 +224,8 @@ export const useAppStore = create<AppStore>((set) => ({
       transferFolders: { ...st.transferFolders, ...patch },
     })),
   setDefaultTransferFolders: (defaultTransferFolders) => set({ defaultTransferFolders }),
+  setNotificationStorage: (notificationStorage) => set({ notificationStorage }),
+  setVaultError: (vaultError) => set({ vaultError }),
   setError: (error) => set({ error }),
   setDeviceToggle: (serial, key, val) =>
     set((st) => ({

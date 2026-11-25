@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   BellOff,
   Check,
   ChevronDown,
@@ -14,12 +15,23 @@ import {
   Search,
   Shield,
   ShieldOff,
+  WifiOff,
   X,
 } from "lucide-react";
-import { phoneOpenApp } from "@/services/phoneHubService";
+import {
+  phoneDeleteAllNotificationData,
+  phoneGetNotificationHistory,
+  phoneOpenApp,
+  phoneSetNotificationHidden,
+} from "@/services/phoneHubService";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
 import { useAppStore } from "@/store/useAppStore";
-import { saveAppPrefs } from "@/lib/persist";
+import { saveAppPrefs, saveNotificationStorage } from "@/lib/persist";
+import {
+  formatMoneySourceLabel,
+  formatRetentionBadge,
+  withUpdatedAppPolicy,
+} from "@/lib/notificationStorage";
 import { describeOpenApp } from "@/lib/openApp";
 import { logActivity } from "@/stores/activityStore";
 import {
@@ -28,45 +40,24 @@ import {
   filterNotifications,
   formatFullNotificationTime,
   formatRelativeNotificationTime,
-  getAppAvatar,
   getNotificationHideId,
   shouldShowNotificationExpand,
   stackSameTitleNotifications,
 } from "@/lib/notificationTidy";
-import type { PhoneHubNotification } from "@/types/phone";
+import { AppAvatar } from "./AppAvatar";
+import type { PhoneHubNotification, StoredNotification } from "@/types/phone";
 
 const VISIBLE_BATCH_SIZE = 50;
 
 interface NotificationsViewProps {
   serial: string;
+  hwSerial?: string;
+  isOffline?: boolean;
   notifications: PhoneHubNotification[];
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
   onOpenSettings?: () => void;
-}
-
-interface AppAvatarProps {
-  label: string;
-  packageName: string;
-  sizeClass?: string;
-}
-
-function AppAvatar({
-  label,
-  packageName,
-  sizeClass = "h-6 w-6 text-[11px]",
-}: AppAvatarProps) {
-  const { letter, bg, fg } = getAppAvatar(label, packageName);
-  return (
-    <span
-      aria-hidden="true"
-      style={{ backgroundColor: bg, color: fg }}
-      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-md border border-ink-700 font-bold`}
-    >
-      {letter}
-    </span>
-  );
 }
 
 interface NotificationRowProps {
@@ -230,6 +221,8 @@ function NotificationRow({
 
 export function NotificationsView({
   serial,
+  hwSerial,
+  isOffline = false,
   notifications,
   loading,
   error,
@@ -247,7 +240,12 @@ export function NotificationsView({
 
   const appPrefs = useAppStore((s) => s.appPrefs);
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
+  const notificationStorage = useAppStore((s) => s.notificationStorage);
+  const setNotificationStorage = useAppStore((s) => s.setNotificationStorage);
+  const vaultError = useAppStore((s) => s.vaultError);
+  const setVaultError = useAppStore((s) => s.setVaultError);
 
+  const [savedHistory, setSavedHistory] = useState<StoredNotification[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [openMenuPkg, setOpenMenuPkg] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -263,9 +261,90 @@ export function NotificationsView({
   const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  const effectiveHwSerial = hwSerial || serial;
+
+  // Hydrate DPAPI-encrypted saved history when master opt-in is enabled.
+  useEffect(() => {
+    if (!notificationStorage.historyEnabled || !effectiveHwSerial) {
+      setSavedHistory([]);
+      return;
+    }
+    let cancelled = false;
+    void phoneGetNotificationHistory(effectiveHwSerial, 200)
+      .then((items) => {
+        if (!cancelled && Array.isArray(items)) {
+          setSavedHistory(items);
+        }
+      })
+      .catch((err) => {
+        const msg = String(err);
+        if (!cancelled && msg.includes("VAULT_DECRYPT_FAILED")) {
+          setVaultError(msg);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    notificationStorage.historyEnabled,
+    effectiveHwSerial,
+    notifications.length,
+    setVaultError,
+  ]);
+
+  const { mergedNotifications, dedupeIdByHideId, persistedHiddenIds } = useMemo(() => {
+    const byHideId = new Map<string, PhoneHubNotification>();
+    const dedupeMap = new Map<string, string>();
+    const vaultHidden = new Set<string>();
+
+    for (const saved of savedHistory) {
+      const item: PhoneHubNotification = {
+        key: saved.key,
+        package: saved.package,
+        appLabel: saved.appLabel,
+        title: saved.title,
+        text: saved.text,
+        postedUnix: saved.postedUnix,
+      };
+      const hideId = getNotificationHideId(item);
+      byHideId.set(hideId, item);
+      dedupeMap.set(hideId, saved.dedupeId);
+      if (saved.hiddenLocal) {
+        vaultHidden.add(hideId);
+      }
+    }
+
+    for (const live of notifications) {
+      const hideId = getNotificationHideId(live);
+      if (!byHideId.has(hideId)) {
+        byHideId.set(hideId, live);
+      } else {
+        byHideId.set(hideId, live);
+      }
+    }
+
+    return {
+      mergedNotifications: Array.from(byHideId.values()),
+      dedupeIdByHideId: dedupeMap,
+      persistedHiddenIds: vaultHidden,
+    };
+  }, [notifications, savedHistory]);
+
   const mutedSet = useMemo(() => new Set(mutedPackages), [mutedPackages]);
-  const sensitiveSet = useMemo(() => new Set(sensitivePackages), [sensitivePackages]);
-  const hiddenSet = useMemo(() => new Set(hiddenNotificationIds), [hiddenNotificationIds]);
+  const sensitiveSet = useMemo(() => {
+    const next = new Set(sensitivePackages);
+    for (const [pkg, pol] of Object.entries(notificationStorage.perApp)) {
+      if (pol.sensitive) next.add(pkg);
+    }
+    return next;
+  }, [sensitivePackages, notificationStorage.perApp]);
+  const hiddenSet = useMemo(() => {
+    const next = new Set(hiddenNotificationIds);
+    for (const id of persistedHiddenIds) {
+      next.add(id);
+    }
+    return next;
+  }, [hiddenNotificationIds, persistedHiddenIds]);
 
   // Re-mask ephemeral reveal state and reset per-device transient UI state on device switch.
   useEffect(() => {
@@ -284,34 +363,34 @@ export function NotificationsView({
   // Remember app labels seen in notifications for muted summary and filter chips.
   const labelByPkg = useMemo(() => {
     const map = new Map<string, string>();
-    for (const n of notifications) {
+    for (const n of mergedNotifications) {
       if (n.appLabel && n.appLabel !== n.package) {
         map.set(n.package, n.appLabel);
       }
     }
     return map;
-  }, [notifications]);
+  }, [mergedNotifications]);
 
   const mutedHiddenCount = useMemo(
-    () => notifications.filter((n) => mutedSet.has(n.package)).length,
-    [notifications, mutedSet],
+    () => mergedNotifications.filter((n) => mutedSet.has(n.package)).length,
+    [mergedNotifications, mutedSet],
   );
 
   const visibleNotifications = useMemo(
     () =>
-      notifications
+      mergedNotifications
         .filter((n) => !mutedSet.has(n.package))
         .filter((n) => !hiddenSet.has(getNotificationHideId(n)))
         .sort((a, b) => b.postedUnix - a.postedUnix),
-    [notifications, mutedSet, hiddenSet],
+    [mergedNotifications, mutedSet, hiddenSet],
   );
 
   const locallyHiddenCount = useMemo(
     () =>
-      notifications.filter(
+      mergedNotifications.filter(
         (n) => !mutedSet.has(n.package) && hiddenSet.has(getNotificationHideId(n)),
       ).length,
-    [notifications, mutedSet, hiddenSet],
+    [mergedNotifications, mutedSet, hiddenSet],
   );
 
   // Per-app chips computed from non-muted, non-locally-hidden notifications.
@@ -466,6 +545,14 @@ export function NotificationsView({
     const wasSensitive = sensitiveSet.has(pkg);
     setOpenMenuPkg(null);
     togglePackageSensitive(pkg);
+    if (notificationStorage.perApp[pkg]) {
+      const next = withUpdatedAppPolicy(notificationStorage, pkg, (p) => ({
+        ...p,
+        sensitive: !wasSensitive,
+      }));
+      setNotificationStorage(next);
+      void saveNotificationStorage(next).catch(() => {});
+    }
     setRevealedIds((prev) => {
       const next = new Set(prev);
       for (const id of prev) {
@@ -478,6 +565,41 @@ export function NotificationsView({
         ? `${label} unmarked as sensitive`
         : `${label} marked as sensitive`,
     );
+  }
+
+  function handleHideItem(hideId: string) {
+    hideNotificationLocal(hideId);
+    const dedupeId = dedupeIdByHideId.get(hideId);
+    if (notificationStorage.historyEnabled && dedupeId) {
+      setSavedHistory((prev) =>
+        prev.map((s) => (s.dedupeId === dedupeId ? { ...s, hiddenLocal: true } : s)),
+      );
+      void phoneSetNotificationHidden(dedupeId, true).catch(() => {});
+    }
+  }
+
+  function handleUnhideAll() {
+    unhideAllLocal();
+    if (notificationStorage.historyEnabled) {
+      const hiddenSaved = savedHistory.filter((s) => s.hiddenLocal);
+      if (hiddenSaved.length > 0) {
+        setSavedHistory((prev) => prev.map((s) => ({ ...s, hiddenLocal: false })));
+        for (const s of hiddenSaved) {
+          void phoneSetNotificationHidden(s.dedupeId, false).catch(() => {});
+        }
+      }
+    }
+  }
+
+  async function handleResetCorruptVault() {
+    try {
+      await phoneDeleteAllNotificationData();
+      setVaultError(null);
+      setSavedHistory([]);
+      setActionMsg("Local vault reinitialized.");
+    } catch (e) {
+      setActionMsg(String(e));
+    }
   }
 
   function handleToggleToasts() {
@@ -565,7 +687,8 @@ export function NotificationsView({
           )}
           <button
             type="button"
-            disabled={loading}
+            disabled={loading || isOffline}
+            title={isOffline ? "Connect phone to refresh live notifications" : undefined}
             onClick={onRefresh}
             className="btn-tactile inline-flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-800 px-2.5 py-1 text-xs text-text hover:border-text-muted hover:text-text-strong disabled:opacity-50 cursor-pointer"
           >
@@ -576,6 +699,38 @@ export function NotificationsView({
           </button>
         </div>
       </div>
+
+      {isOffline && (
+        <div
+          role="status"
+          className="flex items-center gap-2 border-b border-ink-700 bg-ink-900 px-4 py-2 text-xs text-mist-300"
+        >
+          <WifiOff className="h-3.5 w-3.5 shrink-0" />
+          <span>Offline — showing saved history</span>
+        </div>
+      )}
+
+      {vaultError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 border-b border-status-danger/40 bg-status-danger-bg px-4 py-2 text-xs text-status-danger"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Unable to decrypt local vault for this Windows user. Delete &amp; reinitialize to
+              start fresh.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleResetCorruptVault()}
+            className="btn-tactile rounded border border-status-danger/50 bg-ink-950 px-2 py-0.5 text-[11px] font-semibold text-status-danger hover:bg-ink-900 cursor-pointer"
+          >
+            Delete &amp; reinitialize
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="border-b border-status-danger/40 bg-status-danger-bg px-4 py-2 text-xs text-status-danger">
@@ -627,7 +782,7 @@ export function NotificationsView({
               {locallyHiddenCount > 0 && (
                 <button
                   type="button"
-                  onClick={unhideAllLocal}
+                  onClick={handleUnhideAll}
                   className="btn-tactile inline-flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5 text-xs text-gold-400 hover:border-gold-400 cursor-pointer"
                 >
                   <Eye className="h-3.5 w-3.5" />
@@ -699,7 +854,7 @@ export function NotificationsView({
                 <h2 className="text-sm font-semibold text-text-strong">
                   {hasFiltersActive
                     ? "No matching notifications"
-                    : notifications.length > 0
+                    : mergedNotifications.length > 0
                       ? "No visible notifications"
                       : "No active notifications"}
                 </h2>
@@ -806,17 +961,29 @@ export function NotificationsView({
                                     Sensitive
                                   </span>
                                 )}
+                                {(notificationStorage.perApp[group.pkg]?.moneySources ?? [])
+                                  .filter((s) => s.enabled)
+                                  .map((src) => (
+                                    <span
+                                      key={src.id}
+                                      className="rounded border border-gold-400/40 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-gold-400"
+                                    >
+                                      {formatMoneySourceLabel(src)}
+                                    </span>
+                                  ))}
                                 {onOpenSettings ? (
                                   <button
                                     type="button"
                                     onClick={onOpenSettings}
                                     className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-text hover:border-gold-400 hover:text-gold-400 cursor-pointer"
                                   >
-                                    Live only · Settings
+                                    {formatRetentionBadge(notificationStorage.perApp[group.pkg])} ·
+                                    Settings
                                   </button>
                                 ) : (
                                   <span className="rounded border border-ink-700 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-text">
-                                    Live only · Settings
+                                    {formatRetentionBadge(notificationStorage.perApp[group.pkg])} ·
+                                    Settings
                                   </span>
                                 )}
 
@@ -918,7 +1085,7 @@ export function NotificationsView({
                                         onMask={maskItem}
                                         onToggleExpand={toggleBodyExpand}
                                         onCopy={(item, id) => void handleCopy(item, id)}
-                                        onHide={hideNotificationLocal}
+                                        onHide={handleHideItem}
                                       />
 
                                       {stack.olderItems.length > 0 && (
@@ -955,7 +1122,7 @@ export function NotificationsView({
                                                     onMask={maskItem}
                                                     onToggleExpand={toggleBodyExpand}
                                                     onCopy={(item, id) => void handleCopy(item, id)}
-                                                    onHide={hideNotificationLocal}
+                                                    onHide={handleHideItem}
                                                   />
                                                 );
                                               })}

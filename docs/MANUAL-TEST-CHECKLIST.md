@@ -150,3 +150,10 @@ Single-PC check that QUIC-injected keys reach a focused Win32 `EDIT` control on 
 - [ ] App filter chips, search (Escape clears), collapsible app headers, and deterministic colored letter avatars work smoothly.
 - [ ] Mark an app as sensitive via `Mute…` → **Mark `<App>` as sensitive**: notification body and desktop toast preview mask immediately; clicking **Sensitive content hidden — click to reveal** reveals in memory and switching away re-masks automatically.
 - [ ] Click **Hide in AnyLeap** on a notification → removed locally with `<N> hidden · Show` restore control while remaining untouched in Android's notification shade.
+
+## K. Per-App Retention & DPAPI Encrypted Vault (SPEC-33 Phase 2) — needs phone
+
+- [ ] **Settings → General → Phone notifications & Money**: confirm **Save notification history & transactions on this PC** (`N-01`) and **Capture notifications while Phone tab is closed** (`N-03`) default to **off**, and `%LOCALAPPDATA%\id.co.dak.anyleap\phone_hub_history.v1.dpapi` does not exist while off.
+- [ ] Turn on `N-01`, configure one app to **Keep history (30 days)** and one app to **Transactions only** with a Money source (`Bank` / `Credit card`), trigger notifications, and verify `phone_hub_history.v1.dpapi` and `phone_hub_transactions.v1.dpapi` contain zero plaintext strings and only the `Keep history` app is hydrated after restarting AnyLeap.
+- [ ] Disconnect the phone while `N-01` is on → open **Phone → Notifications** and verify `"Offline — showing saved history"` renders saved notifications for the known device.
+- [ ] Downgrade the app from **Keep history** to **Don't keep** → confirm the prompt `"Also delete existing saved data for <App>?"` (checked by default) clears its saved history; test **Search apps** (filters live, `Esc` clears, `Enter` never adds), **Other apps (N)** collapse/expand, **"Add an app that isn't listed"** package validation, **Remove from list**, and **Delete all saved data** (`N-08`) confirmation modal removes both `.dpapi` files.

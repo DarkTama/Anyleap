@@ -10,12 +10,23 @@ const mockPhoneGetConversations = vi.fn<(...args: unknown[]) => Promise<Conversa
   Promise.resolve([]),
 );
 const mockPhoneMarkConversationRead = vi.fn((..._args: unknown[]) => Promise.resolve());
+const mockPhoneGetNotificationHistory = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(() =>
+  Promise.resolve([]),
+);
+const mockPhoneSetNotificationHidden = vi.fn((..._args: unknown[]) => Promise.resolve());
+const mockPhoneDeleteAllNotificationData = vi.fn((..._args: unknown[]) => Promise.resolve({}));
 
 vi.mock("@/services/phoneHubService", () => ({
   phoneOpenApp: (...args: unknown[]) => mockPhoneOpenApp(...args),
   phoneGetConversations: (...args: unknown[]) => mockPhoneGetConversations(...args),
   phoneMarkConversationRead: (...args: unknown[]) =>
     mockPhoneMarkConversationRead(...args),
+  phoneGetNotificationHistory: (...args: unknown[]) =>
+    mockPhoneGetNotificationHistory(...args),
+  phoneSetNotificationHidden: (...args: unknown[]) =>
+    mockPhoneSetNotificationHidden(...args),
+  phoneDeleteAllNotificationData: (...args: unknown[]) =>
+    mockPhoneDeleteAllNotificationData(...args),
 }));
 
 vi.mock("@/lib/persist", async (importOriginal) => {
@@ -23,9 +34,11 @@ vi.mock("@/lib/persist", async (importOriginal) => {
   return {
     ...actual,
     saveAppPrefs: vi.fn(() => Promise.resolve()),
+    saveNotificationStorage: vi.fn(() => Promise.resolve()),
   };
 });
 
+import { DEFAULT_NOTIFICATION_STORAGE } from "@/lib/notificationStorage";
 import { NotificationsView } from "../NotificationsView";
 import { MessagesView } from "../MessagesView";
 
@@ -38,7 +51,17 @@ describe("NotificationsView & MessagesView (SPEC-27b + SPEC-33 Phase 1)", () => 
     mockPhoneOpenApp.mockClear();
     mockPhoneGetConversations.mockClear();
     mockPhoneMarkConversationRead.mockClear();
+    mockPhoneGetNotificationHistory.mockReset();
+    mockPhoneGetNotificationHistory.mockResolvedValue([]);
+    mockPhoneSetNotificationHidden.mockClear();
+    mockPhoneDeleteAllNotificationData.mockClear();
     usePhoneHubStore.getState().reset();
+    useAppStore.getState().setNotificationStorage({
+      ...DEFAULT_NOTIFICATION_STORAGE,
+      largeIncomeThresholdByCurrency: {},
+      perApp: {},
+    });
+    useAppStore.getState().setVaultError(null);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -440,5 +463,77 @@ describe("NotificationsView & MessagesView (SPEC-27b + SPEC-33 Phase 1)", () => 
     expect(mockPhoneMarkConversationRead).toHaveBeenCalledWith("serial-1", "new");
     expect(container.textContent).toContain("Read-only — replies need the phone.");
     expect(container.textContent).toContain("2 new messages");
+  });
+
+  it("hydrates saved notification history, shows retention & source badges, and displays offline banner", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    useAppStore.getState().setNotificationStorage({
+      version: 2,
+      historyEnabled: true,
+      backgroundCapture: true,
+      transactionRetention: "1y",
+      transferMatchWindowMinutes: 15,
+      largeIncomeThresholdByCurrency: {},
+      perApp: {
+        "com.example.bank": {
+          retention: "history",
+          retentionDays: 30,
+          sensitive: false,
+          moneySources: [
+            {
+              id: "src_1",
+              type: "bank",
+              ruleTemplate: "generic_bank",
+              enabled: true,
+            },
+          ],
+        },
+      },
+    });
+    mockPhoneGetNotificationHistory.mockResolvedValueOnce([
+      {
+        dedupeId: `HW1::k1::${nowSec - 60}`,
+        hwSerial: "HW1",
+        key: "k1",
+        package: "com.example.bank",
+        appLabel: "Example Bank",
+        title: "Saved Alert",
+        text: "Historical encrypted item",
+        postedUnix: nowSec - 60,
+        capturedUnix: nowSec - 55,
+        hiddenLocal: false,
+      },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <NotificationsView
+          serial="HW1"
+          hwSerial="HW1"
+          isOffline={true}
+          notifications={[]}
+          loading={false}
+          error={null}
+          onRefresh={() => {}}
+        />,
+      );
+    });
+
+    expect(mockPhoneGetNotificationHistory).toHaveBeenCalledWith("HW1", 200);
+    expect(container.textContent).toContain("Offline — showing saved history");
+    expect(container.textContent).toContain("Historical encrypted item");
+    expect(container.textContent).toContain("History · 30d · Settings");
+    expect(container.textContent).toContain("Bank");
+
+    const hideBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Hide in AnyLeap"]',
+    );
+    await act(async () => {
+      hideBtn?.click();
+    });
+    expect(mockPhoneSetNotificationHidden).toHaveBeenCalledWith(
+      `HW1::k1::${nowSec - 60}`,
+      true,
+    );
   });
 });
