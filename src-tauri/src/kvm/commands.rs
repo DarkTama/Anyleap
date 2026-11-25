@@ -973,7 +973,10 @@ where
             ..
         } => {
             super::debug_log::note(|| {
-                format!("DRAG_STAGING_FILE_DONE id={drag_id} rel={rel_path} size={size}")
+                format!(
+                    "DRAG_STAGING_FILE_DONE id={drag_id} file_hash={} size={size}",
+                    super::debug_log::short_hash(&rel_path)
+                )
             });
             let (done_opt, progress) = super::staging::record_file_received(&drag_id, size);
             if done_opt.is_none() {
@@ -1102,7 +1105,10 @@ where
             ..
         } => {
             super::debug_log::note(|| {
-                format!("CLIP_STAGING_FILE_DONE id={offer_id} rel={rel_path} size={size}")
+                format!(
+                    "CLIP_STAGING_FILE_DONE id={offer_id} file_hash={} size={size}",
+                    super::debug_log::short_hash(&rel_path)
+                )
             });
             let (done_opt, progress) = super::staging::record_file_received(&offer_id, size);
             if done_opt.is_none() {
@@ -1209,7 +1215,11 @@ where
         } => {
             if kind == "drag" || kind == "clip" {
                 super::debug_log::note(|| {
-                    format!("STAGING_FAIL kind={kind} id={id} name={name} err={reason}")
+                    format!(
+                        "STAGING_FAIL kind={kind} id={id} file_hash={} err={}",
+                        super::debug_log::short_hash(&name),
+                        super::debug_log::redact_paths_in_text(&reason)
+                    )
                 });
                 if kind == "drag" {
                     super::dragdrop::cancel_target_drag_for_id(&id, "transfer_failed");
@@ -1475,9 +1485,9 @@ fn handle_drag_result(
 ) {
     super::debug_log::note(|| {
         format!(
-            "DRAG_RESULT_RECV id={drag_id} outcome={} notice={}",
+            "DRAG_RESULT_RECV id={drag_id} outcome={} has_notice={}",
             outcome.as_str(),
-            notice.as_deref().unwrap_or("")
+            notice.as_ref().is_some_and(|n| !n.is_empty())
         )
     });
     if let Ok(mut g) = pending_outbound_drag().lock() {
@@ -1543,8 +1553,9 @@ fn spawn_outbound_drag_files_client(
                 Ok(()) => {
                     super::debug_log::note(|| {
                         format!(
-                        "DRAG_FILE_SEND_DONE side=client id={drag_id} rel={rel_path} size={size}"
-                    )
+                            "DRAG_FILE_SEND_DONE side=client id={drag_id} file_hash={} size={size}",
+                            super::debug_log::short_hash(&rel_path)
+                        )
                     });
                 }
                 Err(e) if e == super::files::TRANSFER_CANCELLED_ERR => {
@@ -1565,11 +1576,16 @@ fn spawn_outbound_drag_files_client(
                 Err(e) => {
                     super::debug_log::note(|| {
                         format!(
-                            "DRAG_FILE_SEND_ERR side=client id={drag_id} rel={rel_path} err={e}"
+                            "DRAG_FILE_SEND_ERR side=client id={drag_id} file_hash={} err={}",
+                            super::debug_log::short_hash(&rel_path),
+                            super::debug_log::redact_paths_in_text(&e)
                         )
                     });
                     super::debug_log::note(|| {
-                        format!("DRAG_CANCEL_SEND side=client id={drag_id} reason={e}")
+                        format!(
+                            "DRAG_CANCEL_SEND side=client id={drag_id} reason={}",
+                            super::debug_log::redact_paths_in_text(&e)
+                        )
                     });
                     if let Some(ev) = super::dragdrop::global_drag_registry()
                         .complete_terminal(&drag_id, super::protocol::DragOutcome::Failed)
@@ -2140,7 +2156,8 @@ async fn start_server_inner(
                                 Err(e) => {
                                     super::debug_log::note(|| {
                                         format!(
-                                            "DRAG_CANCEL_SEND side=linked reason=collect_err:{e}"
+                                            "DRAG_CANCEL_SEND side=linked reason=collect_err:{}",
+                                            super::debug_log::redact_paths_in_text(&e)
                                         )
                                     });
                                     emit_continuity_notice(
@@ -3837,6 +3854,26 @@ pub async fn kvm_open_debug_log_folder(app_handle: AppHandle) -> Result<(), Stri
 }
 
 #[tauri::command]
+pub async fn kvm_delete_debug_logs(app_handle: AppHandle) -> Result<usize, String> {
+    let log_dir = app_handle.path().app_log_dir().map_err(|e| e.to_string())?;
+    debug_log::delete_logs_in_dir(&log_dir)
+}
+
+#[tauri::command]
+pub async fn open_app_data_folder(app_handle: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    app_handle
+        .opener()
+        .open_path(data_dir.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn kvm_debug_note(text: String) -> Result<(), String> {
     if !debug_log::is_enabled() {
         return Ok(());
@@ -3844,7 +3881,7 @@ pub async fn kvm_debug_note(text: String) -> Result<(), String> {
     debug_log::record_event(debug_log::DebugEvent::Note {
         ts_us: debug_log::now_us(),
         hwnd: debug_log::foreground_hwnd_raw(),
-        text,
+        text: debug_log::redact_paths_in_text(&text),
     });
     Ok(())
 }

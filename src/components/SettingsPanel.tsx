@@ -6,6 +6,7 @@ import { MouseKeyboardSection } from "@/components/settings/MouseKeyboardSection
 import { ClipboardFilesSection } from "@/components/settings/ClipboardFilesSection";
 import { AudioMediaPowerSection } from "@/components/settings/AudioMediaPowerSection";
 import { AdvancedSection } from "@/components/settings/AdvancedSection";
+import { AboutSection } from "@/components/settings/AboutSection";
 import { SettingsShell } from "@/components/settings/SettingsShell";
 import { useKvmStore } from "@/stores/kvmStore";
 import { kvmSetSyncSettings } from "@/services/kvmService";
@@ -38,6 +39,7 @@ export function SettingsPanel({ onOpenComputers }: { onOpenComputers?: () => voi
         advanced: ({ show, advancedOpen }) => (
           <AdvancedSection show={show} autoOpen={advancedOpen} />
         ),
+        about: ({ show }) => <AboutSection show={show} />,
       }}
     />
   );

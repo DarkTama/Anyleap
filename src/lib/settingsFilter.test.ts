@@ -44,7 +44,7 @@ describe("filterSettings", () => {
   it("every control id has exactly one registry entry", () => {
     const ids = REGISTRY.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
-    for (const id of ["K-01", "K-02", "T-12", "C-03", "M-29", "F-01", "F-02", "F-03"]) {
+    for (const id of ["K-01", "K-02", "T-12", "C-03", "M-29", "F-01", "F-02", "F-03", "K-12", "A-01"]) {
       expect(ids).toContain(id);
     }
     expect(ids).not.toContain("K-08");
@@ -56,5 +56,16 @@ describe("filterSettings", () => {
     expect(filterSettings("prompt").matches.has("F-02")).toBe(true);
     expect(filterSettings("sdcard").matches.has("F-03")).toBe(true);
     expect(filterSettings("upload").matches.has("F-03")).toBe(true);
+  });
+
+  it("matches privacy and delete logs across About and Advanced", () => {
+    const privacy = filterSettings("privacy");
+    expect(privacy.matches.has("A-01")).toBe(true);
+    expect(privacy.matches.has("K-12")).toBe(true);
+    expect(privacy.counts.about).toBe(1);
+
+    const del = filterSettings("delete logs");
+    expect(del.matches.has("K-12")).toBe(true);
+    expect(del.advancedOpen).toBe(true);
   });
 });

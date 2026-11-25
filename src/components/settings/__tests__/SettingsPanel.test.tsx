@@ -19,10 +19,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => mockOpenDialog(...(args as [])),
 }));
 const mockRevealItemInDir = vi.fn(async () => {});
+const mockOpenUrl = vi.fn(async () => {});
 vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: (...args: unknown[]) => mockRevealItemInDir(...(args as [])),
+  openUrl: (...args: unknown[]) => mockOpenUrl(...(args as [])),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => {}) }));
+const mockKvmDeleteDebugLogs = vi.fn(async () => 2);
+const mockOpenAppDataFolder = vi.fn(async () => {});
 vi.mock("@/services/kvmService", async (orig) => ({
   ...(await orig<typeof import("@/services/kvmService")>()),
   kvmSetSyncSettings: vi.fn(async () => {}),
@@ -32,6 +36,8 @@ vi.mock("@/services/kvmService", async (orig) => ({
   kvmSetDebugLog: vi.fn(async () => {}),
   kvmGetDebugLogPath: vi.fn(async () => "C:\\logs\\kvm-debug.log"),
   kvmOpenDebugLogFolder: vi.fn(async () => {}),
+  kvmDeleteDebugLogs: (...args: unknown[]) => mockKvmDeleteDebugLogs(...(args as [])),
+  openAppDataFolder: (...args: unknown[]) => mockOpenAppDataFolder(...(args as [])),
 }));
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -99,7 +105,7 @@ describe("SettingsPanel rail and filter (SPEC-28 phase 2)", () => {
     el.remove();
   });
 
-  it("renders the seven sections in order inside a labelled nav", async () => {
+  it("renders the settings sections in order inside a labelled nav", async () => {
     await mount();
     expect(railButtons().map((b) => b.textContent)).toEqual(SECTIONS.map((s) => s.label));
     expect(rail("General").getAttribute("aria-current")).toBe("page");
@@ -114,9 +120,9 @@ describe("SettingsPanel rail and filter (SPEC-28 phase 2)", () => {
     await key(rail("General"), "ArrowDown");
     expect(document.activeElement).toBe(rail("Phone mirroring"));
     await key(document.activeElement!, "End");
-    expect(document.activeElement).toBe(rail("Advanced"));
+    expect(document.activeElement).toBe(rail("About"));
     await key(document.activeElement!, "ArrowDown");
-    expect(document.activeElement).toBe(rail("Advanced"));
+    expect(document.activeElement).toBe(rail("About"));
     await key(document.activeElement!, "Home");
     expect(document.activeElement).toBe(rail("General"));
     await key(document.activeElement!, "ArrowUp");
@@ -344,5 +350,51 @@ describe("relabelled controls keep writing the same stored key", () => {
 
     // T-04 helper no longer mentions AnyLeap_Transfers
     expect(entry("T-04").helper).not.toContain("AnyLeap_Transfers");
+  });
+
+  it("renders Advanced Delete logs action and reports deleted count", async () => {
+    await mount();
+    await openSection("Advanced");
+    const toggle = el.querySelector<HTMLButtonElement>("button[aria-controls]")!;
+    await act(async () => toggle.click());
+    const deleteBtn = Array.from(el.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Delete logs",
+    )!;
+    expect(deleteBtn).toBeTruthy();
+    await act(async () => deleteBtn.click());
+    expect(mockKvmDeleteDebugLogs).toHaveBeenCalledTimes(1);
+    expect(el.textContent).toContain("Deleted 2 log files.");
+  });
+
+  it("renders About -> Privacy with summary, policy link, data folder, and Delete logs", async () => {
+    await mount();
+    await openSection("About");
+    expect(el.textContent).toContain("Privacy");
+    expect(el.textContent).toContain("no account, no cloud, and no tracking");
+
+    const policyLink = Array.from(el.querySelectorAll("a")).find(
+      (a) => a.textContent?.trim() === "Open privacy policy",
+    )!;
+    expect(policyLink).toBeTruthy();
+    await act(async () => policyLink.click());
+    expect(mockOpenUrl).toHaveBeenCalledWith(
+      "https://github.com/DarkTama/Anyleap/blob/main/PRIVACY.md",
+    );
+
+    const dataFolderBtn = Array.from(el.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Open data folder",
+    )!;
+    expect(dataFolderBtn).toBeTruthy();
+    await act(async () => dataFolderBtn.click());
+    expect(mockOpenAppDataFolder).toHaveBeenCalledTimes(1);
+
+    mockKvmDeleteDebugLogs.mockResolvedValueOnce(0);
+    const deleteBtn = Array.from(el.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Delete logs",
+    )!;
+    expect(deleteBtn).toBeTruthy();
+    await act(async () => deleteBtn.click());
+    expect(mockKvmDeleteDebugLogs).toHaveBeenCalledTimes(1);
+    expect(el.textContent).toContain("No log files to delete.");
   });
 });

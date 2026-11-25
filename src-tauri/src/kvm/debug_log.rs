@@ -1,18 +1,23 @@
 use super::input_logic::{Edge, TrackedKey};
+use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, Once, OnceLock};
+use std::time::{Duration, SystemTime};
 
 pub const DEBUG_LOG_FILE_NAME: &str = "kvm-debug.log";
+pub const DEBUG_LOG_BACKUP_FILE_NAME: &str = "kvm-debug.log.1";
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+pub const MAX_LOG_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
 const CHANNEL_CAPACITY: usize = 2048;
 
 #[allow(clippy::large_enum_variant)] // Kept unboxed so hook callbacks enqueue events without heap allocation.
 enum LogCommand {
     Event(DebugEvent),
     Flush(mpsc::SyncSender<()>),
+    ResetWriter(mpsc::SyncSender<()>),
 }
 
 static DEBUG_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -242,7 +247,6 @@ impl ElevationState {
 #[derive(Debug, Clone)]
 pub struct WindowDetails {
     pub proc_name: String,
-    pub title: String,
     pub elevation: ElevationState,
 }
 
@@ -405,7 +409,7 @@ fn install_panic_hook() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if is_enabled() {
-                note(|| format!("PANIC {info}"));
+                note(|| redact_paths_in_text(&format!("PANIC {info}")));
             }
             prev(info);
         }));
@@ -463,6 +467,7 @@ pub fn set_enabled(enabled: bool, log_path: PathBuf) {
     if enabled {
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
+            let _ = prune_expired_logs(parent, MAX_LOG_AGE, SystemTime::now());
         }
         if let Ok(mut guard) = path_state().lock() {
             guard.0 = log_path;
@@ -475,6 +480,54 @@ pub fn set_enabled(enabled: bool, log_path: PathBuf) {
         flush();
         DEBUG_LOG_ENABLED.store(false, Ordering::Release);
     }
+}
+
+fn reset_writer_handles() {
+    if let Some(tx) = SENDER.get() {
+        let (ack_tx, ack_rx) = mpsc::sync_channel::<()>(1);
+        if tx.try_send(LogCommand::ResetWriter(ack_tx)).is_ok() {
+            let _ = ack_rx.recv_timeout(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Remove `kvm-debug.log` and `kvm-debug.log.1` if their modified time is older than `max_age`.
+pub fn prune_expired_logs(log_dir: &Path, max_age: Duration, now: SystemTime) -> usize {
+    let mut removed = 0usize;
+    let mut need_reset = true;
+    for name in [DEBUG_LOG_FILE_NAME, DEBUG_LOG_BACKUP_FILE_NAME] {
+        let path = log_dir.join(name);
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if now.duration_since(modified).is_ok_and(|age| age > max_age) {
+            if need_reset {
+                reset_writer_handles();
+                need_reset = false;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// Delete all diagnostics log files (`kvm-debug.log` and `kvm-debug.log.1`) in `log_dir`.
+pub fn delete_logs_in_dir(log_dir: &Path) -> Result<usize, String> {
+    reset_writer_handles();
+    let mut removed = 0usize;
+    for name in [DEBUG_LOG_FILE_NAME, DEBUG_LOG_BACKUP_FILE_NAME] {
+        let path = log_dir.join(name);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("Failed to delete {}: {e}", name))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// Non-blocking enqueue from hook callbacks or hook thread.
@@ -498,6 +551,96 @@ fn sanitize_log_str(s: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+/// Deterministic 8-hex-char SHA-256 prefix for correlating filenames/paths in
+/// diagnostics without writing identifying names to disk.
+pub fn short_hash(s: &str) -> String {
+    let digest = Sha256::digest(s.as_bytes());
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
+}
+
+fn find_path_prefix(bytes: &[u8], i: usize) -> bool {
+    let prev_ok = i == 0
+        || matches!(
+            bytes[i - 1],
+            b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'(' | b'[' | b'=' | b':' | b',' | b';'
+        );
+    if !prev_ok {
+        return false;
+    }
+    if i + 2 < bytes.len()
+        && bytes[i].is_ascii_alphabetic()
+        && bytes[i + 1] == b':'
+        && (bytes[i + 2] == b'\\' || bytes[i + 2] == b'/')
+    {
+        return true;
+    }
+    if i + 2 < bytes.len()
+        && bytes[i] == b'\\'
+        && bytes[i + 1] == b'\\'
+        && !bytes[i + 2].is_ascii_whitespace()
+    {
+        return true;
+    }
+    let rest = &bytes[i..];
+    rest.starts_with(b"/Users/")
+        || rest.starts_with(b"/home/")
+        || rest.starts_with(b"/storage/")
+        || rest.starts_with(b"/sdcard/")
+}
+
+/// Sanitize a log string and replace filesystem paths (Windows drive/UNC or
+/// user/device POSIX roots) with non-identifying `<path:hash>` tokens.
+pub fn redact_paths_in_text(s: &str) -> String {
+    let clean = sanitize_log_str(s);
+    let bytes = clean.as_bytes();
+    let mut out = String::with_capacity(clean.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if find_path_prefix(bytes, i) {
+            let quoted = i > 0 && (bytes[i - 1] == b'"' || bytes[i - 1] == b'\'');
+            let quote_char = if quoted { bytes[i - 1] } else { 0 };
+            let start = i;
+            if quoted {
+                while i < bytes.len() && bytes[i] != quote_char {
+                    i += 1;
+                }
+            } else {
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if b == b'"' || b == b'\'' || b == b',' || b == b';' || b == b')' || b == b']' {
+                        break;
+                    }
+                    if b == b':' && i > start + 1 && i + 1 < bytes.len() && bytes[i + 1] == b' ' {
+                        break;
+                    }
+                    if b == b' ' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            let raw_path = clean[start..i].trim_end();
+            out.push_str("<path:");
+            out.push_str(&short_hash(raw_path));
+            out.push('>');
+            let trimmed_trailing_ws = clean[start..i].len() - raw_path.len();
+            if trimmed_trailing_ws > 0 {
+                out.push(' ');
+            }
+            continue;
+        }
+        let ch = clean[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    out
 }
 
 #[cfg(windows)]
@@ -541,7 +684,6 @@ fn resolve_window_details(hwnd_raw: isize, check_elevation: bool) -> WindowDetai
     if hwnd_raw == 0 {
         return WindowDetails {
             proc_name: "none".to_string(),
-            title: String::new(),
             elevation: ElevationState::Unknown,
         };
     }
@@ -550,24 +692,15 @@ fn resolve_window_details(hwnd_raw: isize, check_elevation: bool) -> WindowDetai
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, GetWindowThreadProcessId};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
     unsafe {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-        let mut title_buf = [0u16; 256];
-        let title_len = GetWindowTextW(hwnd, &mut title_buf);
-        let title = if title_len > 0 {
-            sanitize_log_str(&String::from_utf16_lossy(&title_buf[..title_len as usize]))
-        } else {
-            String::new()
-        };
-
         let mut pid: u32 = 0;
         let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == 0 {
             return WindowDetails {
                 proc_name: "unknown".to_string(),
-                title,
                 elevation: ElevationState::Unknown,
             };
         }
@@ -591,17 +724,16 @@ fn resolve_window_details(hwnd_raw: isize, check_elevation: bool) -> WindowDetai
                 let _ = CloseHandle(handle);
                 let proc_name = if ok && len > 0 {
                     let full = String::from_utf16_lossy(&path_buf[..len as usize]);
-                    let name = Path::new(&full)
+                    Path::new(&full)
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .unwrap_or(&full);
-                    sanitize_log_str(name)
+                        .map(sanitize_log_str)
+                        .unwrap_or_else(|| format!("pid:{pid}"))
                 } else {
                     format!("pid:{pid}")
                 };
                 WindowDetails {
                     proc_name,
-                    title,
                     elevation,
                 }
             }
@@ -609,7 +741,6 @@ fn resolve_window_details(hwnd_raw: isize, check_elevation: bool) -> WindowDetai
                 let err = GetLastError().0;
                 WindowDetails {
                     proc_name: format!("pid:{pid}"),
-                    title,
                     elevation: if check_elevation {
                         ElevationState::Err(err)
                     } else {
@@ -625,7 +756,6 @@ fn resolve_window_details(hwnd_raw: isize, check_elevation: bool) -> WindowDetai
 fn resolve_window_details(_hwnd_raw: isize, _check_elevation: bool) -> WindowDetails {
     WindowDetails {
         proc_name: "non-windows".to_string(),
-        title: String::new(),
         elevation: ElevationState::Unknown,
     }
 }
@@ -658,14 +788,13 @@ fn format_event_line(
             let vk_field = format_key_vk_field(*vk);
             let scan_field = format_key_scan_field(*vk, *scan_code);
             format!(
-                "ts_us={ts_us} event=KEY key_class={key_class} vk={vk_field} scan={scan_field} state={} ext={} injected={} trapped={} decision={} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=KEY key_class={key_class} vk={vk_field} scan={scan_field} state={} ext={} injected={} trapped={} decision={} hwnd=0x{hwnd:X} proc=\"{}\"\n",
                 if *is_down { "DOWN" } else { "UP" },
                 u8::from(*extended),
                 u8::from(*injected),
                 u8::from(*is_trapped),
                 decision.as_str(),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::Engage {
@@ -677,10 +806,9 @@ fn format_event_line(
         } => {
             let w = window_resolver(*hwnd, false);
             format!(
-                "ts_us={ts_us} event=ENGAGE phase={phase} edge={} rel_y={relative_y:.4} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=ENGAGE phase={phase} edge={} rel_y={relative_y:.4} hwnd=0x{hwnd:X} proc=\"{}\"\n",
                 edge.as_str(),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::EngagePerform {
@@ -694,13 +822,12 @@ fn format_event_line(
         } => {
             let w = window_resolver(*hwnd, false);
             format!(
-                "ts_us={ts_us} event=ENGAGE phase=perform edge={} rel_y={relative_y:.4} released_count={} released_vks={} tracker_before={} send_input_us={send_input_us} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=ENGAGE phase=perform edge={} rel_y={relative_y:.4} released_count={} released_vks={} tracker_before={} send_input_us={send_input_us} hwnd=0x{hwnd:X} proc=\"{}\"\n",
                 edge.as_str(),
                 released.total_count,
                 released.format_vks(),
                 tracker_before.format_detailed(),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::Return {
@@ -717,10 +844,9 @@ fn format_event_line(
                 None => "none".to_string(),
             };
             format!(
-                "ts_us={ts_us} event=RETURN rel_y={relative_y:.4} was_trapped={} prev_phase={prev_phase} target={target_str} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=RETURN rel_y={relative_y:.4} was_trapped={} prev_phase={prev_phase} target={target_str} hwnd=0x{hwnd:X} proc=\"{}\"\n",
                 u8::from(*was_trapped),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::Release { ts_us, reason } => {
@@ -756,10 +882,9 @@ fn format_event_line(
         } => {
             let w = window_resolver(*hwnd, false);
             format!(
-                "ts_us={ts_us} event=ENTER edge={} rel_y={relative_y:.4} x={pos_x} y={pos_y} hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=ENTER edge={} rel_y={relative_y:.4} x={pos_x} y={pos_y} hwnd=0x{hwnd:X} proc=\"{}\"\n",
                 edge.as_str(),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::ReturnSent {
@@ -800,13 +925,12 @@ fn format_event_line(
             let vk_field = format_key_vk_field(*vk);
             let scan_field = format_key_scan_field(*vk, *scan_code);
             format!(
-                "ts_us={ts_us} event=REMOTE_KEY key_class={key_class} vk={vk_field} scan={scan_field} state={} ext={} sent={sent} last_err={last_err} hwnd=0x{hwnd:X} focus_hwnd={} elevated={} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=REMOTE_KEY key_class={key_class} vk={vk_field} scan={scan_field} state={} ext={} sent={sent} last_err={last_err} hwnd=0x{hwnd:X} focus_hwnd={} elevated={} proc=\"{}\"\n",
                 if *is_down { "DOWN" } else { "UP" },
                 u8::from(*extended),
                 format_focus_hwnd(*focus_hwnd),
                 w.elevation.format_val(),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::RemoteMouseButton {
@@ -820,21 +944,19 @@ fn format_event_line(
         } => {
             let w = window_resolver(*hwnd, true);
             format!(
-                "ts_us={ts_us} event=REMOTE_MOUSE_BTN button={button} state={} sent={sent} last_err={last_err} hwnd=0x{hwnd:X} focus_hwnd={} elevated={} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=REMOTE_MOUSE_BTN button={button} state={} sent={sent} last_err={last_err} hwnd=0x{hwnd:X} focus_hwnd={} elevated={} proc=\"{}\"\n",
                 if *is_down { "DOWN" } else { "UP" },
                 format_focus_hwnd(*focus_hwnd),
                 w.elevation.format_val(),
                 w.proc_name,
-                w.title,
             )
         }
         DebugEvent::Note { ts_us, hwnd, text } => {
             let w = window_resolver(*hwnd, false);
-            let clean = sanitize_log_str(text);
+            let clean = redact_paths_in_text(text);
             format!(
-                "ts_us={ts_us} event=NOTE text=\"{clean}\" hwnd=0x{hwnd:X} proc=\"{}\" title=\"{}\"\n",
+                "ts_us={ts_us} event=NOTE text=\"{clean}\" hwnd=0x{hwnd:X} proc=\"{}\"\n",
                 w.proc_name,
-                w.title,
             )
         }
     }
@@ -924,6 +1046,13 @@ impl RotatingLogWriter {
             let _ = w.flush();
         }
     }
+
+    fn reset_writer(&mut self) {
+        if let Some(mut w) = self.writer.take() {
+            let _ = w.flush();
+        }
+        self.written_bytes = 0;
+    }
 }
 
 #[cfg(windows)]
@@ -952,11 +1081,11 @@ fn resolve_proc_name_for_pid(pid: u32) -> String {
         let _ = CloseHandle(handle);
         if ok && len > 0 {
             let full = String::from_utf16_lossy(&path_buf[..len as usize]);
-            let name = Path::new(&full)
+            Path::new(&full)
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or(&full);
-            sanitize_log_str(name)
+                .map(sanitize_log_str)
+                .unwrap_or_else(|| format!("pid:{pid}"))
         } else {
             format!("pid:{pid}")
         }
@@ -1087,6 +1216,10 @@ fn writer_loop(rx: mpsc::Receiver<LogCommand>) {
                     LogCommand::Flush(ack) => {
                         acks.push(ack);
                     }
+                    LogCommand::ResetWriter(ack) => {
+                        writer.reset_writer();
+                        acks.push(ack);
+                    }
                 }
 
                 while let Ok(cmd) = rx.try_recv() {
@@ -1097,6 +1230,10 @@ fn writer_loop(rx: mpsc::Receiver<LogCommand>) {
                             wrote_any = true;
                         }
                         LogCommand::Flush(ack) => {
+                            acks.push(ack);
+                        }
+                        LogCommand::ResetWriter(ack) => {
+                            writer.reset_writer();
                             acks.push(ack);
                         }
                     }
@@ -1147,7 +1284,6 @@ mod tests {
     fn stub_window(_hwnd: isize, check_elevation: bool) -> WindowDetails {
         WindowDetails {
             proc_name: "notepad.exe".into(),
-            title: "Untitled - \"Note\"".into(),
             elevation: if check_elevation {
                 ElevationState::NotElevated
             } else {
@@ -1493,5 +1629,97 @@ mod tests {
             &mut last,
             "DND_STATE target_tid=42"
         ));
+    }
+
+    #[test]
+    fn event_lines_omit_window_titles_and_redact_paths() {
+        let key_line = format_event_line(
+            &DebugEvent::Key {
+                ts_us: 1,
+                vk: 0x1B,
+                scan_code: 0x01,
+                is_down: true,
+                extended: false,
+                injected: false,
+                is_trapped: true,
+                decision: KeyDecision::Forward,
+                hwnd: 0x1234,
+            },
+            stub_window,
+        );
+        assert!(!key_line.contains("title="));
+        assert!(key_line.contains("proc=\"notepad.exe\""));
+
+        let note_line = format_event_line(
+            &DebugEvent::Note {
+                ts_us: 2,
+                hwnd: 0x1234,
+                text: r#"STAGING_FAIL err=Failed to open "C:\Users\Alice\Documents\tax_2026.pdf""#
+                    .into(),
+            },
+            stub_window,
+        );
+        assert!(!note_line.contains("title="));
+        assert!(!note_line.contains("Alice"));
+        assert!(!note_line.contains("tax_2026.pdf"));
+        assert!(note_line.contains("<path:"));
+    }
+
+    #[test]
+    fn redaction_helpers_preserve_non_path_debug_info_and_hash_deterministically() {
+        assert_eq!(short_hash("secret.pdf").len(), 8);
+        assert_eq!(short_hash("secret.pdf"), short_hash("secret.pdf"));
+        assert_ne!(short_hash("secret.pdf"), short_hash("other.pdf"));
+
+        let win_unquoted = redact_paths_in_text(
+            r"Failed to open C:\Users\Alice Smith\Desktop\my secret.docx: Access denied",
+        );
+        assert!(!win_unquoted.contains("Alice"));
+        assert!(!win_unquoted.contains("my secret.docx"));
+        assert!(win_unquoted.contains("Failed to open <path:"));
+        assert!(win_unquoted.contains(": Access denied"));
+
+        let unc = redact_paths_in_text(r"Copy from \\fileserver\private\payroll.xlsx (os error 5)");
+        assert!(!unc.contains("fileserver"));
+        assert!(!unc.contains("payroll.xlsx"));
+        assert!(unc.contains("<path:"));
+        assert!(unc.contains("(os error 5)"));
+
+        let posix = redact_paths_in_text("Denied /Users/bob/Downloads/bank.csv");
+        assert!(!posix.contains("bob"));
+        assert!(!posix.contains("bank.csv"));
+        assert!(posix.contains("Denied <path:"));
+
+        let safe_url_and_code = "OPEN_URL url=https://github.com/DarkTama/Anyleap err=5";
+        assert_eq!(redact_paths_in_text(safe_url_and_code), safe_url_and_code);
+    }
+
+    #[test]
+    fn delete_and_prune_logs_work_as_expected() {
+        let dir =
+            std::env::temp_dir().join(format!("anyleap-debuglog-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let main_log = dir.join(DEBUG_LOG_FILE_NAME);
+        let backup_log = dir.join(DEBUG_LOG_BACKUP_FILE_NAME);
+        std::fs::write(&main_log, b"recent").unwrap();
+        std::fs::write(&backup_log, b"old").unwrap();
+
+        // When `now` is 10 days in the future relative to both files, both expire.
+        let future = SystemTime::now() + Duration::from_secs(10 * 24 * 3600);
+        assert_eq!(prune_expired_logs(&dir, MAX_LOG_AGE, future), 2);
+        assert!(!main_log.exists());
+        assert!(!backup_log.exists());
+
+        // Delete logs clears both files cleanly.
+        std::fs::write(&main_log, b"a").unwrap();
+        std::fs::write(&backup_log, b"b").unwrap();
+        assert_eq!(delete_logs_in_dir(&dir).unwrap(), 2);
+        assert!(!main_log.exists());
+        assert!(!backup_log.exists());
+        assert_eq!(delete_logs_in_dir(&dir).unwrap(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
