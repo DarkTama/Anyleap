@@ -209,8 +209,9 @@ function App() {
       }
 
       const { desktopNotifications: toastsEnabled } = useAppStore.getState().appPrefs;
-      const { mutedPackages } = usePhoneHubStore.getState();
+      const { mutedPackages, sensitivePackages } = usePhoneHubStore.getState();
       const mutedSet = new Set(mutedPackages);
+      const sensitiveSet = new Set(sensitivePackages);
 
       const fresh = items.filter((n) => !existingSeen.has(n.key));
       for (const n of fresh) {
@@ -228,10 +229,18 @@ function App() {
       }
       if (granted) {
         for (const n of unmutedFresh) {
-          sendNotification({
-            title: n.title || n.appLabel || n.package,
-            body: n.text || undefined,
-          });
+          const appName = n.appLabel || n.package;
+          if (sensitiveSet.has(n.package)) {
+            sendNotification({
+              title: appName,
+              body: `New notification from ${appName}`,
+            });
+          } else {
+            sendNotification({
+              title: n.title || appName,
+              body: n.text || undefined,
+            });
+          }
         }
       }
     });
@@ -1033,6 +1042,7 @@ function App() {
             notificationsLoading={notificationsLoading}
             notificationsError={notificationsError}
             onRefreshNotifications={() => void fetchPhoneNotifications()}
+            onOpenSettings={() => setActiveTab("settings")}
           />
         )}
         {activeTab === "computers" && <ComputersView />}

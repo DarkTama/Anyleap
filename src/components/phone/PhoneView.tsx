@@ -57,6 +57,7 @@ interface PhoneViewProps {
   notificationsLoading: boolean;
   notificationsError: string | null;
   onRefreshNotifications: () => void;
+  onOpenSettings?: () => void;
 }
 
 const NAV_ITEMS: Array<{
@@ -99,6 +100,7 @@ export function PhoneView({
   notificationsLoading,
   notificationsError,
   onRefreshNotifications,
+  onOpenSettings,
 }: PhoneViewProps) {
   const devices = useAppStore((s) => s.devices);
   const nicknames = useAppStore((s) => s.nicknames);
@@ -416,6 +418,7 @@ export function PhoneView({
               loading={notificationsLoading}
               error={notificationsError}
               onRefresh={onRefreshNotifications}
+              onOpenSettings={onOpenSettings}
             />
           )}
           {subTab === "gallery" && (

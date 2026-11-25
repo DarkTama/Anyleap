@@ -1,7 +1,7 @@
 # SPEC-33: Notification Tidy-Up, Per-App Retention, and Money Dashboard
 
-> **Status:** Draft (2026-11-25)
-> **Scope:** Phone Hub notifications & app icons (`src/components/phone/NotificationsView.tsx`, `src/components/phone/MoneyView.tsx`, `src/components/phone/PhoneView.tsx`, `src/stores/phoneHubStore.ts`), backend notification store, DPAPI vault, transaction parser, transfer matcher & icon cache (`src-tauri/src/phone_files.rs`, `src-tauri/src/phone_hub/`), and Settings (`src/components/settings/`).
+> **Status:** Phase 1 Implemented (2026-11-25); Phases 2–4 Draft
+> **Scope:** Phone Hub notifications (`src/components/phone/NotificationsView.tsx`, `src/components/phone/MoneyView.tsx`, `src/components/phone/PhoneView.tsx`, `src/stores/phoneHubStore.ts`), backend notification store, DPAPI vault, transaction parser & transfer matcher (`src-tauri/src/phone_files.rs`, `src-tauri/src/phone_hub/`), and Settings (`src/components/settings/`).
 > **Related:** SPEC-21 (Phone Files & Notifications), SPEC-26 (Ink & Gold Theme), SPEC-27 (Phone Hub), SPEC-28 (Settings Redesign), SPEC-31 (Default Transfer Folders), ADR-0007 (DPAPI Encrypted Notification Store).
 > **Plan:** `docs/superpowers/plans/2026-11-25-spec33-notifications-money.md`
 
@@ -33,7 +33,7 @@ In a 47-notification snapshot captured from a real device, currency amounts appe
 ## 2. Goals and Non-Goals
 
 ### Goals
-- **G1. Tidy, scannable notification view (Phase 1).** Collapse excessive blank lines/whitespace, clamp bodies to 2 lines with "Show more", stack same-app + same-title items, allow collapsible app groups, group by Today / Yesterday / Earlier with relative times, provide app filter chips and search, display real app icons with letter-avatar fallback, mask sensitive apps until clicked, and support local-only "Hide".
+- **G1. Tidy, scannable notification view (Phase 1).** Collapse excessive blank lines/whitespace, clamp bodies to 2 lines with "Show more", stack same-app + same-title items, allow collapsible app groups, group by Today / Yesterday / Earlier with relative times, provide app filter chips and search, display deterministic per-package colored letter avatars (real APK app icons deferred to a future task), mask sensitive apps until clicked, and support local-only "Hide".
 - **G2. Opt-in, DPAPI-encrypted local persistence with separate notification and transaction retention (Phase 2).** Persistence is off until explicitly enabled by the user. Notification retention defaults to **Don't keep** per app (`Keep history` 7/30/90 days or `Transactions only`). Separately, each app configures **`0..n` Money sources** (`Bank` / `E-wallet` / `Paylater` / `Credit card`, each with a rule template), and parsed transactions follow a dedicated **Transaction retention** setting (`1 year` default / `2 years` / `Forever`) independent of notification expiration.
 - **G3. Data-driven per-notification parser, salted sub-account keys & two-pass transfer/bill matching (Phase 3).** Parse financial notifications via a JSON rule pack (regex templates + locale number formatting for `1,021,403.00` and `1.021.403,00`) scoped strictly to each app's enabled Money sources (`0..n`), ignoring unmatched notifications (e.g. promos). Distinguish multiple cards/accounts via a salted-hash `sub_account` key (never storing card/account numbers). Run deterministic two-pass matching within a configurable ±15-minute window: exact-amount cross-source **Transfer** / **Debt payment** first, then amount-less **`bill_paid`** liability event linking (preferring `payment` / `virtual_account` / `bill` outflows, or flagging **`"Bill paid (amount unknown)"`** for review), and flag remaining unmatched bank VA/top-up outflows as **Possible transfer**.
 - **G4. Liabilities, Spending vs Cash flow views, comparisons, corrections & export (Phase 4).** Support Paylater / Credit card expense-at-purchase-time accounting, Debt payment exclusions from Spending (shown in Cash flow), per-liability and per-sub-account outstanding balance (with user nicknames and **"Due next month"** vs monthly income), resolution for **"Bill paid (amount unknown)"**, MoM/YoY category comparisons + **"Where did spending grow"**, single-transaction manual corrections with salted-hash memory rules, daily trends, and formula-safe CSV export.
@@ -95,13 +95,13 @@ All claims below were verified directly in the repository:
 | `N-07` | `general` | Large income highlight | `Highlight incoming transactions at or above this amount in Money.` | Number input + currency selector (default `0` = off) | `["money", "income", "threshold", "highlight", "alert"]` |
 | `N-08` | `general` | Delete saved notification data | `Permanently deletes all stored notification history, Money transactions, and learned rules from this PC.` | Danger button with confirmation modal | `["delete", "clear", "wipe", "reset", "privacy"]` |
 
-### 4.3 Real App Icons Strategy
-- Never block notification polling on icon extraction.
-- **Lazy backend fetch & cache (`src-tauri/src/phone_hub/icons.rs`):**
-  1. Cache location: `app_cache_dir()/phone_hub_icons/<hw_serial_hash>/<package>.png` (normalized 48×48 PNG, capped at 100 MB LRU using existing `evict_dir_to_cap` in `phone_files.rs:254-260`).
-  2. On cache miss for a visible notification package (deduplicated & rate-limited queue), query `adb -s <serial> shell pm path <package>` (validated via `validate_app_package`).
-  3. Inspect the base APK's launcher icon resource (via lightweight APK zip/resource extraction or `aapt2` / device-side helper if present, prioritizing raster `mipmap-xxhdpi`/`xhdpi`/`hdpi` PNG/WebP icons).
-  4. If the icon is unavailable (vector/XML-only adaptive icon without raster fallback, system restriction, or phone offline), record a negative-cache TTL entry (e.g. 24 h in memory) and let the UI render the existing deterministic letter avatar immediately with zero layout shift.
+### 4.3 App Avatars & Deferred Real App Icons Strategy
+- **Phase 1 (Stable Letter Avatars):** `NotificationsView` renders deterministic per-package colored letter avatars (`getAppAvatar(appLabel, packageName)` in `src/lib/notificationTidy.ts`):
+  1. A stable FNV-1a hash of `packageName` selects from a fixed 10-color dark-theme palette (`APP_AVATAR_PALETTE`), with every background/foreground pair verified to meet WCAG AA `>= 4.5:1` contrast.
+  2. The avatar letter is the uppercase first letter of the resolved `appLabel`; if `appLabel` is unresolved or begins with a digit, emoji, or symbol, it falls back to the first letter of the package's last segment.
+  3. The same `AppAvatar` is shared across app group headers, filter chips, muted app rows, and desktop toast previews.
+- **Why name-based APK icon extraction was dropped:** On-device testing showed that production APKs obfuscate resource file names (three popular apps tested had zero entries containing `ic_launcher` among thousands of `res/` files), causing name-based APK entry scanning to always miss while wasting ranged `adb` reads.
+- **Deferred Future Task (Real Icons via Manifest + `resources.arsc`):** Real app icon resolution is deferred to a separate future task requiring binary `AndroidManifest.xml` + `resources.arsc` lookup to map the obfuscated icon resource ID to its actual APK entry path. Note that adaptive/vector-only icons (`<adaptive-icon>` / XML vector drawables without raster PNG/WebP fallbacks) cannot be rendered without a companion app.
 
 ---
 
@@ -117,12 +117,12 @@ All claims below were verified directly in the repository:
    - Within each date section and app group, cluster notifications sharing `(package, normalizedTitle)` (case-trimmed).
    - Display the newest notification in the stack on top with a **`+N more`** button (`aria-expanded`) that expands the older stacked items inline below it.
 3. **Collapsible app groups:**
-   - Each app header (`<button aria-expanded>`) collapses or expands that app's notifications within a date section, displaying app icon (or letter avatar), resolved app name, visible item count, and read-only retention + Money source badges.
+   - Each app header (`<button aria-expanded>`) collapses or expands that app's notifications within a date section, displaying a deterministic colored letter avatar, resolved app name, visible item count, and read-only retention + Money source badges.
 4. **Time sections & relative times:**
    - Partition visible notifications by local calendar day into **Today**, **Yesterday**, and **Earlier** (headers skipped if empty).
    - Format relative times (`Just now`, `5m ago`, `2h ago`, `Yesterday · 18:40`, `Nov 21 · 09:15`) with full local date-time in `title` / `aria-label`.
 5. **App filter chips & search:**
-   - Horizontal filter bar above the list: `All` chip + one chip per active app (showing icon/initial + count). Selecting an app filters the feed to that app.
+   - Horizontal filter bar above the list: `All` chip + one chip per active app (showing deterministic letter avatar + count). Selecting an app filters the feed to that app.
    - Search box (`role="search"`, Escape clears) matches case-insensitively against `appLabel`, `package`, `title`, and `text`.
 6. **Sensitive app masking:**
    - Apps flagged `sensitive: true` render a masked placeholder (`"Sensitive content hidden — click to reveal"`) in place of `title` and `text` (and `"New notification from <App>"` in desktop toast previews).
@@ -560,8 +560,8 @@ pub struct CorrectionRule {
 }
 ```
 
-### 6.4 Backend IPC Commands (Phases 1–4)
-- `phone_get_app_icon(serial, package) -> Option<String>` (Phase 1, cached file path or asset URL)
+### 6.4 Backend IPC Commands (Phases 2–4)
+- *(Deferred future task)* `phone_get_app_icon(serial, package) -> Option<String>` (manifest + `resources.arsc` icon resolution)
 - `phone_set_notification_storage_config(config)` (Phase 2, syncs `NotificationStorageSettings` to Rust poller/store)
 - `phone_get_notification_history(hw_serial, limit, before_unix) -> Vec<StoredNotification>` (Phase 2)
 - `phone_set_notification_hidden(dedupe_id, hidden) -> ()` (Phase 2)
@@ -625,14 +625,14 @@ pub struct CorrectionRule {
 - **Zero idle disk writes:** An in-memory `HashSet<String>` of seen `(hw_serial, key, posted_unix)` dedupe IDs filters unchanged snapshots in memory. `CryptProtectData` + atomic file write runs **only** when a batch inserts ≥ 1 new item, updates transfer matching, applies a correction, or prunes expired records.
 - **Store size & latency budget:** At ~500 bytes/notification and ~240 bytes/transaction, `5,000` history items (~2.5 MB) + `50,000` transactions (~12 MB worst case; typical 2-year personal volume ~5,000–10,000 items ≈ 1.2–2.4 MB) remain well within ~15 ms DPAPI encrypt/decrypt on desktop hardware.
 - **Frontend rendering:** Paginate/window rendered notifications (initial 50 items + `"Show older"` / incremental batch) so 90-day history never blocks React rendering.
-- **Icon extraction:** Background worker extracts at most 1 uncached app icon per tick, cached at 48×48 PNG (~4 KB each, 100 MB cap).
+- **App avatars:** Pure client-side deterministic letter avatars in Phase 1 (zero background `adb` APK reads).
 
 ---
 
 ## 11. Phasing (Each Phase Independently Shippable)
 
-1. **Phase 1 — Tidy Notification View & Lazy App Icons:**
-   - Whitespace collapse, 2-line clamp + "Show more", same-app + same-title stacking, collapsible app groups, Today/Yesterday/Earlier sections + relative times, app filter chips, search, lazy real app icon cache + letter-avatar fallback, sensitive-app masking, local Hide (strictly read-only). Zero persisted notification payloads.
+1. **Phase 1 — Tidy Notification View & Deterministic Letter Avatars:**
+   - Whitespace collapse, 2-line clamp + "Show more", same-app + same-title stacking, collapsible app groups, Today/Yesterday/Earlier sections + relative times, app filter chips, search, deterministic per-package colored letter avatars (real APK icons deferred), sensitive-app masking, local Hide (strictly read-only). Zero persisted notification payloads.
 2. **Phase 2 — Per-App Retention Policy, `0..n` Money Sources & DPAPI Encrypted Local Store:**
    - Master opt-in (`N-01`), DPAPI vault (`phone_hub_history.v1.dpapi`, `phone_hub_transactions.v1.dpapi` shell with random `rule_salt`), `(hw_serial, key, posted_unix)` dedupe, independent per-app retention (`Don't keep` / `Keep history 7/30/90d` / `Transactions only`) and `0..n` Money sources (`Add money source` picking Type + Rule template), transaction retention (`1y` / `2y` / `forever`), Settings UI in `General` (`N-01`..`N-08`), per-app delete & Delete all, background capture toggle (`N-03`), history hydration in `NotificationsView`.
 3. **Phase 3 — Per-Notification Parser, Salted `sub_account` Keys, Two-Pass Matching & Basic Money:**
@@ -688,7 +688,7 @@ pub struct CorrectionRule {
 - All committed test fixtures in the repository remain 100% fictional (`AGENTS.md` §1.3).
 
 ### 12.3 Frontend Unit & Component Tests (Vitest)
-- **Tidy view helpers & `NotificationsView`:** whitespace collapse, 2-line clamp + Show more toggle, same-app + same-title stacking (`+N more`), app collapse, Today/Yesterday/Earlier bucketing, filter chips + search, sensitive masking + ephemeral re-mask on unmount/tab change, local Hide + unhide, letter avatar fallback when icon is `null`, zero calls to any phone-dismiss command.
+- **Tidy view helpers & `NotificationsView`:** whitespace collapse, 2-line clamp + Show more toggle, same-app + same-title stacking (`+N more`), app collapse, Today/Yesterday/Earlier bucketing, filter chips + search, sensitive masking + ephemeral re-mask on unmount/tab change, local Hide + unhide, deterministic per-package letter avatars (stability, palette spread, >= 4.5:1 contrast, digit/emoji fallback), zero calls to any phone-dismiss command.
 - **Settings (`GeneralSection` & `settingsFilter`):** `N-01`..`N-08` searchable by keywords, independent Retention vs `0..n` Money sources (`"Add money source"` picking Type + Rule template, enabling/disabling/removing individual sources), `1y` / `2y` / `Forever` transaction retention, configurable transfer window, single-home compliance, confirmation before Delete all.
 - **`MoneyView` (Phases 3–4):**
   - Transfers excluded from Today/Week/Month In/Out/Net totals while visible in list; Possible transfers and `"Bill paid (amount unknown)"` events flagged for review.
@@ -712,7 +712,7 @@ pub struct CorrectionRule {
 2. **One-sided repayment notifications:** Some paylater or credit card apps send no `"repayment received"` notification when paid from a bank app, so the bank outflow won't auto-pair with a liability IN. *Mitigation:* bank VA/top-up outflows become **Possible transfer** for 1-click review, and `"Mark as debt payment"` + `"Apply to similar in the future"` remembers that VA/counterparty hash permanently.
 3. **Transfer window false positives / clearing delays:** Two unrelated identical small purchases within ±15 min across a bank and an e-wallet could false-match as a transfer, while slow inter-bank clearing (> 15 min) could miss matching. *Mitigation:* make the window configurable (`N-06`), allow single-transaction `"Restore automatic"` / `"Ignore"` / `"Mark as transfer"`, and keep tie-breaking deterministic.
 4. **YoY comparisons vs default 1-year transaction retention:** With the default `1 year` (`365` days) transaction retention, data from 12+ months ago ages out right as YoY comparisons need it. *Mitigation:* surface a subtle note on the YoY column (`"Switch transaction retention to 2 years or Forever in Settings to keep full year-over-year history"`).
-5. **APK icon extraction reliability across OEMs:** Split APKs and adaptive-icon-only packages (XML `<adaptive-icon>` without pre-rendered PNG mipmaps) may not yield a simple raster PNG without heavier parsing. *Mitigation:* best-effort raster extraction with graceful letter-avatar fallback; revisit adaptive XML rendering only if hit rate is too low.
+5. **APK icon extraction with obfuscated resource names & adaptive icons (deferred):** On-device verification showed that production APKs obfuscate `res/` entry names (three popular apps had zero `ic_launcher` entries among thousands of `res/` files), so name-based APK scanning fails and wastes ranged `adb` reads. *Mitigation:* Phase 1 uses deterministic per-package colored letter avatars; real icon resolution via binary `AndroidManifest.xml` + `resources.arsc` lookup is deferred to a separate future task, noting that adaptive/vector-only icons (`<adaptive-icon>` / XML vector drawables) cannot be rendered without a companion app.
 6. **Android notification truncation/grouping:** Some apps replace individual notifications with a summary line (`"3 new transactions"`) when multiple alerts pile up before the next 10 s poll, which Android cannot expand retroactively via `dumpsys`. *Mitigation:* document this clearly in the Money disclaimer (`"based on captured notifications"`).
 7. **Multi-currency large-income threshold UX:** Users receiving both `IDR` and `USD` need separate magnitude thresholds (`1,000,000` vs `100`). *Mitigation:* key `largeIncomeThresholdByCurrency` by currency code and default the Settings editor to the active/primary currency with an inline currency selector.
 8. **Cross-device vs per-device Money view:** If a user switches phones, should Money default to the active phone or all phones? *Proposal:* default to the active phone (`PhoneView` consistency) with an optional `"All phones"` filter pill in `MoneyView` when > 1 `hw_serial` has saved transactions.
