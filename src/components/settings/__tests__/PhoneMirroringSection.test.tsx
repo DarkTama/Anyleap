@@ -11,13 +11,14 @@ vi.mock("@/lib/tauri", () => ({
   getSystemResolution: vi.fn(async () => [1920, 1080]),
   getScrollMultiplier: vi.fn(async () => null),
   setScrollFeel: vi.fn(async () => null),
+  restartWithAudioBuffer: vi.fn(async () => null),
 }));
 
 import { PhoneMirroringSection } from "../PhoneMirroringSection";
 import { useAppStore } from "@/store/useAppStore";
 import { defaultModeDefaults } from "@/lib/modeSettings";
 import { saveModeDefaults } from "@/lib/persist";
-import { getScrollMultiplier, setScrollFeel } from "@/lib/tauri";
+import { getScrollMultiplier, restartWithAudioBuffer, setScrollFeel } from "@/lib/tauri";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -291,5 +292,67 @@ describe("PhoneMirroringSection", () => {
     await mount();
     await act(async () => tab("Flex").click());
     expect(el.textContent).toContain("Auto matches the phone's normal feel. Currently 2.5x on this screen.");
+  });
+
+  it("renders Audio buffer options, disables when audio is off, edits only the active mode, and restarts running sessions in place", async () => {
+    useAppStore.setState({ sessions: [], sessionModes: {}, currentMode: "mirror" });
+    await mount();
+    const radio = (name: string) =>
+      Array.from(el.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find(
+        (r) => r.textContent === name,
+      )!;
+    const bufferGroup = el.querySelector<HTMLElement>(
+      '[role="radiogroup"][aria-labelledby]',
+    );
+    expect(bufferGroup).toBeTruthy();
+    expect(el.textContent).toContain("Audio buffer");
+    expect(el.textContent).toContain(
+      "On weak Wi-Fi, a bigger buffer stops crackling at the cost of a little delay. USB is the most stable.",
+    );
+    expect(radio("Auto").getAttribute("aria-checked")).toBe("true");
+    for (const label of ["Auto", "50 ms", "100 ms", "200 ms"]) {
+      expect(radio(label)).toBeTruthy();
+    }
+
+    // Idle edit writes only the selected mode and does not restart.
+    await act(async () => radio("200 ms").click());
+    expect(useAppStore.getState().modeDefaults.mirror.audioBuffer).toBe(200);
+    expect(useAppStore.getState().modeDefaults.flex.audioBuffer).toBe("auto");
+    expect(useAppStore.getState().modeDefaults.hifi.audioBuffer).toBe("auto");
+    expect(restartWithAudioBuffer).not.toHaveBeenCalled();
+
+    // Turning audio off disables Audio buffer with guidance.
+    await act(async () => sw("Play phone audio on this PC").click());
+    expect(radio("100 ms").disabled).toBe(true);
+    expect(el.textContent).toContain("Turn on Play phone audio on this PC to adjust the buffer.");
+    await act(async () => radio("100 ms").click());
+    expect(useAppStore.getState().modeDefaults.mirror.audioBuffer).toBe(200);
+
+    // Running wireless session on Flex shows live Auto buffer and restarts in place on change.
+    await act(async () => {
+      useAppStore.setState({
+        sessions: [
+          { id: "s-wifi", serial: "192.168.1.24:36431", pid: 2, started_at: 1, mode: "display" },
+        ],
+        sessionModes: { "s-wifi": "flex" },
+        currentMode: "flex",
+      });
+    });
+    await act(async () => tab("Flex").click());
+    expect(el.textContent).toContain("Currently 150 ms on Wi-Fi.");
+    await act(async () => radio("100 ms").click());
+    expect(useAppStore.getState().modeDefaults.flex.audioBuffer).toBe(100);
+    expect(restartWithAudioBuffer).toHaveBeenCalledWith("192.168.1.24:36431", 100);
+
+    // Running USB session on High fidelity shows 50 ms on USB.
+    await act(async () => {
+      useAppStore.setState({
+        sessions: [{ id: "s-usb", serial: "USB123", pid: 3, started_at: 1, mode: "display" }],
+        sessionModes: { "s-usb": "hifi" },
+        currentMode: "hifi",
+      });
+    });
+    await act(async () => tab("High fidelity").click());
+    expect(el.textContent).toContain("Currently 50 ms on USB.");
   });
 });

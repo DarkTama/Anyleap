@@ -16,6 +16,8 @@ export function SegmentedControl<T extends string | number>({
   segments,
   value,
   customLabel,
+  disabled = false,
+  disabledReason,
   onChange,
 }: {
   label: string;
@@ -23,10 +25,15 @@ export function SegmentedControl<T extends string | number>({
   segments: Segment<T>[];
   value: T | null;
   customLabel?: string;
+  disabled?: boolean;
+  /** Shown instead of the hint while the control is disabled. */
+  disabledReason?: string;
   onChange: (value: T) => void;
 }) {
   const id = useId();
+  const helper = disabled && disabledReason ? disabledReason : hint;
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
     if (!keys.includes(e.key)) return;
     e.preventDefault();
@@ -48,7 +55,10 @@ export function SegmentedControl<T extends string | number>({
   return (
     <div className="space-y-1 py-1">
       <div className="flex items-center gap-2">
-        <span id={`${id}-label`} className="text-sm text-text-strong">
+        <span
+          id={`${id}-label`}
+          className={`text-sm ${disabled ? "text-text opacity-70" : "text-text-strong"}`}
+        >
           {label}
         </span>
         {customLabel && (
@@ -60,9 +70,12 @@ export function SegmentedControl<T extends string | number>({
       <div
         role="radiogroup"
         aria-labelledby={`${id}-label`}
-        aria-describedby={hint ? `${id}-hint` : undefined}
+        aria-describedby={helper ? `${id}-hint` : undefined}
+        aria-disabled={disabled || undefined}
         onKeyDown={onKeyDown}
-        className="inline-flex overflow-hidden rounded-lg border border-ink-700"
+        className={`inline-flex overflow-hidden rounded-lg border border-ink-700 ${
+          disabled ? "opacity-60" : ""
+        }`}
       >
         {segments.map((s, i) => {
           const selected = i === selectedIndex;
@@ -72,9 +85,14 @@ export function SegmentedControl<T extends string | number>({
               type="button"
               role="radio"
               aria-checked={selected}
+              disabled={disabled}
               tabIndex={selected || (selectedIndex < 0 && i === 0) ? 0 : -1}
-              onClick={() => onChange(s.value)}
-              className={`min-h-8 cursor-pointer px-3 text-xs font-medium focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-gold-400 ${
+              onClick={() => {
+                if (!disabled) onChange(s.value);
+              }}
+              className={`min-h-8 px-3 text-xs font-medium focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-gold-400 ${
+                disabled ? "cursor-not-allowed" : "cursor-pointer"
+              } ${
                 selected ? "bg-gold-400 text-ink-950" : "bg-ink-900 text-text hover:text-text-strong"
               } ${i > 0 ? "border-l border-ink-700" : ""}`}
             >
@@ -83,9 +101,9 @@ export function SegmentedControl<T extends string | number>({
           );
         })}
       </div>
-      {hint && (
+      {helper && (
         <p id={`${id}-hint`} className="text-[11px] leading-snug text-text-muted">
-          {hint}
+          {helper}
         </p>
       )}
     </div>

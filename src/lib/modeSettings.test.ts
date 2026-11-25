@@ -48,12 +48,13 @@ describe("defaults and resolver", () => {
     }
   });
 
-  it("resolveLaunchSettings returns all 17 CoreSettings keys", () => {
+  it("resolveLaunchSettings returns all 18 CoreSettings keys", () => {
     const d = defaultModeDefaults();
     for (const m of DISPLAY) {
       expect(Object.keys(resolveLaunchSettings(m, d)).sort()).toEqual(CORE_KEYS);
     }
-    expect(CORE_KEYS).toHaveLength(17);
+    expect(CORE_KEYS).toHaveLength(18);
+    expect(CORE_KEYS).toContain("audioBuffer");
   });
 
   it("flexDisplay is true only for flex", () => {
@@ -450,5 +451,46 @@ describe("scroll settings (SPEC-30)", () => {
       smooth: false,
       inertia: "off",
     });
+  });
+});
+
+describe("audio buffer settings (SPEC-34 phase 1)", () => {
+  it("defaults audioBuffer to auto across mirror, flex, and hifi", () => {
+    const d = defaultModeDefaults();
+    for (const m of DISPLAY) {
+      expect(d[m].audioBuffer).toBe("auto");
+    }
+  });
+
+  it("normalizeModeDefaults fills missing or invalid audioBuffer with auto and keeps valid options", () => {
+    const older = normalizeModeDefaults({
+      version: 2,
+      mirror: { maxFps: 30 },
+      flex: { audioBuffer: "bogus" },
+      hifi: { audioBuffer: 75 },
+    });
+    expect(older.mirror.audioBuffer).toBe("auto");
+    expect(older.flex.audioBuffer).toBe("auto");
+    expect(older.hifi.audioBuffer).toBe("auto");
+
+    const valid = normalizeModeDefaults({
+      version: 2,
+      mirror: { audioBuffer: 50 },
+      flex: { audioBuffer: 100 },
+      hifi: { audioBuffer: 200 },
+    });
+    expect(valid.mirror.audioBuffer).toBe(50);
+    expect(valid.flex.audioBuffer).toBe(100);
+    expect(valid.hifi.audioBuffer).toBe(200);
+  });
+
+  it("resolveLaunchSettings passes audioBuffer cleanly without mutating other modes", () => {
+    const d = defaultModeDefaults();
+    d.flex = { ...d.flex, audioBuffer: 200 };
+    const before = structuredClone(d);
+    expect(resolveLaunchSettings("flex", d).audioBuffer).toBe(200);
+    expect(resolveLaunchSettings("mirror", d).audioBuffer).toBe("auto");
+    expect(resolveLaunchSettings("hifi", d).audioBuffer).toBe("auto");
+    expect(d).toEqual(before);
   });
 });

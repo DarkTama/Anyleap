@@ -12,6 +12,9 @@ vi.mock("@/lib/persist", async (orig) => ({
 const mockSetTransferFoldersConfig = vi.fn(async () => {});
 vi.mock("@/lib/tauri", () => ({
   getSystemResolution: vi.fn(async () => [1920, 1080]),
+  getScrollMultiplier: vi.fn(async () => null),
+  setScrollFeel: vi.fn(async () => null),
+  restartWithAudioBuffer: vi.fn(async () => null),
   setTransferFoldersConfig: (...args: unknown[]) => mockSetTransferFoldersConfig(...(args as [])),
 }));
 const mockOpenDialog = vi.fn(async () => null as string | null);
@@ -344,5 +347,15 @@ describe("relabelled controls keep writing the same stored key", () => {
 
     // T-04 helper no longer mentions AnyLeap_Transfers
     expect(entry("T-04").helper).not.toContain("AnyLeap_Transfers");
+  });
+
+  it("filter matches Audio buffer (M-10b) under buffer, crackling, and usb keywords", async () => {
+    await mount();
+    for (const q of ["buffer", "crackling", "usb"]) {
+      await typeFilter(q);
+      const names = railButtons().map((b) => b.textContent);
+      expect(names.some((n) => n?.startsWith("Phone mirroring"))).toBe(true);
+      expect(el.textContent).toContain("Audio buffer");
+    }
   });
 });

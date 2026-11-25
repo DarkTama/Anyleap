@@ -23,39 +23,39 @@
 
 ### Task 1.1: Backend `AudioBufferSetting` & `resolve_audio_buffer_ms` (TDD)
 **Files:** modify `src-tauri/src/commands.rs`, `src-tauri/src/phone_hub/audio_only.rs`.
-- [ ] Write failing Rust unit tests in `src-tauri/src/commands.rs`:
+- [x] Write failing Rust unit tests in `src-tauri/src/commands.rs`:
   - `resolve_audio_buffer_ms`: `Auto` + USB (`"SER123"`, `"emulator-5554"`) → `50`; `Auto` + wireless (`"192.168.1.24:36431"`, `"[fe80::1]:5555"`) → `150`; explicit `50` / `100` / `200` override transport.
   - `CoreSettings` JSON deserialization defaults missing or unknown `audioBuffer` to `Auto`.
   - `build_scrcpy_args` and `build_app_window_args` emit `--audio-buffer=50` for USB `Auto`, `--audio-buffer=150` for Wi-Fi `Auto`, `--audio-buffer=100` / `200` for explicit settings, and **omit** `--audio-buffer=*` when `no_audio = true`.
   - `degrade_args` strips any `--audio-buffer=*` before appending `--no-audio`.
-- [ ] Write failing unit test in `src-tauri/src/phone_hub/audio_only.rs`:
+- [x] Write failing unit test in `src-tauri/src/phone_hub/audio_only.rs`:
   - `build_audio_only_args` emits `--audio-buffer=50` on USB and `--audio-buffer=150` on `IP:port`.
-- [ ] Implement `AudioBufferSetting`, `resolve_audio_buffer_ms`, `CoreSettings.audio_buffer` (`#[serde(default)]`), and update `build_scrcpy_args`, `degrade_args`, and `build_audio_only_args` (plus existing `CoreSettings` test literals).
-- [ ] Run `cargo test --manifest-path src-tauri/Cargo.toml`; verify all tests pass.
+- [x] Implement `AudioBufferSetting`, `resolve_audio_buffer_ms`, `CoreSettings.audio_buffer` (`#[serde(default)]`), and update `build_scrcpy_args`, `degrade_args`, and `build_audio_only_args` (plus existing `CoreSettings` test literals).
+- [x] Run `cargo test --manifest-path src-tauri/Cargo.toml`; verify all tests pass.
 
 ### Task 1.2: Frontend `modeDefaults` & `CoreSettings` Model (TDD)
 **Files:** modify `src/lib/types.ts`, `src/lib/modeSettings.ts`, `src/lib/modeSettings.test.ts`, `src/lib/settingsStore.modeDefaults.test.ts`.
-- [ ] Write failing Vitest tests in `src/lib/modeSettings.test.ts`:
+- [x] Write failing Vitest tests in `src/lib/modeSettings.test.ts`:
   - `defaultModeDefaults()` sets `audioBuffer: "auto"` on `mirror`, `flex`, `hifi`.
   - `normalizeModeDefaults` normalizes missing or invalid `audioBuffer` values to `"auto"`, and preserves `"auto" | 50 | 100 | 200`.
   - `resolveLaunchSettings` passes `audioBuffer` cleanly and never mutates other modes.
-- [ ] Add `AudioBufferSetting` (`"auto" | 50 | 100 | 200`) to `src/lib/types.ts` (`CoreSettings` + `DEFAULT_SETTINGS.audioBuffer = "auto"`) and `src/lib/modeSettings.ts` normalization.
-- [ ] Run `npx vitest run src/lib/modeSettings.test.ts src/lib/settingsStore.modeDefaults.test.ts`.
+- [x] Add `AudioBufferSetting` (`"auto" | 50 | 100 | 200`) to `src/lib/types.ts` (`CoreSettings` + `DEFAULT_SETTINGS.audioBuffer = "auto"`) and `src/lib/modeSettings.ts` normalization.
+- [x] Run `npx vitest run src/lib/modeSettings.test.ts src/lib/settingsStore.modeDefaults.test.ts`.
 
 ### Task 1.3: Settings UI in Phone Mirroring (`M-10` helper & `M-10b` Audio buffer) (TDD)
 **Files:** modify `src/components/settings/registry.ts`, `src/components/settings/PhoneMirroringSection.tsx`, `src/components/settings/__tests__/PhoneMirroringSection.test.tsx`, `src/components/settings/__tests__/SettingsPanel.test.tsx`.
-- [ ] Update `M-10` helper in `registry.ts` and `PhoneMirroringSection.tsx` to mention USB as the most stable, lowest-latency option.
-- [ ] Add `M-10b` (`Audio buffer`) to `REGISTRY` (`section: "phone"`) with search keywords (`audio`, `buffer`, `stutter`, `lag`, `wifi`, `glitch`, `latency`, `usb`).
-- [ ] Render `SegmentedControl` (`Auto`, `50 ms`, `100 ms`, `200 ms`) in `DisplayModePanel` (`Audio & control` group):
+- [x] Update `M-10` helper in `registry.ts` and `PhoneMirroringSection.tsx` to mention USB as the most stable, lowest-latency option.
+- [x] Add `M-10b` (`Audio buffer`) to `REGISTRY` (`section: "phone"`) with search keywords (`audio`, `buffer`, `stutter`, `lag`, `wifi`, `glitch`, `latency`, `usb`).
+- [x] Render `SegmentedControl` (`Auto`, `50 ms`, `100 ms`, `200 ms`) in `DisplayModePanel` (`Audio & control` group):
   - Disable with `"Turn on Play phone audio on this PC to adjust the buffer."` when `s.noAudio` is `true`.
   - Show dynamic helper (`Auto uses 50 ms on USB and 150 ms on Wi-Fi…`, appending active transport info when a session of that mode is running).
-  - Add an accessible **"Apply & restart mirror"** button when a session for that mode is currently running with a different buffer than it launched with (using `#93` in-place restart), or note `"Takes effect on next mirror start"` when idle.
-- [ ] Add component + filter tests in `PhoneMirroringSection.test.tsx` and `SettingsPanel.test.tsx`.
+  - Apply mid-session changes to running sessions of the same mode via the `#93` / `#108` / `#110` in-place restart path (`restart_with_audio_buffer`).
+- [x] Add component + filter tests in `PhoneMirroringSection.test.tsx` and `SettingsPanel.test.tsx`.
 
 ### Task 1.4: Phase 1 Verification & Docs Sync
-- [ ] Run all 5 `AGENTS.md` §2 gates (`npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo check`, `npm run build`).
+- [x] Run all 5 `AGENTS.md` §2 gates (`npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo check`, `npm run build`).
 - [ ] Manual check on **home Wi-Fi**, **office Wi-Fi**, and **USB** (`docs/MANUAL-TEST-CHECKLIST.md`).
-- [ ] Sync `README.md` (`## Features`), `CONTEXT.md`, and `SPEC-34` status (`AGENTS.md` §1.4).
+- [x] Sync `README.md` (`## Features`), `CONTEXT.md`, and `SPEC-34` status (`AGENTS.md` §1.4).
 
 ---
 

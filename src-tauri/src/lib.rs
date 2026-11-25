@@ -63,6 +63,7 @@ pub fn run() {
             commands::send_keyevent,
             commands::open_notifications,
             commands::restart_with_screen_off,
+            commands::restart_with_audio_buffer,
             commands::mirror_rect,
             commands::toggle_device_orientation,
             commands::list_device_cameras,

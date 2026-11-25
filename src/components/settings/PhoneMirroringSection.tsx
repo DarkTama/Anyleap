@@ -25,7 +25,8 @@ import {
   type ResolutionSegment,
   type ScrollStyle,
 } from "@/lib/modeSettings";
-import type { Codec, CoreSettings } from "@/lib/types";
+import { isWifiSerial } from "@/lib/deviceStatus";
+import type { AudioBufferSetting, Codec, CoreSettings } from "@/lib/types";
 import { entry } from "./registry";
 import { ModeTabs } from "./ModeTabs";
 import { SegmentedControl } from "./SegmentedControl";
@@ -68,6 +69,12 @@ const SCROLL_STYLE_SEGMENTS: { value: ScrollStyle; label: string }[] = [
   { value: "smooth", label: "Smooth (reading)" },
   { value: "paged", label: "Paged (short videos)" },
 ];
+const AUDIO_BUFFER_SEGMENTS: { value: AudioBufferSetting; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: 50, label: "50 ms" },
+  { value: 100, label: "100 ms" },
+  { value: 200, label: "200 ms" },
+];
 
 export function formatScrollMultiplier(m: number): string {
   return Number(m.toFixed(2)).toString();
@@ -96,6 +103,13 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 /** Quality, Audio & control, Phone while mirroring, Window options (+ Flex display on Flex). */
 function DisplayModePanel({ mode }: { mode: DisplayMode }) {
   const s: ModeSettings = useAppStore((st) => st.modeDefaults[mode]);
+  const sessions = useAppStore((st) => st.sessions);
+  const sessionModes = useAppStore((st) => st.sessionModes);
+  const currentMode = useAppStore((st) => st.currentMode);
+  const runningSession = sessions.find(
+    (sess) =>
+      sess.mode !== "camera" && (sessionModes[sess.id] ?? launchMode(currentMode)) === mode,
+  );
   const [fineOpen, setFineOpen] = useState(false);
   const fineId = useId();
   const quality = deriveQuality(s);
@@ -104,6 +118,17 @@ function DisplayModePanel({ mode }: { mode: DisplayMode }) {
   const fpsSeg = segmentForFps(s.maxFps);
   const bitSeg = segmentForBitrate(s.videoBitRate);
   const set = (patch: Partial<ModeSettings>) => editMode(mode, patch);
+  const audioEntry = entry("M-10");
+  const audioBufferEntry = entry("M-10b");
+  const audioBufferValue = s.audioBuffer ?? "auto";
+  const audioBufferHint =
+    audioBufferValue === "auto"
+      ? `${audioBufferEntry.helper}${
+          runningSession
+            ? ` Currently ${isWifiSerial(runningSession.serial) ? "150 ms on Wi-Fi" : "50 ms on USB"}.`
+            : ""
+        }`
+      : "Fixed buffer for this mode. On weak Wi-Fi, a bigger buffer stops crackling at the cost of a little delay. USB is the most stable.";
 
   return (
     <div className="space-y-4">
@@ -180,10 +205,19 @@ function DisplayModePanel({ mode }: { mode: DisplayMode }) {
 
       <Group title="Audio & control">
         <SwitchRow
-          label="Play phone audio on this PC"
-          hint="Off: sound stays on the phone."
+          label={audioEntry.label}
+          hint={audioEntry.helper}
           checked={!s.noAudio}
           onChange={(v) => set({ noAudio: !v })}
+        />
+        <SegmentedControl<AudioBufferSetting>
+          label={audioBufferEntry.label}
+          hint={audioBufferHint}
+          segments={AUDIO_BUFFER_SEGMENTS}
+          value={audioBufferValue}
+          disabled={s.noAudio}
+          disabledReason="Turn on Play phone audio on this PC to adjust the buffer."
+          onChange={(audioBuffer) => set({ audioBuffer })}
         />
         <SwitchRow
           label="Allow control from this PC"

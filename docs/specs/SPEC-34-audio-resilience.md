@@ -1,6 +1,6 @@
 # SPEC-34: Phone Audio Resilience (Adaptive Audio Buffer & Bluetooth Audio Mode)
 
-> **Status:** Draft / Proposed (2026-11-25)
+> **Status:** Phase 1 Implemented; Phase 2 Proposed; Phase 3 Deferred (2026-11-25)
 > **Scope:** `scrcpy` audio argument building (`src-tauri/src/commands.rs`, `src-tauri/src/phone_hub/audio_only.rs`), transport detection (`src-tauri/src/device_identity.rs`), Windows Bluetooth audio sink module (Phase 2), per-mode & audio settings (`src/lib/modeSettings.ts`, `src/lib/types.ts`, `src/components/settings/`), and Phone Hub / Mirror status surfaces (`src/components/phone/OverviewView.tsx`, `src/components/EmbeddedMirrorWindow.tsx`).
 > **Related:** SPEC-27 (`Phone Hub` audio-only), SPEC-28 (`modeDefaults`, single-home Settings IA), SPEC-30 (per-mode `Auto` + manual override UX pattern), `#93` / `d9b67b8` (in-place mirror session restart).
 > **Plan:** `docs/superpowers/plans/2026-11-25-spec34-audio-resilience.md`
