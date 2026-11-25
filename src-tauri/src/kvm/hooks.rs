@@ -2290,8 +2290,8 @@ unsafe fn query_process_info(pid: u32) -> (ProcessElevation, String) {
         std::path::Path::new(&full)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(&full)
-            .to_string()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("pid:{pid}"))
     } else {
         format!("pid:{pid}")
     };

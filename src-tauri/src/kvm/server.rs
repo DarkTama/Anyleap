@@ -491,7 +491,12 @@ async fn handle_connection(incoming: quinn::Incoming, ctx: ServerContext) {
                             let _ = s.stop(super::files::quic_cancel_varint());
                         }
                         Err(e) => {
-                            super::debug_log::note(|| format!("STAGING_FAIL side=server err={e}"));
+                            super::debug_log::note(|| {
+                                format!(
+                                    "STAGING_FAIL side=server err={}",
+                                    super::debug_log::redact_paths_in_text(&e)
+                                )
+                            });
                             eprintln!("[KVM-Server] transfer rejected: {e}");
                         }
                     }

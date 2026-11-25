@@ -1269,7 +1269,10 @@ pub async fn send_tracked_bulk_file(
     let mut throttle = ProgressThrottle::new();
     let mut sent_file = 0u64;
     super::debug_log::note(|| {
-        format!("{prefix}_START side={side} id={id} rel={rel_path} size={size}")
+        format!(
+            "{prefix}_START side={side} id={id} file_hash={} size={size}",
+            super::debug_log::short_hash(&rel_path)
+        )
     });
     let res = send_bulk_file_stream(
         conn,
@@ -1299,18 +1302,30 @@ pub async fn send_tracked_bulk_file(
                     on_progress(p);
                 }
             }
-            super::debug_log::note(|| format!("{prefix}_DONE side={side} id={id} rel={rel_path}"));
+            super::debug_log::note(|| {
+                format!(
+                    "{prefix}_DONE side={side} id={id} file_hash={}",
+                    super::debug_log::short_hash(&rel_path)
+                )
+            });
             Ok(())
         }
         Err(e) => {
             clear_outbound_total(&id);
             if e == TRANSFER_CANCELLED_ERR {
                 super::debug_log::note(|| {
-                    format!("{prefix}_CANCELLED side={side} id={id} rel={rel_path}")
+                    format!(
+                        "{prefix}_CANCELLED side={side} id={id} file_hash={}",
+                        super::debug_log::short_hash(&rel_path)
+                    )
                 });
             } else {
                 super::debug_log::note(|| {
-                    format!("{prefix}_ERR side={side} id={id} rel={rel_path} err={e}")
+                    format!(
+                        "{prefix}_ERR side={side} id={id} file_hash={} err={}",
+                        super::debug_log::short_hash(&rel_path),
+                        super::debug_log::redact_paths_in_text(&e)
+                    )
                 });
             }
             Err(e)

@@ -237,7 +237,12 @@ impl KvmClientHandle {
                             let _ = s.stop(super::files::quic_cancel_varint());
                         }
                         Err(e) => {
-                            super::debug_log::note(|| format!("STAGING_FAIL side=client err={e}"));
+                            super::debug_log::note(|| {
+                                format!(
+                                    "STAGING_FAIL side=client err={}",
+                                    super::debug_log::redact_paths_in_text(&e)
+                                )
+                            });
                             eprintln!("[KVM-Client] transfer rejected: {e}");
                         }
                     }

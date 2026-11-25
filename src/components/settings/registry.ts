@@ -10,7 +10,8 @@ export type SectionId =
   | "mousekb"
   | "clipboard"
   | "audio"
-  | "advanced";
+  | "advanced"
+  | "about";
 
 export const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "General" },
@@ -20,6 +21,7 @@ export const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "clipboard", label: "Clipboard & files" },
   { id: "audio", label: "Audio, media & power" },
   { id: "advanced", label: "Advanced" },
+  { id: "about", label: "About" },
 ];
 
 export interface SettingEntry {
@@ -106,8 +108,12 @@ export const REGISTRY: SettingEntry[] = [
   // Advanced
   e("T-04", "advanced", "Large files: save to Downloads above", "Files above this size (MB) are saved directly to your receive folder.", ["limit", "size", "mb", "transfer"]),
   e("T-05", "advanced", "Large files: ask before copying above", "Bigger copies wait until you click Fetch. Default 100 MB.", ["limit", "size", "mb", "fetch", "clipboard"]),
-  e("K-09", "advanced", "Record a diagnostics log", "Records input decisions and slow events for support. Rotates at 5 MB.", ["debug", "log", "support", "troubleshoot"]),
+  e("K-09", "advanced", "Record a diagnostics log", "Records input decisions and slow events without window titles or filenames. Rotates at 5 MB and keeps logs up to 7 days.", ["debug", "log", "support", "troubleshoot"]),
   e("K-10", "advanced", "Open log folder", undefined, ["debug", "log", "folder"]),
+  e("K-12", "advanced", "Delete logs", "Deletes saved diagnostics log files from your PC.", ["debug", "log", "delete", "clear", "privacy", "remove"]),
+
+  // About
+  e("A-01", "about", "Privacy", "AnyLeap runs locally on your computers and phone. It has no account, no cloud, and no tracking — only optional GitHub update checks use the internet.", ["privacy", "policy", "data", "folder", "logs", "delete", "tracking", "telemetry", "about"]),
 ];
 
 const BY_ID = new Map(REGISTRY.map((x) => [x.id, x]));

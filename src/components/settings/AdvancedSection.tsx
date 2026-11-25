@@ -1,7 +1,11 @@
 import { useEffect, useId, useState } from "react";
-import { ChevronDown, FolderOpen } from "lucide-react";
+import { ChevronDown, FolderOpen, Trash2 } from "lucide-react";
 import { useKvmStore } from "@/stores/kvmStore";
-import { kvmGetDebugLogPath, kvmOpenDebugLogFolder } from "@/services/kvmService";
+import {
+  kvmDeleteDebugLogs,
+  kvmGetDebugLogPath,
+  kvmOpenDebugLogFolder,
+} from "@/services/kvmService";
 import { entry } from "./registry";
 import { Panel } from "./Panel";
 import { NumberField } from "./FieldRows";
@@ -9,14 +13,16 @@ import { SwitchRow } from "./SwitchRow";
 import type { ShowFn } from "./SettingsShell";
 
 /**
- * Advanced (T-04, T-05, K-09, K-10): collapsed by default; auto-expands while a filter
- * matches one of its rows (SPEC-28 §7). Last in the focus order.
+ * Advanced (T-04, T-05, K-09, K-10, K-12): collapsed by default; auto-expands while a filter
+ * matches one of its rows (SPEC-28 §7). Last disclosure in the focus order.
  */
 export function AdvancedSection({ show, autoOpen }: { show: ShowFn; autoOpen: boolean }) {
   const kvm = useKvmStore((s) => s.settings);
   const update = useKvmStore((s) => s.updateSettings);
   const [userOpen, setUserOpen] = useState(false);
   const [logPath, setLogPath] = useState("");
+  const [deleteStatus, setDeleteStatus] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const bodyId = useId();
   const open = userOpen || autoOpen;
 
@@ -27,11 +33,28 @@ export function AdvancedSection({ show, autoOpen }: { show: ShowFn; autoOpen: bo
   }, []);
 
   const toggleLog = (enabled: boolean) => {
+    setDeleteStatus(null);
     update({ debugLog: enabled });
     if (!logPath) {
       void kvmGetDebugLogPath()
         .then((p) => setLogPath(p))
         .catch(() => {});
+    }
+  };
+
+  const handleDeleteLogs = async () => {
+    setDeleting(true);
+    try {
+      const removed = await kvmDeleteDebugLogs();
+      setDeleteStatus(
+        removed > 0
+          ? `Deleted ${removed} log ${removed === 1 ? "file" : "files"}.`
+          : "No log files to delete.",
+      );
+    } catch {
+      setDeleteStatus("Could not delete log files.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -76,19 +99,39 @@ export function AdvancedSection({ show, autoOpen }: { show: ShowFn; autoOpen: bo
             onChange={toggleLog}
           />
         )}
-        {show("K-10") && (
-          <div className="flex items-center gap-2 pt-1">
-            <div className="min-w-0 flex-1 truncate rounded-lg border border-ink-700 bg-ink-950 px-3 py-1.5 font-mono text-[11px] text-text">
-              {logPath || "kvm-debug.log"}
+        {(show("K-10") || show("K-12")) && (
+          <div className="space-y-1 pt-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1 truncate rounded-lg border border-ink-700 bg-ink-950 px-3 py-1.5 font-mono text-[11px] text-text">
+                {logPath || "kvm-debug.log"}
+              </div>
+              {show("K-10") && (
+                <button
+                  type="button"
+                  onClick={() => void kvmOpenDebugLogFolder().catch(() => {})}
+                  className="btn-tactile flex min-h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-400"
+                >
+                  <FolderOpen aria-hidden="true" className="h-3.5 w-3.5" />
+                  <span>{entry("K-10").label}</span>
+                </button>
+              )}
+              {show("K-12") && (
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void handleDeleteLogs()}
+                  className="btn-tactile flex min-h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-xs font-medium text-text hover:border-status-danger/60 hover:text-text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-400 disabled:opacity-50"
+                >
+                  <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
+                  <span>{entry("K-12").label}</span>
+                </button>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => void kvmOpenDebugLogFolder().catch(() => {})}
-              className="btn-tactile flex min-h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-xs font-medium text-text hover:border-text-muted hover:text-text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-400"
-            >
-              <FolderOpen aria-hidden="true" className="h-3.5 w-3.5" />
-              <span>{entry("K-10").label}</span>
-            </button>
+            {deleteStatus && (
+              <p aria-live="polite" className="text-[11px] text-text-muted">
+                {deleteStatus}
+              </p>
+            )}
           </div>
         )}
       </div>

@@ -90,6 +90,14 @@ export async function kvmOpenDebugLogFolder(): Promise<void> {
   return await invoke<void>("kvm_open_debug_log_folder");
 }
 
+export async function kvmDeleteDebugLogs(): Promise<number> {
+  return await invoke<number>("kvm_delete_debug_logs");
+}
+
+export async function openAppDataFolder(): Promise<void> {
+  return await invoke<void>("open_app_data_folder");
+}
+
 export async function kvmDebugNote(text: string): Promise<void> {
   return await invoke<void>("kvm_debug_note", { text });
 }

@@ -110,6 +110,8 @@ pub fn run() {
             kvm::commands::kvm_set_debug_log,
             kvm::commands::kvm_get_debug_log_path,
             kvm::commands::kvm_open_debug_log_folder,
+            kvm::commands::kvm_delete_debug_logs,
+            kvm::commands::open_app_data_folder,
             kvm::commands::kvm_debug_note,
             kvm::clipboard::kvm_set_sync_settings,
             // --- SPEC-25c ---
@@ -158,6 +160,13 @@ pub fn run() {
         ])
         .setup(|app| {
             transfer_paths::init_defaults(app.path().download_dir().ok());
+            if let Ok(log_dir) = app.path().app_log_dir() {
+                let _ = kvm::debug_log::prune_expired_logs(
+                    &log_dir,
+                    kvm::debug_log::MAX_LOG_AGE,
+                    std::time::SystemTime::now(),
+                );
+            }
             // Wheel-to-swipe hook/worker/refresher threads (Windows no-ops elsewhere).
             wheel_swipe::init(app.handle());
             // --- SPEC-25b ---
