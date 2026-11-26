@@ -3,6 +3,7 @@ import { StudioDeck } from "@/components/deck/StudioDeck";
 import { PhoneView, type PhoneSubTab } from "@/components/phone/PhoneView";
 import { ComputersView } from "@/components/computers/ComputersView";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import type { SettingsFocusTarget } from "@/components/settings/SettingsShell";
 import { AppHeader, type ShellTab } from "@/components/shell/AppHeader";
 import { CommandPalette } from "@/components/shell/CommandPalette";
 import { ConnectionDoctor } from "@/components/ConnectionDoctor";
@@ -43,9 +44,15 @@ import {
   getNicknames,
   loadAppPrefs,
   loadModeDefaults,
+  loadNotificationStorage,
   loadTransferFolders,
   runFileSyncMigration,
+  saveNotificationStorage,
 } from "@/lib/persist";
+import {
+  isValidAndroidPackage,
+  migrateInvalidPerAppEntries,
+} from "@/lib/notificationStorage";
 import { resolveLaunchSettings, toScrollConfig, type MirrorMode } from "@/lib/modeSettings";
 import { launchMode } from "@/lib/modeActions";
 import {
@@ -55,9 +62,11 @@ import {
 } from "@/lib/mirrorWindowPlan";
 import {
   onPhoneNotifications,
+  phoneGetSavedNotificationPackages,
   phoneHubSetSettings,
   phoneHubUnwatch,
   phoneHubWatch,
+  phoneSetNotificationStorageConfig,
 } from "@/services/phoneHubService";
 import { usePhoneHubStore } from "@/stores/phoneHubStore";
 import type { PhoneHubNotification } from "@/types/phone";
@@ -100,12 +109,15 @@ function App() {
   const setAppPrefs = useAppStore((s) => s.setAppPrefs);
   const setTransferFolders = useAppStore((s) => s.setTransferFolders);
   const setDefaultTransferFolders = useAppStore((s) => s.setDefaultTransferFolders);
+  const setNotificationStorage = useAppStore((s) => s.setNotificationStorage);
+  const setVaultError = useAppStore((s) => s.setVaultError);
   const setError = useAppStore((s) => s.setError);
   const setNicknames = useAppStore((s) => s.setNicknames);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [activeTab, setActiveTab] = useState<ShellTab>("devices");
   const [phoneSubTab, setPhoneSubTab] = useState<PhoneSubTab>("overview");
+  const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | null>(null);
   const [selectedPhoneSerial, setSelectedPhoneSerial] = useState<string | null>(null);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
@@ -132,6 +144,7 @@ function App() {
   );
 
   const desktopNotifications = useAppStore((s) => s.appPrefs.desktopNotifications);
+  const notificationStorage = useAppStore((s) => s.notificationStorage);
   const onlineDevices = devices.filter((d) => d.state === "device");
   const activePhoneSerial =
     selectedPhoneSerial && onlineDevices.some((d) => d.serial === selectedPhoneSerial)
@@ -250,14 +263,24 @@ function App() {
     };
   }, [applyNotifications]);
 
-  // Keep notification polling active in background when desktopNotifications is enabled and Phone tab is closed
+  // Keep notification polling active in background when desktopNotifications OR (historyEnabled && backgroundCapture) is enabled and Phone tab is closed
   useEffect(() => {
-    if (!activePhoneSerial || !desktopNotifications || activeTab === "phone") return;
+    const backgroundCaptureActive =
+      notificationStorage.historyEnabled && notificationStorage.backgroundCapture;
+    if (!activePhoneSerial || (!desktopNotifications && !backgroundCaptureActive) || activeTab === "phone") {
+      return;
+    }
     void phoneHubWatch(activePhoneSerial, ["notifications"]).catch(() => {});
     return () => {
       void phoneHubUnwatch(activePhoneSerial).catch(() => {});
     };
-  }, [activePhoneSerial, desktopNotifications, activeTab]);
+  }, [
+    activePhoneSerial,
+    desktopNotifications,
+    notificationStorage.historyEnabled,
+    notificationStorage.backgroundCapture,
+    activeTab,
+  ]);
 
   // Event listeners + initial hydrate.
   useEffect(() => {
@@ -452,6 +475,44 @@ function App() {
         void setTransferFoldersConfig(tf.receiveDir, tf.phoneUploadDir).catch(() => {});
       })
       .catch(() => {});
+    Promise.all([
+      loadNotificationStorage(),
+      phoneGetSavedNotificationPackages().catch(() => null),
+    ])
+      .then(([ns, savedPkgs]) => {
+        let nextNs = ns;
+        if (Array.isArray(savedPkgs)) {
+          const savedSet = new Set(savedPkgs);
+          const migrated = migrateInvalidPerAppEntries(ns, savedSet);
+          if (migrated.dropped.length > 0) {
+            nextNs = migrated.settings;
+            void saveNotificationStorage(nextNs).catch(() => {});
+            const hub = usePhoneHubStore.getState();
+            for (const droppedPkg of migrated.dropped) {
+              if (hub.sensitivePackages.includes(droppedPkg)) {
+                hub.setPackageSensitive(droppedPkg, false);
+              }
+            }
+          }
+          const hub = usePhoneHubStore.getState();
+          for (const sensPkg of hub.sensitivePackages) {
+            if (!isValidAndroidPackage(sensPkg) && !savedSet.has(sensPkg)) {
+              hub.setPackageSensitive(sensPkg, false);
+            }
+          }
+        }
+        setNotificationStorage(nextNs);
+        return phoneSetNotificationStorageConfig(nextNs);
+      })
+      .then((status) => {
+        setVaultError(status.vaultError ?? null);
+      })
+      .catch((err) => {
+        const msg = String(err);
+        if (msg.includes("VAULT_DECRYPT_FAILED")) {
+          setVaultError(msg);
+        }
+      });
     getNicknames().then(setNicknames).catch(() => {});
     void useActivityStore.getState().load();
     void useKvmStore.getState().setAllowControl(loadAllowControl());
@@ -463,7 +524,7 @@ function App() {
       get: () => useKvmStore.getState().settings,
       update: (patch) => useKvmStore.getState().updateSettings(patch),
     }).catch(() => {});
-  }, [setModeDefaults, setAppPrefs, setTransferFolders, setDefaultTransferFolders, setNicknames]);
+  }, [setModeDefaults, setAppPrefs, setTransferFolders, setDefaultTransferFolders, setNotificationStorage, setVaultError, setNicknames]);
 
   // Global Ctrl+K shortcut for Command Palette
   useEffect(() => {
@@ -1042,13 +1103,23 @@ function App() {
             notificationsLoading={notificationsLoading}
             notificationsError={notificationsError}
             onRefreshNotifications={() => void fetchPhoneNotifications()}
-            onOpenSettings={() => setActiveTab("settings")}
+            onOpenSettings={() => {
+              setSettingsFocusTarget({
+                section: "general",
+                anchorId: "settings-phone-notifications-money",
+                nonce: Date.now(),
+              });
+              setActiveTab("settings");
+            }}
           />
         )}
         {activeTab === "computers" && <ComputersView />}
         {activeTab === "settings" && (
           <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-6 max-w-5xl mx-auto w-full">
-            <SettingsPanel onOpenComputers={() => setActiveTab("computers")} />
+            <SettingsPanel
+              onOpenComputers={() => setActiveTab("computers")}
+              focusTarget={settingsFocusTarget}
+            />
           </div>
         )}
       </main>

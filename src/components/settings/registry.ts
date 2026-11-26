@@ -45,6 +45,14 @@ export const REGISTRY: SettingEntry[] = [
   e("M-27", "general", "Show phone notifications on this PC", undefined, ["notification", "popup", "toast"]),
   e("M-28", "general", "Battery alerts", "Alerts at 20% and when full.", ["battery", "charge", "low"]),
   e("M-29", "general", "Updates", "Check for a newer version of AnyLeap.", ["update", "version", "release"]),
+  e("N-01", "general", "Save notification history & transactions on this PC", "Off by default. Stored locally and encrypted for your Windows account; never synced.", ["notification", "history", "persist", "store", "privacy", "money"]),
+  e("N-02", "general", "Notification check interval", "How often AnyLeap reads notifications while the phone is connected.", ["poll", "interval", "refresh", "notification"]),
+  e("N-03", "general", "Capture notifications while Phone tab is closed", "Keeps watching for saved history and Money alerts whenever a phone is connected.", ["background", "capture", "watch", "money"]),
+  e("N-04", "general", "App retention, Money sources & privacy", "Retention and Money sources are independent. Pick which notifications to keep, and add Money sources to track spending without counting unrelated alerts.", ["retention", "policy", "app", "sensitive", "transactions", "money", "source", "bank", "ewallet", "paylater", "credit card", "template", "add money source"]),
+  e("N-05", "general", "Transaction retention", "How long parsed Money transactions are kept, separate from notification history.", ["transaction", "retention", "years", "forever", "money", "expiry"]),
+  e("N-06", "general", "Transfer match window", "Max time difference to match an Out and In of the same amount across your accounts.", ["transfer", "window", "minutes", "match", "money"]),
+  e("N-07", "general", "Large income highlight", "Highlight incoming transactions at or above this amount in Money.", ["money", "income", "threshold", "highlight", "alert"]),
+  e("N-08", "general", "Delete saved notification data", "Permanently deletes all stored notification history, Money transactions, and learned rules from this PC.", ["delete", "clear", "wipe", "reset", "privacy"]),
 
   // Phone mirroring (rendered as one block; any match shows the whole section)
   e("M-01", "phone", "Quality", "How good is your connection? Smooth saves bandwidth; Maximum needs USB or strong Wi-Fi.", ["preset", "smooth", "balanced", "sharp", "maximum"]),

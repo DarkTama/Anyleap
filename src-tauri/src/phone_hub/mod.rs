@@ -9,9 +9,11 @@ pub mod audio_only;
 mod e2e_tests;
 pub mod media;
 pub mod messages;
+pub mod money;
 pub mod overview;
 pub mod poller;
 pub mod thumbs;
+pub mod vault;
 
 #[derive(Default)]
 pub struct PhoneHubState {
@@ -22,6 +24,7 @@ pub struct PhoneHubState {
     pub messages: Mutex<messages::MessageStore>,
     pub poller: Mutex<poller::PollerState>,
     pub audio_only: Mutex<audio_only::AudioOnlyState>,
+    pub notification_vault: Mutex<vault::VaultStore>,
 }
 
 pub(crate) fn validate_serial(serial: &str) -> Result<(), String> {

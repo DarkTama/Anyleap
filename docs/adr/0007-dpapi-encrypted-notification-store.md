@@ -1,7 +1,7 @@
 # ADR 0007: Windows DPAPI Encrypted Local Store for Phone Hub Notifications and Transactions
 
 ## Status
-Proposed (2026-11-25; accompanies SPEC-33)
+Accepted — Phase 2 Implemented (2026-11-25; accompanies SPEC-33)
 
 ## Context
 SPEC-33 adds opt-in persistence for Phone Hub notifications (`Keep history` for 7/30/90 days) and parsed financial summaries (`Transactions only` or Money-source extractions), stored locally on the user's PC. Until now, Phone Hub held all notification and message state in memory only (`src/stores/phoneHubStore.ts`, `src-tauri/src/phone_hub/messages.rs`), persisting only non-sensitive preferences (`phoneHubMutedPackages`, `phoneHubNotificationPollSecs`) in `settings.json`.

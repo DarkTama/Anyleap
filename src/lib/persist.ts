@@ -9,6 +9,8 @@ export {
   saveAppPrefs,
   loadTransferFolders,
   saveTransferFolders,
+  loadNotificationStorage,
+  saveNotificationStorage,
   getNicknames,
   saveNickname,
   loadActivities,

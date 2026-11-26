@@ -379,6 +379,8 @@ async fn poll_notifications_once(app: &AppHandle, serial: &str) -> Result<(), bo
         Vec::new()
     };
 
+    crate::phone_hub::vault::ingest_notifications_into_vault(app, &state, &identity, &items);
+
     let _ = app.emit(
         "phone-notifications",
         PhoneNotificationsEvent {

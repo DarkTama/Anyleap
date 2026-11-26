@@ -10,7 +10,9 @@ import {
   Smartphone,
   UploadCloud,
   Usb,
+  Wallet,
   Wifi,
+  WifiOff,
   X,
 } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -24,6 +26,7 @@ import {
   onPhoneOverview,
   phoneGetConversations,
   phoneGetOverview,
+  phoneGetSavedNotificationDevices,
   phoneHubUnwatch,
   phoneHubWatch,
 } from "@/services/phoneHubService";
@@ -36,14 +39,17 @@ import type { PhoneHubNotification } from "@/types/phone";
 import { OverviewView } from "./OverviewView";
 import { MessagesView } from "./MessagesView";
 import { NotificationsView } from "./NotificationsView";
+import { MoneyView } from "./MoneyView";
 import { GalleryView } from "./GalleryView";
 import { FilesView } from "./FilesView";
 import { AppsView } from "./AppsView";
+import { countActiveMoneyApps } from "@/lib/moneySummary";
 
 export type PhoneSubTab =
   | "overview"
   | "messages"
   | "notifications"
+  | "money"
   | "gallery"
   | "files"
   | "apps";
@@ -68,6 +74,7 @@ const NAV_ITEMS: Array<{
   { id: "overview", label: "Overview", Icon: LayoutDashboard },
   { id: "messages", label: "Messages", Icon: MessageSquare },
   { id: "notifications", label: "Notifications", Icon: Bell },
+  { id: "money", label: "Money", Icon: Wallet },
   { id: "gallery", label: "Gallery", Icon: Images },
   { id: "files", label: "Files", Icon: FolderOpen },
   { id: "apps", label: "Apps", Icon: AppWindow },
@@ -77,6 +84,7 @@ const SECTION_TITLES: Record<PhoneSubTab, string> = {
   overview: "Overview",
   messages: "Messages",
   notifications: "Notifications",
+  money: "Money",
   gallery: "Gallery",
   files: "Files",
   apps: "Apps",
@@ -103,14 +111,72 @@ export function PhoneView({
   onOpenSettings,
 }: PhoneViewProps) {
   const devices = useAppStore((s) => s.devices);
+  const savedDevices = useAppStore((s) => s.savedDevices);
   const nicknames = useAppStore((s) => s.nicknames);
+  const notificationStorage = useAppStore((s) => s.notificationStorage);
   const onlineDevices = devices.filter((d) => d.state === "device");
+
+  const [savedHistorySerials, setSavedHistorySerials] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!notificationStorage.historyEnabled || onlineDevices.length > 0) return;
+    let cancelled = false;
+    void phoneGetSavedNotificationDevices()
+      .then((serials) => {
+        if (!cancelled && Array.isArray(serials)) {
+          setSavedHistorySerials(serials);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [notificationStorage.historyEnabled, onlineDevices.length]);
 
   const activeDevice =
     (selectedSerial && onlineDevices.find((d) => d.serial === selectedSerial)) ||
     onlineDevices[0] ||
     null;
-  const activeSerial = activeDevice?.serial ?? null;
+
+  const offlineDevices = (() => {
+    if (onlineDevices.length > 0 || !notificationStorage.historyEnabled) return [];
+    const seen = new Set<string>();
+    const list: Array<{ id: string; label: string }> = [];
+    for (const d of savedDevices) {
+      const hw = d.hw_serial || d.id;
+      if (!hw || seen.has(hw)) continue;
+      seen.add(hw);
+      list.push({
+        id: hw,
+        label: nicknames[hw] || nicknames[d.id] || d.label || hw,
+      });
+    }
+    for (const hw of savedHistorySerials) {
+      if (!hw || seen.has(hw)) continue;
+      seen.add(hw);
+      list.push({
+        id: hw,
+        label: nicknames[hw] || hw,
+      });
+    }
+    return list;
+  })();
+
+  const activeOfflineDevice =
+    !activeDevice && offlineDevices.length > 0
+      ? (selectedSerial && offlineDevices.find((d) => d.id === selectedSerial)) ||
+        offlineDevices[0]
+      : null;
+
+  const isOffline = !activeDevice && Boolean(activeOfflineDevice);
+  const activeSerial = activeDevice?.serial ?? activeOfflineDevice?.id ?? null;
+  const activeHwSerial = activeDevice
+    ? activeDevice.hw_serial ||
+      savedDevices.find(
+        (d) => d.lastSerial === activeDevice.serial || d.id === activeDevice.serial,
+      )?.hw_serial ||
+      activeDevice.serial
+    : activeOfflineDevice?.id ?? null;
 
   const isWireless = activeDevice
     ? Boolean(activeDevice.transports?.wifi && !activeDevice.transports?.usb) ||
@@ -248,7 +314,7 @@ export function PhoneView({
 
   // Watch/unwatch backend phone hub + hydrate initial overview & conversations
   useEffect(() => {
-    if (!activeSerial) return;
+    if (!activeSerial || isOffline) return;
     let cancelled = false;
 
     void phoneHubWatch(activeSerial, ["overview", "notifications"]).catch(() => {});
@@ -272,7 +338,7 @@ export function PhoneView({
       cancelled = true;
       void phoneHubUnwatch(activeSerial).catch(() => {});
     };
-  }, [activeSerial, applyOverview, applyConversations]);
+  }, [activeSerial, isOffline, applyOverview, applyConversations]);
 
   // Subscribe to phone hub events while PhoneView is mounted
   useEffect(() => {
@@ -294,7 +360,7 @@ export function PhoneView({
     };
   }, [applyOverview, applyAudioState, applyConversations]);
 
-  if (!activeSerial || !activeDevice) {
+  if (!activeSerial || (!activeDevice && !activeOfflineDevice)) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center bg-ink-950 p-8 text-center">
         <Smartphone className="mb-3 h-10 w-10 text-ink-700" />
@@ -307,7 +373,13 @@ export function PhoneView({
   }
 
   let subtitle = "";
-  if (subTab === "overview") {
+  if (isOffline && subTab === "notifications") {
+    subtitle = "Offline — showing saved history";
+  } else if (isOffline && subTab === "money") {
+    subtitle = "Offline — showing saved history";
+  } else if (isOffline) {
+    subtitle = "Offline — connect phone for live data";
+  } else if (subTab === "overview") {
     subtitle = isStale
       ? "Stale — phone disconnected"
       : formatUpdatedAgo(overview?.updatedAtMs, nowMs);
@@ -317,6 +389,9 @@ export function PhoneView({
     const notifCount = notifications.length;
     const mutedCount = mutedPackages.length;
     subtitle = `${notifCount} ${notifCount === 1 ? "notification" : "notifications"} · ${mutedCount} ${mutedCount === 1 ? "app" : "apps"} muted`;
+  } else if (subTab === "money") {
+    const activeApps = countActiveMoneyApps(notificationStorage);
+    subtitle = `Estimate from banking and wallet notifications · ${activeApps} ${activeApps === 1 ? "app" : "apps"}`;
   } else if (subTab === "gallery") {
     subtitle = galleryAlbumLabel;
   } else if (subTab === "files") {
@@ -384,14 +459,25 @@ export function PhoneView({
               value={activeSerial}
               onChange={(e) => onSelectSerial(e.target.value)}
             >
-              {onlineDevices.map((d) => (
-                <option key={d.serial} value={d.serial} className={optionClass}>
-                  {nicknames[d.serial] || d.model || d.serial}
-                </option>
-              ))}
+              {isOffline
+                ? offlineDevices.map((d) => (
+                    <option key={d.id} value={d.id} className={optionClass}>
+                      {d.label}
+                    </option>
+                  ))
+                : onlineDevices.map((d) => (
+                    <option key={d.serial} value={d.serial} className={optionClass}>
+                      {nicknames[d.serial] || d.model || d.serial}
+                    </option>
+                  ))}
             </select>
             <span className="inline-flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-800 px-2 py-1 font-mono text-[11px] leading-[14px] text-text">
-              {isWireless ? (
+              {isOffline ? (
+                <>
+                  <WifiOff className="h-3.5 w-3.5 text-text-muted" />
+                  Offline
+                </>
+              ) : isWireless ? (
                 <>
                   <Wifi className="h-3.5 w-3.5 text-mist-300" />
                   Wireless
@@ -407,34 +493,62 @@ export function PhoneView({
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          {subTab === "overview" && (
-            <OverviewView serial={activeSerial} isWireless={isWireless} />
-          )}
-          {subTab === "messages" && <MessagesView serial={activeSerial} />}
-          {subTab === "notifications" && (
+          {subTab === "notifications" ? (
             <NotificationsView
               serial={activeSerial}
+              hwSerial={activeHwSerial ?? activeSerial}
+              isOffline={isOffline}
               notifications={notifications}
               loading={notificationsLoading}
               error={notificationsError}
               onRefresh={onRefreshNotifications}
               onOpenSettings={onOpenSettings}
             />
-          )}
-          {subTab === "gallery" && (
-            <GalleryView
-              serial={activeSerial}
-              onAlbumChange={setGalleryAlbumLabel}
+          ) : subTab === "money" ? (
+            <MoneyView
+              hwSerial={activeHwSerial ?? activeSerial}
+              isOffline={isOffline}
+              onOpenSettings={onOpenSettings}
             />
+          ) : isOffline ? (
+            <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+              <WifiOff className="mb-3 h-10 w-10 text-ink-700" />
+              <p className="text-sm font-medium text-text-strong">
+                {SECTION_TITLES[subTab]} requires a live phone connection
+              </p>
+              <p className="mt-1 max-w-md text-xs text-text-muted">
+                Connect your phone via USB or wireless ADB, or view your saved notification history.
+              </p>
+              <button
+                type="button"
+                onClick={() => onSubTabChange("notifications")}
+                className="btn-tactile mt-3 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-xs font-medium text-gold-400 hover:border-gold-400 cursor-pointer"
+              >
+                View saved notifications
+              </button>
+            </div>
+          ) : (
+            <>
+              {subTab === "overview" && (
+                <OverviewView serial={activeSerial} isWireless={isWireless} />
+              )}
+              {subTab === "messages" && <MessagesView serial={activeSerial} />}
+              {subTab === "gallery" && (
+                <GalleryView
+                  serial={activeSerial}
+                  onAlbumChange={setGalleryAlbumLabel}
+                />
+              )}
+              {subTab === "files" && (
+                <FilesView
+                  serial={activeSerial}
+                  onCurrentPathChange={setFilesCurrentPath}
+                  reloadKey={filesReloadKey}
+                />
+              )}
+              {subTab === "apps" && <AppsView serial={activeSerial} />}
+            </>
           )}
-          {subTab === "files" && (
-            <FilesView
-              serial={activeSerial}
-              onCurrentPathChange={setFilesCurrentPath}
-              reloadKey={filesReloadKey}
-            />
-          )}
-          {subTab === "apps" && <AppsView serial={activeSerial} />}
         </div>
       </div>
 

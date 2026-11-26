@@ -1,12 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { OpenAppResult } from "@/lib/types";
+import type { NotificationStorageSettings } from "@/lib/notificationStorage";
 import { resolveSelectedLaunchSettings } from "@/lib/modeActions";
 import type {
   Album,
   Conversation,
+  CorrectionResult,
+  DeleteResult,
+  LiabilityResolveResult,
   MediaKind,
   MediaPage,
+  MoneyVaultSnapshot,
   PhoneApp,
   PhoneAudioStateEvent,
   PhoneHubSection,
@@ -14,6 +19,9 @@ import type {
   PhoneNotificationsEvent,
   PhoneOverview,
   PhoneOverviewEvent,
+  StoredNotification,
+  TxClassification,
+  VaultStatus,
 } from "@/types/phone";
 
 export const phoneHubWatch = (serial: string, sections: PhoneHubSection[]) =>
@@ -91,3 +99,81 @@ export const onPhoneAudioState = (
   cb: (payload: PhoneAudioStateEvent) => void,
 ): Promise<UnlistenFn> =>
   listen<PhoneAudioStateEvent>("phone-audio-state", (e) => cb(e.payload));
+
+export const phoneSetNotificationStorageConfig = (
+  config: NotificationStorageSettings,
+) => invoke<VaultStatus>("phone_set_notification_storage_config", { config });
+
+export const phoneGetVaultStatus = () =>
+  invoke<VaultStatus>("phone_get_vault_status");
+
+export const phoneGetSavedNotificationDevices = () =>
+  invoke<string[]>("phone_get_saved_notification_devices");
+
+export const phoneGetSavedNotificationPackages = () =>
+  invoke<string[]>("phone_get_saved_notification_packages");
+
+export const phoneGetNotificationHistory = (
+  hwSerial: string,
+  limit = 200,
+  beforeUnix?: number,
+) =>
+  invoke<StoredNotification[]>("phone_get_notification_history", {
+    hwSerial,
+    limit,
+    beforeUnix: beforeUnix ?? null,
+  });
+
+export const phoneSetNotificationHidden = (dedupeId: string, hidden: boolean) =>
+  invoke<void>("phone_set_notification_hidden", { dedupeId, hidden });
+
+export const phoneDeleteAppNotificationData = (
+  packageName: string,
+  hwSerial?: string,
+  deleteRules = false,
+) =>
+  invoke<DeleteResult>("phone_delete_app_notification_data", {
+    package: packageName,
+    hwSerial: hwSerial ?? null,
+    deleteRules,
+  });
+
+export const phoneDeleteAllNotificationData = () =>
+  invoke<DeleteResult>("phone_delete_all_notification_data");
+
+export const phoneGetTransactions = (params?: {
+  hwSerial?: string | null;
+  currency?: string | null;
+  fromMs?: number | null;
+  toMs?: number | null;
+}) =>
+  invoke<MoneyVaultSnapshot>("phone_get_transactions", {
+    hwSerial: params?.hwSerial ?? null,
+    currency: params?.currency ?? null,
+    fromMs: params?.fromMs ?? null,
+    toMs: params?.toMs ?? null,
+  });
+
+export const phoneResolveLiabilityEvent = (
+  eventId: string,
+  linkedTxId: string | null,
+  ignore: boolean,
+) =>
+  invoke<LiabilityResolveResult>("phone_resolve_liability_event", {
+    eventId,
+    linkedTxId,
+    ignore,
+  });
+
+export const phoneApplyTransactionCorrection = (
+  txId: string,
+  classification: TxClassification | null,
+  category: string | null = null,
+  applyToSimilar = false,
+) =>
+  invoke<CorrectionResult>("phone_apply_transaction_correction", {
+    txId,
+    classification,
+    category,
+    applyToSimilar,
+  });

@@ -57,4 +57,19 @@ describe("filterSettings", () => {
     expect(filterSettings("sdcard").matches.has("F-03")).toBe(true);
     expect(filterSettings("upload").matches.has("F-03")).toBe(true);
   });
+
+  it("matches N-01..N-08 notification storage & Money settings by label, helper, and keywords", () => {
+    for (const id of ["N-01", "N-02", "N-03", "N-04", "N-05", "N-06", "N-07", "N-08"]) {
+      expect(REGISTRY.map((e) => e.id)).toContain(id);
+    }
+    expect(filterSettings("persist").matches.has("N-01")).toBe(true);
+    expect(filterSettings("poll").matches.has("N-02")).toBe(true);
+    expect(filterSettings("background").matches.has("N-03")).toBe(true);
+    expect(filterSettings("retention").matches.has("N-04")).toBe(true);
+    expect(filterSettings("add money source").matches.has("N-04")).toBe(true);
+    expect(filterSettings("forever").matches.has("N-05")).toBe(true);
+    expect(filterSettings("transfer").matches.has("N-06")).toBe(true);
+    expect(filterSettings("threshold").matches.has("N-07")).toBe(true);
+    expect(filterSettings("wipe").matches.has("N-08")).toBe(true);
+  });
 });

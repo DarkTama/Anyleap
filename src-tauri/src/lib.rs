@@ -150,6 +150,17 @@ pub fn run() {
             phone_hub::media::phone_open_media,
             phone_hub::audio_only::phone_audio_start,
             phone_hub::audio_only::phone_audio_stop,
+            phone_hub::vault::phone_set_notification_storage_config,
+            phone_hub::vault::phone_get_vault_status,
+            phone_hub::vault::phone_get_saved_notification_devices,
+            phone_hub::vault::phone_get_saved_notification_packages,
+            phone_hub::vault::phone_get_notification_history,
+            phone_hub::vault::phone_set_notification_hidden,
+            phone_hub::vault::phone_delete_app_notification_data,
+            phone_hub::vault::phone_delete_all_notification_data,
+            phone_hub::money::phone_get_transactions,
+            phone_hub::money::phone_resolve_liability_event,
+            phone_hub::money::phone_apply_transaction_correction,
             // --- end SPEC-27a ---
             // --- SPEC-31 ---
             transfer_paths::set_transfer_folders,

@@ -58,6 +58,7 @@ dependencies = [
  "quinn",
  "rand 0.8.8",
  "rcgen",
+ "regex",
  "rustls",
  "serde",
  "serde_json",

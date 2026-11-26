@@ -1148,6 +1148,23 @@ pub async fn get_device_notifications(
             );
             item.app_label = Some(resolved);
         }
+        let vault_items: Vec<crate::phone_hub::poller::PhoneHubNotification> = items
+            .iter()
+            .map(|n| crate::phone_hub::poller::PhoneHubNotification {
+                key: n.key.clone(),
+                package: n.package.clone(),
+                app_label: n.app_label.clone().unwrap_or_else(|| n.package.clone()),
+                title: n.title.clone(),
+                text: n.text.clone(),
+                posted_unix: n.posted_unix,
+            })
+            .collect();
+        crate::phone_hub::vault::ingest_notifications_into_vault(
+            &app,
+            &state,
+            &identity,
+            &vault_items,
+        );
     }
     Ok(items)
 }
