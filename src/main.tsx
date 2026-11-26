@@ -6,6 +6,7 @@ import { EmbeddedMirrorWindow } from "./components/EmbeddedMirrorWindow";
 import { DesktopHudWindow } from "./components/desktop/DesktopHudWindow";
 import { TransferBarWindow } from "./components/desktop/TransferBarWindow";
 import type { SessionMode } from "./lib/types";
+import type { DisplayMode } from "./lib/modeSettings";
 import "./index.css";
 
 // The floating control window loads the same bundle with ?control=1&serial=…
@@ -15,6 +16,9 @@ const mirrorSerial = params.get("mirror") ? params.get("serial") : null;
 const controlFlex = params.get("flex") === "1";
 const mirrorMode = (params.get("mode") as SessionMode) || undefined;
 const mirrorFlex = params.get("flex") === "1";
+const rawPreset = params.get("preset");
+const presetMode: DisplayMode | undefined =
+  rawPreset === "mirror" || rawPreset === "flex" || rawPreset === "hifi" ? rawPreset : undefined;
 const isHudWindow = params.get("kvm_hud") === "1";
 const isTransferBarWindow = params.get("kvm_transfer_bar") === "1";
 
@@ -31,9 +35,18 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     ) : isHudWindow ? (
       <DesktopHudWindow />
     ) : mirrorSerial ? (
-      <EmbeddedMirrorWindow serial={mirrorSerial} initialMode={mirrorMode} flexDisplay={mirrorFlex} />
+      <EmbeddedMirrorWindow
+        serial={mirrorSerial}
+        initialMode={mirrorMode}
+        flexDisplay={mirrorFlex}
+        displayMode={presetMode}
+      />
     ) : controlSerial ? (
-      <ControlWindow serial={controlSerial} flexDisplay={controlFlex} />
+      <ControlWindow
+        serial={controlSerial}
+        flexDisplay={controlFlex}
+        displayMode={presetMode}
+      />
     ) : (
       <App />
     )}

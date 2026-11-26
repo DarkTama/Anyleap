@@ -25,6 +25,11 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    show_main(&app);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -155,6 +160,7 @@ pub fn run() {
             transfer_paths::set_transfer_folders,
             transfer_paths::get_default_transfer_folders,
             // --- end SPEC-31 ---
+            show_main_window,
         ])
         .setup(|app| {
             transfer_paths::init_defaults(app.path().download_dir().ok());

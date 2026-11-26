@@ -14,6 +14,7 @@ import {
   TOUCHPAD_SPEED_OPTIONS,
   applyQuality,
   deriveQuality,
+  formatScrollMultiplier,
   segmentForBitrate,
   segmentForFps,
   segmentForResolution,
@@ -68,10 +69,6 @@ const SCROLL_STYLE_SEGMENTS: { value: ScrollStyle; label: string }[] = [
   { value: "smooth", label: "Smooth (reading)" },
   { value: "paged", label: "Paged (short videos)" },
 ];
-
-export function formatScrollMultiplier(m: number): string {
-  return Number(m.toFixed(2)).toString();
-}
 
 const mbps = (bps: number) => `${Math.round(bps / 1_000_000)} Mbps`;
 
@@ -546,11 +543,19 @@ function CameraPanel() {
   );
 }
 
-export function PhoneMirroringSection() {
+export function PhoneMirroringSection({
+  targetMode,
+}: {
+  targetMode?: { mode: MirrorMode; tick: number } | null;
+} = {}) {
   // Selecting a tab only changes the visible panel; it writes no settings (SPEC-28 §5.1).
-  const [tab, setTab] = useState<MirrorMode>("mirror");
+  const [tab, setTab] = useState<MirrorMode>(targetMode?.mode ?? "mirror");
   const notice = useAppStore((s) => s.modeDefaultsNotice);
   const headingId = useId();
+
+  useEffect(() => {
+    if (targetMode) setTab(targetMode.mode);
+  }, [targetMode?.tick, targetMode]);
   return (
     <Card aria-labelledby={headingId}>
       <CardHeader>

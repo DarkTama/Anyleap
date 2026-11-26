@@ -11,6 +11,7 @@ export function SwitchRow({
   checked,
   disabled = false,
   disabledReason,
+  describedById,
   onChange,
 }: {
   label: string;
@@ -19,10 +20,13 @@ export function SwitchRow({
   disabled?: boolean;
   /** Shown instead of the hint while the row is disabled. */
   disabledReason?: string;
+  /** Optional external element id describing this switch (e.g. a shared disabled note). */
+  describedById?: string;
   onChange: (value: boolean) => void;
 }) {
   const id = useId();
   const helper = disabled && disabledReason ? disabledReason : hint;
+  const ariaDescribedBy = helper ? `${id}-hint` : describedById;
   return (
     <div className="flex min-h-8 items-start justify-between gap-3 py-1">
       <div className="min-w-0">
@@ -45,7 +49,7 @@ export function SwitchRow({
         role="switch"
         aria-checked={checked}
         aria-labelledby={`${id}-label`}
-        aria-describedby={helper ? `${id}-hint` : undefined}
+        aria-describedby={ariaDescribedBy}
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-ink-700 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-400 ${

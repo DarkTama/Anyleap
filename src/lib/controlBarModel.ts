@@ -1,8 +1,8 @@
 import type { ButtonId, ControlConfig } from "./controlConfig";
 import type { SessionMode } from "./types";
 
-/** Visual group ids, in top-to-bottom order (SPEC-28 phase 3). */
-export type ControlGroupId = "camera" | "navigate" | "sound" | "screen" | "capture" | "call";
+/** Visual group ids, in top-to-bottom order (SPEC-28 phase 3, SPEC-30 addendum). */
+export type ControlGroupId = "camera" | "navigate" | "sound" | "screen" | "capture" | "scroll" | "call";
 
 /** Settings-card group ids: the bar groups plus the More popover. */
 export type ControlSettingsGroupId = Exclude<ControlGroupId, "camera"> | "more";
@@ -40,28 +40,26 @@ export interface ControlBarState {
   inCall: boolean;
   isRecording: boolean;
   screenOff: boolean;
-  swipeScroll: boolean;
   torchOn: boolean;
   wifi: boolean;
   bluetooth: boolean;
   dnd: boolean;
   /** Rotate acts on the physical display only: false in Flex display mode. */
   showOrient: boolean;
-  /** Wheel swipes need a mirror window. */
-  showSwipe: boolean;
+  /** Scroll quick-settings popover applies to mirroring displays, not Camera. */
+  showScroll: boolean;
 }
 
 export const DEFAULT_CONTROL_BAR_STATE: ControlBarState = {
   inCall: false,
   isRecording: false,
   screenOff: false,
-  swipeScroll: false,
   torchOn: false,
   wifi: false,
   bluetooth: false,
   dnd: false,
   showOrient: true,
-  showSwipe: true,
+  showScroll: true,
 };
 
 export const CONTROL_GROUP_LABELS: Record<ControlSettingsGroupId, string> = {
@@ -69,6 +67,7 @@ export const CONTROL_GROUP_LABELS: Record<ControlSettingsGroupId, string> = {
   sound: "Sound",
   screen: "Screen",
   capture: "Capture",
+  scroll: "Scroll",
   call: "Call",
   more: "More",
 };
@@ -79,11 +78,11 @@ export const CONTROL_SETTINGS_GROUPS: { id: ControlSettingsGroupId; label: strin
   { id: "sound", label: CONTROL_GROUP_LABELS.sound, buttons: ["volUp", "volDown"] },
   { id: "screen", label: CONTROL_GROUP_LABELS.screen, buttons: ["power", "screenOff", "orientToggle"] },
   { id: "capture", label: CONTROL_GROUP_LABELS.capture, buttons: ["screenshot", "record"] },
+  { id: "scroll", label: CONTROL_GROUP_LABELS.scroll, buttons: ["scroll"] },
   { id: "call", label: CONTROL_GROUP_LABELS.call, buttons: ["endCall"] },
-  { id: "more", label: CONTROL_GROUP_LABELS.more, buttons: ["notifications", "wifi", "bluetooth", "dnd", "swipeScroll"] },
+  { id: "more", label: CONTROL_GROUP_LABELS.more, buttons: ["notifications", "wifi", "bluetooth", "dnd"] },
 ];
 
-export const SWIPE_HINT = "Mouse wheel swipes like a finger (for short-video feeds)";
 export const CAMERA_HELP_HINT = "Use AnyLeap Camera in any video-call or streaming app";
 
 export interface ControlBarModel {
@@ -151,6 +150,7 @@ export function controlBarGroups(
         danger: state.isRecording,
       },
     ]);
+    add("scroll", [b.scroll && state.showScroll && { id: "scroll", label: "Scroll", kind: "action" }]);
     add("call", [b.endCall && state.inCall && { id: "endCall", label: "End call", kind: "action", danger: true }]);
   }
 
@@ -161,14 +161,6 @@ export function controlBarGroups(
         b.wifi && { id: "wifi", label: "Wi-Fi", kind: "toggle", pressed: state.wifi },
         b.bluetooth && { id: "bluetooth", label: "Bluetooth", kind: "toggle", pressed: state.bluetooth },
         b.dnd && { id: "dnd", label: "Do Not Disturb", kind: "toggle", pressed: state.dnd },
-        b.swipeScroll &&
-          state.showSwipe && {
-            id: "swipeScroll",
-            label: "Paged scrolling",
-            kind: "toggle",
-            pressed: state.swipeScroll,
-            hint: SWIPE_HINT,
-          },
       ].filter(Boolean) as ControlItem[]);
 
   // Collapsed mode (floating control window only): Navigate and More only.

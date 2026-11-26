@@ -65,6 +65,17 @@ export const onMirrorClipboardImageResult = (
 ): Promise<UnlistenFn> =>
   listen<MirrorClipboardImageResult>("mirror-clipboard-image-result", cb);
 
+export interface MirrorScrollStep {
+  serial: string;
+  delta: 1 | -1;
+}
+
+export const onMirrorScrollStep = (
+  cb: EventCallback<MirrorScrollStep>,
+): Promise<UnlistenFn> => listen<MirrorScrollStep>("mirror-scroll-step", cb);
+
+export const showMainWindow = () => invoke<void>("show_main_window");
+
 // --- Wireless (M2) ---
 
 export const discoverWireless = () => invoke<MdnsService[]>("discover_wireless");

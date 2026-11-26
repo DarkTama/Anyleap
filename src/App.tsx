@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StudioDeck } from "@/components/deck/StudioDeck";
 import { PhoneView, type PhoneSubTab } from "@/components/phone/PhoneView";
 import { ComputersView } from "@/components/computers/ComputersView";
-import { SettingsPanel } from "@/components/SettingsPanel";
+import { SettingsPanel, type SettingsTarget } from "@/components/SettingsPanel";
 import { AppHeader, type ShellTab } from "@/components/shell/AppHeader";
 import { CommandPalette } from "@/components/shell/CommandPalette";
 import { ConnectionDoctor } from "@/components/ConnectionDoctor";
@@ -46,8 +46,8 @@ import {
   loadTransferFolders,
   runFileSyncMigration,
 } from "@/lib/persist";
-import { resolveLaunchSettings, toScrollConfig, type MirrorMode } from "@/lib/modeSettings";
-import { launchMode } from "@/lib/modeActions";
+import { resolveLaunchSettings, toScrollConfig, type MirrorMode, type ModeDefaultsV2 } from "@/lib/modeSettings";
+import { launchMode, type OpenSettingsPayload } from "@/lib/modeActions";
 import {
   mirrorLabelForSerial,
   shouldCloseMirrorWindowOnExit,
@@ -105,6 +105,7 @@ function App() {
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [activeTab, setActiveTab] = useState<ShellTab>("devices");
+  const [settingsTarget, setSettingsTarget] = useState<SettingsTarget | null>(null);
   const [phoneSubTab, setPhoneSubTab] = useState<PhoneSubTab>("overview");
   const [selectedPhoneSerial, setSelectedPhoneSerial] = useState<string | null>(null);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
@@ -383,13 +384,37 @@ function App() {
           setHudNotice(null);
         }, 4000);
       }),
+      listen<ModeDefaultsV2>("mode-defaults", (e) => {
+        if (e.payload) useAppStore.getState().setModeDefaults(e.payload);
+      }),
+      listen<OpenSettingsPayload>("open-settings", (e) => {
+        if (!e.payload) return;
+        setActiveTab("settings");
+        setSettingsTarget((prev) => ({
+          section: e.payload.section,
+          mode: e.payload.mode,
+          tick: (prev?.tick ?? 0) + 1,
+        }));
+      }),
     ];
+    const onWindowOpenSettings = (ev: Event) => {
+      const detail = (ev as CustomEvent<OpenSettingsPayload>).detail;
+      if (!detail) return;
+      setActiveTab("settings");
+      setSettingsTarget((prev) => ({
+        section: detail.section,
+        mode: detail.mode,
+        tick: (prev?.tick ?? 0) + 1,
+      }));
+    };
+    window.addEventListener("anyleap:open-settings", onWindowOpenSettings);
     listSessions()
       .then(setSessions)
       .catch(() => {});
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       if (hudNoticeTimerRef.current) clearTimeout(hudNoticeTimerRef.current);
+      window.removeEventListener("anyleap:open-settings", onWindowOpenSettings);
       unlisteners.forEach((p) => p.then((un) => un()));
     };
   }, [setSessions, upsertSession, removeSession, setError]);
@@ -528,13 +553,14 @@ function App() {
             ? st.modeDefaults.camera.embedded
             : resolveLaunchSettings(sessionMode, st.modeDefaults).embedded;
         const isFlex = sessionMode === "flex";
+        const preset = launchMode(sessionMode);
 
         const openMirrorWindow = (attempt = 0) => {
           if (cancelled) return;
           if (!useAppStore.getState().sessions.some((s) => s.serial === serial)) return;
           try {
             const w = new WebviewWindow(mirrorLabel, {
-              url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}&flex=${isFlex ? 1 : 0}`,
+              url: `index.html?mirror=1&serial=${encodeURIComponent(serial)}&mode=${encodeURIComponent(mode)}&flex=${isFlex ? 1 : 0}&preset=${encodeURIComponent(preset)}`,
               title: mode === "camera" ? `AnyLeap Camera Studio — ${serial}` : `AnyLeap Workstation — ${serial}`,
               width: 480,
               height: 860,
@@ -584,7 +610,7 @@ function App() {
           if (!existingControls) {
             try {
               const w = new WebviewWindow("controls", {
-                url: `index.html?control=1&serial=${encodeURIComponent(serial)}&flex=${isFlex ? 1 : 0}`,
+                url: `index.html?control=1&serial=${encodeURIComponent(serial)}&flex=${isFlex ? 1 : 0}&preset=${encodeURIComponent(preset)}`,
                 title: "AnyLeap Controls",
                 width: 88,
                 height: 560,
@@ -1048,7 +1074,7 @@ function App() {
         {activeTab === "computers" && <ComputersView />}
         {activeTab === "settings" && (
           <div className="flex flex-1 flex-col overflow-y-auto bg-ink-950 p-6 max-w-5xl mx-auto w-full">
-            <SettingsPanel onOpenComputers={() => setActiveTab("computers")} />
+            <SettingsPanel onOpenComputers={() => setActiveTab("computers")} target={settingsTarget} />
           </div>
         )}
       </main>

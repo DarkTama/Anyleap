@@ -5,7 +5,10 @@ import { listen } from "@tauri-apps/api/event";
 import { Gamepad2, GripHorizontal, Minimize2, X } from "lucide-react";
 import { ControlBar } from "@/components/ControlBar";
 import { controlBarGroups, DEFAULT_CONTROL_BAR_STATE } from "@/lib/controlBarModel";
-import { mirrorRect } from "@/lib/tauri";
+import { listSessions, mirrorRect, onSessionExited, onSessionStarted } from "@/lib/tauri";
+import type { DisplayMode, ModeDefaultsV2 } from "@/lib/modeSettings";
+import { loadModeDefaults } from "@/lib/persist";
+import { useAppStore } from "@/store/useAppStore";
 import {
   DEFAULT_CONTROL_CONFIG,
   loadControlConfig,
@@ -37,23 +40,54 @@ function stripLength(c: ControlConfig, flexDisplay: boolean): number {
 export function ControlWindow({
   serial,
   flexDisplay = false,
+  displayMode,
 }: {
   serial: string;
   /** True when the running session was launched from the Flex mode (SPEC-28). */
   flexDisplay?: boolean;
+  displayMode?: DisplayMode;
 }) {
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
+  const activeDisplayMode: DisplayMode = displayMode ?? (flexDisplay ? "flex" : "mirror");
   // Rotate only affects the physical display, so it is hidden while mirroring a
   // flex (virtual) display.
 
-  // Load config + live updates from the main window.
+  // Load config, modeDefaults, and session state + live updates from the main window.
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
+    loadModeDefaults()
+      .then((m) => useAppStore.getState().setModeDefaults(m.modeDefaults, m.notice))
+      .catch(() => {});
+    listSessions()
+      .then((sessions) => {
+        const st = useAppStore.getState();
+        st.setSessions(sessions);
+        st.setCurrentMode(activeDisplayMode);
+        const found = sessions.find((s) => s.serial === serial && s.mode !== "camera");
+        if (found) st.upsertSession(found, activeDisplayMode);
+      })
+      .catch(() => {});
     const un = listen<ControlConfig>("control-config", (e) => setConfig(e.payload));
+    const unModes = listen<ModeDefaultsV2>("mode-defaults", (e) => {
+      if (e.payload) useAppStore.getState().setModeDefaults(e.payload);
+    });
+    const unStarted = onSessionStarted((e) => {
+      if (e.payload.serial === serial) {
+        useAppStore
+          .getState()
+          .upsertSession(e.payload, e.payload.mode === "camera" ? "camera" : activeDisplayMode);
+      }
+    });
+    const unExited = onSessionExited((e) => {
+      useAppStore.getState().removeSession(e.payload.id);
+    });
     return () => {
-      un.then((f) => f());
+      un.then((f) => f()).catch(() => {});
+      unModes.then((f) => f()).catch(() => {});
+      unStarted.then((f) => f()).catch(() => {});
+      unExited.then((f) => f()).catch(() => {});
     };
-  }, []);
+  }, [serial, activeDisplayMode]);
 
   const vertical =
     config.dock === "left" || config.dock === "right" || config.dock === "undocked";
@@ -216,8 +250,9 @@ export function ControlWindow({
           config={config}
           orientation={orientation}
           showOrientToggle={!flexDisplay}
-          showSwipeScroll
+          showScroll
           sessionMode="display"
+          displayMode={activeDisplayMode}
           surface="floating"
         />
       </div>

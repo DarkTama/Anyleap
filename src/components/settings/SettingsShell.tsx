@@ -18,9 +18,15 @@ export type SectionRender = (ctx: {
  * that has matches (matching rows only) and the rail lists just those sections.
  * Filtering never changes values.
  */
-export function SettingsShell({ sections }: { sections: Record<SectionId, SectionRender> }) {
+export function SettingsShell({
+  sections,
+  targetSection,
+}: {
+  sections: Record<SectionId, SectionRender>;
+  targetSection?: { section: SectionId; tick: number } | null;
+}) {
   const [query, setQuery] = useState("");
-  const [current, setCurrent] = useState<SectionId>("general");
+  const [current, setCurrent] = useState<SectionId>(targetSection?.section ?? "general");
   const [focusTick, setFocusTick] = useState(0);
   const filterId = useId();
   const paneRef = useRef<HTMLDivElement>(null);
@@ -30,6 +36,13 @@ export function SettingsShell({ sections }: { sections: Record<SectionId, Sectio
 
   const shown: SectionId[] = filtering ? result.sections : [current];
   const show: ShowFn = (id) => result.matches.has(id);
+
+  useEffect(() => {
+    if (!targetSection) return;
+    setQuery("");
+    setCurrent(targetSection.section);
+    setFocusTick((t) => t + 1);
+  }, [targetSection?.tick, targetSection]);
 
   // Opening a section moves focus to its heading (not on first render).
   useEffect(() => {
