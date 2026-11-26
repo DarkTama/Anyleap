@@ -30,7 +30,6 @@ import { logActivity } from "@/stores/activityStore";
 import {
   openNotifications,
   sendKeyevent,
-  setWheelSwipe,
   toggleDeviceOrientation,
   sendCameraShortcut,
   restartWithScreenOff,
@@ -38,19 +37,21 @@ import {
   stopMirror,
   getPhoneToggles,
   setPhoneToggle,
-  getScrollStyle,
   startRecording,
   stopRecording,
   endCall,
   getCallActive,
 } from "@/lib/tauri";
 import type { PhoneToggleKey, PhoneToggles, SessionMode } from "@/lib/types";
+import type { DisplayMode } from "@/lib/modeSettings";
+import { launchMode } from "@/lib/modeActions";
 import { KEYCODE } from "@/lib/keycodes";
 import type { ControlConfig } from "@/lib/controlConfig";
 import { controlBarGroups, type ControlItem, type ControlSurface, type ControlItemId } from "@/lib/controlBarModel";
 import { cn } from "@/lib/utils";
 import { Tooltip, type TooltipSide } from "./Tooltip";
 import { MorePopover, ICON_BTN, ICON_BTN_DANGER, ICON_BTN_PRESSED } from "./MorePopover";
+import { ScrollPopover } from "./ScrollPopover";
 
 const ICON = "h-5 w-5";
 const MORE_ICON = "h-4 w-4";
@@ -78,7 +79,7 @@ function iconFor(id: ControlItemId, screenOff: boolean, cls: string): ReactNode 
     case "wifi": return <Wifi className={cls} />;
     case "bluetooth": return <Bluetooth className={cls} />;
     case "dnd": return <BellOff className={cls} />;
-    case "swipeScroll": return <Mouse className={cls} />;
+    case "scroll": return <Mouse className={cls} />;
     case "torch": return <Zap className={cls} />;
     case "zoomIn": return <ZoomIn className={cls} />;
     case "zoomOut": return <ZoomOut className={cls} />;
@@ -96,32 +97,39 @@ export function ControlBar({
   config,
   orientation,
   showOrientToggle = false,
-  showSwipeScroll = false,
+  showScroll = true,
   sessionMode = "display",
+  displayMode,
   surface = "embedded",
   onNotice,
+  onOpenSettings,
 }: {
   serial: string;
   config: ControlConfig;
   orientation: "horizontal" | "vertical";
   /** Rotate acts on the physical display only — hidden in flex display mode. */
   showOrientToggle?: boolean;
-  /** Wheel→swipe needs a mirror window; only the mirror/floating strips show it. */
-  showSwipeScroll?: boolean;
+  /** Scroll quick-settings popover; hidden in Camera automatically. */
+  showScroll?: boolean;
   sessionMode?: SessionMode;
+  /** Active display mode preset ("mirror" | "flex" | "hifi") whose scroll settings are edited. */
+  displayMode?: DisplayMode;
   /** `collapsed` only applies on the floating control window. */
   surface?: ControlSurface;
   /** Receives transient notices (e.g. recording saved). Falls back to a local toast. */
   onNotice?: (notice: ControlBarNotice) => void;
+  /** Optional override for the Scroll popover "All settings" link. */
+  onOpenSettings?: (mode: DisplayMode) => void;
 }) {
   const setError = useAppStore((s) => s.setError);
   const sessions = useAppStore((s) => s.sessions);
+  const sessionModes = useAppStore((s) => s.sessionModes);
+  const currentMode = useAppStore((s) => s.currentMode);
   const upsertSession = useAppStore((s) => s.upsertSession);
   const deviceToggles = useAppStore((s) => s.deviceToggles);
   const setDeviceToggle = useAppStore((s) => s.setDeviceToggle);
   const toggles = deviceToggles[serial];
   const screenOff = !!toggles?.screenOff;
-  const swipeScroll = !!toggles?.swipeScroll;
   const [torchOn, setTorchOn] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [phoneToggles, setPhoneToggles] = useState<PhoneToggles | null>(null);
@@ -130,9 +138,16 @@ export function ControlBar({
   const [localNotice, setLocalNotice] = useState<ControlBarNotice | null>(null);
 
   const recordingSession = sessions.find((s) => s.serial === serial && !!s.recording_path);
+  const activeSession = sessions.find((s) => s.serial === serial && s.mode !== "camera");
   const isRecording = !!recordingSession;
   const recordingPath = recordingSession?.recording_path ?? null;
   const camera = sessionMode === "camera";
+  const resolvedSessionMode = activeSession ? sessionModes[activeSession.id] : undefined;
+  const activeDisplayMode: DisplayMode =
+    displayMode ??
+    (resolvedSessionMode && resolvedSessionMode !== "camera"
+      ? resolvedSessionMode
+      : launchMode(currentMode));
 
   useEffect(() => {
     let cancelled = false;
@@ -143,19 +158,10 @@ export function ControlBar({
       .catch(() => {
         // best-effort when device is offline/unauthorized
       });
-    if (!camera) {
-      getScrollStyle(serial)
-        .then((style) => {
-          if (!cancelled && style) {
-            setDeviceToggle(serial, "swipeScroll", style === "paged");
-          }
-        })
-        .catch(() => {});
-    }
     return () => {
       cancelled = true;
     };
-  }, [serial, camera, setDeviceToggle]);
+  }, [serial]);
 
   // End call is only offered during a call: poll the call state while enabled.
   useEffect(() => {
@@ -246,12 +252,6 @@ export function ControlBar({
     if (camera) sendCameraShortcut(serial, "rotate_cw").catch(err);
     else toggleDeviceOrientation(serial).catch(err);
   };
-  const toggleSwipeScroll = () => {
-    const next = !swipeScroll;
-    setWheelSwipe(serial, next)
-      .then(() => setDeviceToggle(serial, "swipeScroll", next))
-      .catch(err);
-  };
   const toggleTorch = () => {
     const next = !torchOn;
     sendCameraShortcut(serial, next ? "torch_on" : "torch_off")
@@ -284,7 +284,6 @@ export function ControlBar({
       case "wifi": handlePhoneToggle("wifi"); break;
       case "bluetooth": handlePhoneToggle("bluetooth"); break;
       case "dnd": handlePhoneToggle("dnd"); break;
-      case "swipeScroll": toggleSwipeScroll(); break;
       case "torch": toggleTorch(); break;
       case "zoomIn": sendCameraShortcut(serial, "zoom_in").catch(err); break;
       case "zoomOut": sendCameraShortcut(serial, "zoom_out").catch(err); break;
@@ -299,24 +298,35 @@ export function ControlBar({
         inCall,
         isRecording,
         screenOff,
-        swipeScroll,
         torchOn,
         wifi: !!phoneToggles?.wifi,
         bluetooth: !!phoneToggles?.bluetooth,
         dnd: !!phoneToggles?.dnd,
         showOrient: showOrientToggle,
-        showSwipe: showSwipeScroll,
+        showScroll,
       }, surface),
-    [config, sessionMode, surface, inCall, isRecording, screenOff, swipeScroll, torchOn, phoneToggles, showOrientToggle, showSwipeScroll],
+    [config, sessionMode, surface, inCall, isRecording, screenOff, torchOn, phoneToggles, showOrientToggle, showScroll],
   );
 
   const vertical = orientation === "vertical";
   const tipSide: TooltipSide = vertical ? "left" : "bottom";
+  const popoverSide: TooltipSide = vertical ? "left" : "right";
 
   const moreIcons: Partial<Record<string, ReactNode>> = {};
   for (const item of model.more) moreIcons[item.id] = iconFor(item.id, screenOff, MORE_ICON);
 
   const renderItem = (item: ControlItem) => {
+    if (item.id === "scroll") {
+      return (
+        <ScrollPopover
+          key={item.id}
+          serial={serial}
+          mode={activeDisplayMode}
+          side={popoverSide}
+          onOpenSettings={onOpenSettings}
+        />
+      );
+    }
     const toggle = item.kind === "toggle";
     return (
       <Tooltip key={item.id} label={item.label} hint={item.hint} side={tipSide}>

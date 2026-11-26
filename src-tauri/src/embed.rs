@@ -151,6 +151,26 @@ pub fn should_intercept_ctrl_v_image(
     scrcpy_focused && !has_text && has_image
 }
 
+/// Map `Ctrl+Alt+=` / `Ctrl+Alt+-` (with Left Alt, excluding Right Alt / AltGr)
+/// to a scroll speed step direction (`+1` or `-1`).
+pub fn decide_scroll_step_key(
+    vk: u32,
+    ctrl: bool,
+    left_alt: bool,
+    right_alt: bool,
+    win: bool,
+    shift: bool,
+) -> Option<i8> {
+    if !ctrl || !left_alt || right_alt || win || shift {
+        return None;
+    }
+    match vk {
+        0xBB | 0x6B => Some(1),  // VK_OEM_PLUS | VK_ADD
+        0xBD | 0x6D => Some(-1), // VK_OEM_MINUS | VK_SUBTRACT
+        _ => None,
+    }
+}
+
 /// Convert raw Windows `CF_DIB` clipboard bytes into an encoded PNG byte buffer.
 pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, String> {
     if dib.len() < 40 {
@@ -199,9 +219,10 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 mod win_embed {
     use super::{
-        decide_click_focus, decide_embed_cache, dib_to_png, is_cached_embed_valid_for_resize,
-        is_point_in_rect, should_focus_scrcpy_for_foreground, should_intercept_ctrl_v_image,
-        should_remove_embed_for_pid, EmbedCacheAction, EmbedFocusAction, EmbeddedEntry,
+        decide_click_focus, decide_embed_cache, decide_scroll_step_key, dib_to_png,
+        is_cached_embed_valid_for_resize, is_point_in_rect, should_focus_scrcpy_for_foreground,
+        should_intercept_ctrl_v_image, should_remove_embed_for_pid, EmbedCacheAction,
+        EmbedFocusAction, EmbeddedEntry,
     };
     use crate::state::AppState;
     use serde::Serialize;
@@ -221,7 +242,8 @@ mod win_embed {
     use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_V,
+        GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_RMENU,
+        VK_RWIN, VK_SHIFT, VK_V,
     };
     use windows::Win32::UI::Shell::{
         DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass,
@@ -247,12 +269,25 @@ mod win_embed {
     static HOST_STATES: OnceLock<Mutex<HashMap<isize, Arc<HostEmbedState>>>> = OnceLock::new();
     static HAS_EMBEDDED_MIRROR: AtomicBool = AtomicBool::new(false);
     static PASTE_TX: OnceLock<tokio::sync::mpsc::Sender<PasteRequest>> = OnceLock::new();
+    static SCROLL_STEP_TX: OnceLock<tokio::sync::mpsc::Sender<ScrollStepRequest>> = OnceLock::new();
     static PNG_CLIPBOARD_FORMAT: OnceLock<u32> = OnceLock::new();
     static KBD_HOOK_STARTED: OnceLock<()> = OnceLock::new();
 
     struct PasteRequest {
         serial: String,
         window_label: String,
+    }
+
+    struct ScrollStepRequest {
+        serial: String,
+        window_label: String,
+        delta: i8,
+    }
+
+    #[derive(Clone, Serialize)]
+    struct MirrorScrollStep {
+        serial: String,
+        delta: i8,
     }
 
     #[derive(Clone, Serialize)]
@@ -758,12 +793,12 @@ mod win_embed {
             let msg = wparam.0 as u32;
             if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
                 let kbd = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-                if kbd.vkCode == VK_V.0 as u32 && (kbd.flags.0 & LLKHF_INJECTED.0) == 0 {
+                if (kbd.flags.0 & LLKHF_INJECTED.0) == 0 {
                     let ctrl_down = GetAsyncKeyState(VK_CONTROL.0 as i32) < 0;
                     let alt_down = GetAsyncKeyState(VK_MENU.0 as i32) < 0;
                     let win_down = GetAsyncKeyState(VK_LWIN.0 as i32) < 0
                         || GetAsyncKeyState(VK_RWIN.0 as i32) < 0;
-                    if ctrl_down && !alt_down && !win_down {
+                    if kbd.vkCode == VK_V.0 as u32 && ctrl_down && !alt_down && !win_down {
                         let fg = GetForegroundWindow();
                         if !fg.0.is_null() {
                             if let Some((serial, window_label)) =
@@ -789,6 +824,33 @@ mod win_embed {
                                 }
                             }
                         }
+                    } else if ctrl_down && alt_down && !win_down {
+                        let left_alt = GetAsyncKeyState(VK_LMENU.0 as i32) < 0;
+                        let right_alt = GetAsyncKeyState(VK_RMENU.0 as i32) < 0;
+                        let shift_down = GetAsyncKeyState(VK_SHIFT.0 as i32) < 0;
+                        if let Some(delta) = decide_scroll_step_key(
+                            kbd.vkCode, ctrl_down, left_alt, right_alt, win_down, shift_down,
+                        ) {
+                            let fg = GetForegroundWindow();
+                            if !fg.0.is_null() {
+                                if let Some((serial, window_label)) =
+                                    is_scrcpy_focused_in_foreground(fg)
+                                {
+                                    if let Some(tx) = SCROLL_STEP_TX.get() {
+                                        if tx
+                                            .try_send(ScrollStepRequest {
+                                                serial,
+                                                window_label,
+                                                delta,
+                                            })
+                                            .is_ok()
+                                        {
+                                            return LRESULT(1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -801,6 +863,22 @@ mod win_embed {
             let _ = png_clipboard_format();
             let (tx, mut rx) = tokio::sync::mpsc::channel::<PasteRequest>(8);
             let _ = PASTE_TX.set(tx);
+            let (step_tx, mut step_rx) = tokio::sync::mpsc::channel::<ScrollStepRequest>(16);
+            let _ = SCROLL_STEP_TX.set(step_tx);
+
+            let step_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(req) = step_rx.recv().await {
+                    let _ = step_app.emit_to(
+                        &req.window_label,
+                        "mirror-scroll-step",
+                        MirrorScrollStep {
+                            serial: req.serial,
+                            delta: req.delta,
+                        },
+                    );
+                }
+            });
 
             let app_handle = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -1273,6 +1351,47 @@ mod tests {
         assert!(!should_intercept_ctrl_v_image(true, true, true));
         assert!(!should_intercept_ctrl_v_image(false, false, true));
         assert!(!should_intercept_ctrl_v_image(true, false, false));
+    }
+
+    #[test]
+    fn scroll_step_shortcut_matches_ctrl_left_alt_plus_minus_only() {
+        assert_eq!(
+            decide_scroll_step_key(0xBB, true, true, false, false, false),
+            Some(1)
+        );
+        assert_eq!(
+            decide_scroll_step_key(0x6B, true, true, false, false, false),
+            Some(1)
+        );
+        assert_eq!(
+            decide_scroll_step_key(0xBD, true, true, false, false, false),
+            Some(-1)
+        );
+        assert_eq!(
+            decide_scroll_step_key(0x6D, true, true, false, false, false),
+            Some(-1)
+        );
+        // Reject AltGr (Right Alt), Win, Shift, or missing Ctrl/Alt.
+        assert_eq!(
+            decide_scroll_step_key(0xBB, true, false, true, false, false),
+            None
+        );
+        assert_eq!(
+            decide_scroll_step_key(0xBB, true, true, false, true, false),
+            None
+        );
+        assert_eq!(
+            decide_scroll_step_key(0xBB, true, true, false, false, true),
+            None
+        );
+        assert_eq!(
+            decide_scroll_step_key(0xBB, false, true, false, false, false),
+            None
+        );
+        assert_eq!(
+            decide_scroll_step_key(0x41, true, true, false, false, false),
+            None
+        );
     }
 
     #[test]

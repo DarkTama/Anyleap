@@ -66,6 +66,16 @@ describe("PhoneMirroringSection", () => {
     expect(useAppStore.getState().currentMode).toBe("flex");
   });
 
+  it("opens the requested mode tab when targetMode updates", async () => {
+    el = document.createElement("div");
+    document.body.appendChild(el);
+    root = createRoot(el);
+    await act(async () => {
+      root.render(<PhoneMirroringSection targetMode={{ mode: "flex", tick: 1 }} />);
+    });
+    expect(tab("Flex").getAttribute("aria-selected")).toBe("true");
+  });
+
   it("Camera then Mirror leaves Mirror audio unchanged", async () => {
     await mount();
     await act(async () => tab("Camera").click());

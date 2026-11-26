@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import { Camera, Minus, Square, X, GripHorizontal } from "lucide-react";
 import {
   embedMirror,
@@ -7,16 +8,27 @@ import {
   pushClipboardImage,
   stopMirror,
   listSessions,
+  getScrollMultiplier,
   onSessionStarted,
   onSessionRestarting,
   onSessionReplaced,
   onSessionExited,
   onMirrorClipboardImageResult,
+  onMirrorScrollStep,
 } from "@/lib/tauri";
 import { ControlBar, type ControlBarNotice } from "./ControlBar";
+import { MODE_TAB_LABELS } from "./settings/ModeTabs";
 import { logActivity } from "@/stores/activityStore";
 import { DEFAULT_CONTROL_CONFIG, loadControlConfig, type ControlConfig } from "@/lib/controlConfig";
 import { createEmbedResizeScheduler } from "@/lib/embedResize";
+import { editMode } from "@/lib/modeActions";
+import {
+  formatScrollMultiplier,
+  stepScrollSpeed,
+  type DisplayMode,
+  type ModeDefaultsV2,
+} from "@/lib/modeSettings";
+import { loadModeDefaults } from "@/lib/persist";
 import { useAppStore } from "@/store/useAppStore";
 import type { SessionInfo, SessionMode } from "@/lib/types";
 
@@ -24,14 +36,17 @@ export function EmbeddedMirrorWindow({
   serial,
   initialMode = "display",
   flexDisplay = false,
+  displayMode,
 }: {
   serial: string;
   initialMode?: SessionMode;
   flexDisplay?: boolean;
+  displayMode?: DisplayMode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<ControlConfig>(DEFAULT_CONTROL_CONFIG);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notice, setNotice] = useState<ControlBarNotice | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const sessionRef = useRef<SessionInfo | null>(null);
@@ -39,7 +54,20 @@ export function EmbeddedMirrorWindow({
   const latestSessionIdRef = useRef<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [mode, setMode] = useState<SessionMode>(initialMode);
+  const activeDisplayMode: DisplayMode = displayMode ?? (flexDisplay ? "flex" : "mirror");
   const win = getCurrentWebviewWindow();
+
+  const showToast = useCallback((msg: string, durationMs = 3000) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), durationMs);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!notice) return;
@@ -49,6 +77,19 @@ export function EmbeddedMirrorWindow({
 
   useEffect(() => {
     loadControlConfig().then(setConfig).catch(() => {});
+    loadModeDefaults()
+      .then((m) => useAppStore.getState().setModeDefaults(m.modeDefaults, m.notice))
+      .catch(() => {});
+    const unControl = listen<ControlConfig>("control-config", (e) => {
+      if (e.payload) setConfig(e.payload);
+    }).catch(() => () => {});
+    const unModeDefaults = listen<ModeDefaultsV2>("mode-defaults", (e) => {
+      if (e.payload) useAppStore.getState().setModeDefaults(e.payload);
+    }).catch(() => () => {});
+    return () => {
+      void unControl.then((fn) => fn()).catch(() => {});
+      void unModeDefaults.then((fn) => fn()).catch(() => {});
+    };
   }, []);
 
   useEffect(() => {
@@ -62,7 +103,10 @@ export function EmbeddedMirrorWindow({
           if (found) {
             setSession(found);
             latestSessionIdRef.current = found.id;
-            useAppStore.getState().setSessions(sessions);
+            const st = useAppStore.getState();
+            st.setSessions(sessions);
+            st.setCurrentMode(activeDisplayMode);
+            st.upsertSession(found, found.mode === "camera" ? "camera" : activeDisplayMode);
             if (found.mode) setMode(found.mode as SessionMode);
             return;
           }
@@ -108,7 +152,9 @@ export function EmbeddedMirrorWindow({
       if (e.payload.serial !== serial || !mounted) return;
       latestSessionIdRef.current = e.payload.id;
       setSession(e.payload);
-      useAppStore.getState().upsertSession(e.payload);
+      useAppStore
+        .getState()
+        .upsertSession(e.payload, e.payload.mode === "camera" ? "camera" : activeDisplayMode);
       if (e.payload.mode) setMode(e.payload.mode as SessionMode);
       // Re-embed when the session restarts in-place (e.g. Flex idle recovery or recording toggle).
       for (let attempt = 0; attempt < 12; attempt++) {
@@ -146,7 +192,7 @@ export function EmbeddedMirrorWindow({
       unlistenReplacedPromise.then((un) => un()).catch(() => {});
       unlistenClosePromise.then((un) => un()).catch(() => {});
     };
-  }, [serial, win]);
+  }, [serial, win, activeDisplayMode]);
 
   useEffect(() => {
     const label = win.label;
@@ -227,11 +273,9 @@ export function EmbeddedMirrorWindow({
               title: "Pushed clipboard image",
               detail: dest,
             });
-            setToast(`Image pushed to ${dest}`);
-            setTimeout(() => setToast(null), 3000);
+            showToast(`Image pushed to ${dest}`, 3000);
           } catch (err) {
-            setToast(`Paste failed: ${err}`);
-            setTimeout(() => setToast(null), 4000);
+            showToast(`Paste failed: ${err}`, 4000);
           }
           break;
         }
@@ -247,18 +291,57 @@ export function EmbeddedMirrorWindow({
           title: "Pushed clipboard image",
           detail: e.payload.dest,
         });
-        setToast(`Image pushed to ${e.payload.dest}`);
-        setTimeout(() => setToast(null), 3000);
+        showToast(`Image pushed to ${e.payload.dest}`, 3000);
       } else if (e.payload.error) {
-        setToast(`Paste failed: ${e.payload.error}`);
-        setTimeout(() => setToast(null), 4000);
+        showToast(`Paste failed: ${e.payload.error}`, 4000);
       }
     });
     return () => {
       window.removeEventListener("paste", handlePaste);
       unlistenPasteResult.then((un) => un()).catch(() => {});
     };
-  }, [serial]);
+  }, [serial, showToast]);
+
+  const handleScrollStep = useCallback(
+    async (delta: 1 | -1) => {
+      if (mode === "camera") return;
+      const scroll = useAppStore.getState().modeDefaults[activeDisplayMode].scroll;
+      if (scroll.style === "paged") {
+        showToast("Scroll speed not used in Paged style", 2000);
+        return;
+      }
+      const live =
+        scroll.speed === "auto" ? await getScrollMultiplier(serial).catch(() => null) : null;
+      const nextSpeed = stepScrollSpeed(scroll.speed, live, delta);
+      editMode(activeDisplayMode, { scroll: { ...scroll, speed: nextSpeed } });
+      showToast(
+        `Scroll speed ${formatScrollMultiplier(nextSpeed)}x · ${MODE_TAB_LABELS[activeDisplayMode]}`,
+        2500,
+      );
+    },
+    [mode, activeDisplayMode, serial, showToast],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.altKey || e.metaKey || e.shiftKey) return;
+      if (e.key === "=" || e.key === "+" || e.code === "Equal" || e.code === "NumpadAdd") {
+        e.preventDefault();
+        void handleScrollStep(1);
+      } else if (e.key === "-" || e.key === "_" || e.code === "Minus" || e.code === "NumpadSubtract") {
+        e.preventDefault();
+        void handleScrollStep(-1);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    const unlistenStep = onMirrorScrollStep((e) => {
+      if (e.payload.serial === serial) void handleScrollStep(e.payload.delta);
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      unlistenStep.then((un) => un()).catch(() => {});
+    };
+  }, [serial, handleScrollStep]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-ink-950 text-text select-none">
@@ -362,8 +445,9 @@ export function EmbeddedMirrorWindow({
             config={config}
             orientation="vertical"
             showOrientToggle={!flexDisplay}
-            showSwipeScroll={mode !== "camera"}
+            showScroll={mode !== "camera"}
             sessionMode={mode}
+            displayMode={activeDisplayMode}
             onNotice={setNotice}
           />
         </div>

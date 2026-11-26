@@ -12,7 +12,7 @@ export type ButtonId =
   | "notifications"
   | "screenOff"
   | "orientToggle"
-  | "swipeScroll"
+  | "scroll"
   | "record"
   | "wifi"
   | "bluetooth"
@@ -38,7 +38,7 @@ export const BUTTON_IDS: ButtonId[] = [
   "notifications",
   "screenOff",
   "orientToggle",
-  "swipeScroll",
+  "scroll",
   "record",
   "wifi",
   "bluetooth",
@@ -57,7 +57,7 @@ export const BUTTON_LABELS: Record<ButtonId, string> = {
   notifications: "Notifications",
   screenOff: "Turn phone screen off (keep mirroring)",
   orientToggle: "Rotate",
-  swipeScroll: "Paged scrolling",
+  scroll: "Scroll",
   record: "Record screen",
   wifi: "Wi-Fi",
   bluetooth: "Bluetooth",
@@ -83,7 +83,7 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
     notifications: true,
     screenOff: true,
     orientToggle: true,
-    swipeScroll: true,
+    scroll: true,
     record: true,
     wifi: true,
     bluetooth: true,
@@ -93,7 +93,7 @@ export const DEFAULT_CONTROL_CONFIG: ControlConfig = {
 };
 
 /** Merge a stored control-bar config with defaults. Drops buttons that no
- *  longer exist (e.g. the removed `sleep` button, SPEC-28 phase 3). */
+ *  longer exist (e.g. `sleep` from SPEC-28 phase 3, `swipeScroll` from SPEC-30). */
 export function normalizeControlConfig(saved: unknown): ControlConfig {
   if (!saved || typeof saved !== "object") return DEFAULT_CONTROL_CONFIG;
   const s = saved as Partial<ControlConfig> & { buttons?: Record<string, unknown> };

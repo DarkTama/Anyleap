@@ -1,7 +1,7 @@
 # SPEC-30: Scroll feel (speed, smooth scrolling, inertia)
 
-> **Status:** Phase 1 & Phase 2 implemented (2026-11-23), plus touchpad separation & **Touchpad speed** follow-up. Phase 3 (synthetic inertia) stays unbuilt (driver supplies flick momentum; see §7.3, §14).
-> **Scope:** wheel and touchpad input over a mirror window (`src-tauri/src/wheel_swipe.rs` hook thread, new `scroll_feel` module beside it), per-mode persisted settings (`src/lib/modeSettings.ts`), the Phone mirroring section and the control bar **More** popover.
+> **Status:** Phase 1 & Phase 2 implemented (2026-11-23), plus touchpad separation & **Touchpad speed** follow-up, and control bar **Scroll** popover addendum (§15). Phase 3 (synthetic inertia) stays unbuilt (driver supplies flick momentum; see §7.3, §14).
+> **Scope:** wheel and touchpad input over a mirror window (`src-tauri/src/wheel_swipe.rs` hook thread, new `scroll_feel` module beside it), per-mode persisted settings (`src/lib/modeSettings.ts`), the Phone mirroring section and the control bar **Scroll** popover (`src/components/ScrollPopover.tsx`).
 > **Related:** SPEC-28 (per-mode `modeDefaults`, Phone mirroring tabs), ADR-0005, SPEC-24 (input hooks pattern). SPEC-29 is reserved by an open PR, hence the number.
 > **Plan:** `docs/superpowers/plans/2026-11-19-spec30-scroll-feel.md`
 
@@ -242,3 +242,28 @@ Each phase ends green: `npx tsc --noEmit`, `npx vitest run`, `cargo test`.
 4. Should Auto depend on the foreground app? Default no.
 5. Should the Auto upper clamp be user-visible?
 6. Should Paged be suggested automatically when a pager app is in the foreground? Out of scope.
+
+## 15. Addendum: Control bar Scroll popover (2026-11-26)
+
+Changing scroll settings previously required opening Settings → Phone mirroring. This addendum adds a single **Scroll** button in the control bar that opens a live popover editing the active mode's `modeDefaults` directly.
+
+### 15.1 Control bar registration & visibility
+- Registered as `scroll` in `src/lib/controlConfig.ts` (`BUTTON_IDS`, `BUTTON_LABELS["scroll"] = "Scroll"`, default `true`) and `src/lib/controlBarModel.ts` (`CONTROL_SETTINGS_GROUPS` group `scroll`), so users can show or hide it from Settings → Control bar.
+- Visible by default in display mirroring modes (`mirror`, `flex`, `hifi`) and hidden in `camera`.
+- Uses a mouse/scroll-wheel stroke SVG (`Mouse` icon) with `aria-label="Scroll"` and tooltip `"Scroll"`.
+- The legacy `swipeScroll` ("Paged scrolling") toggle is removed from the **More** popover and dropped on config normalization, giving scroll style a single home in the control bar.
+
+### 15.2 Popover layout & single source of truth
+- Clicking **Scroll** opens `ScrollPopover` (`src/components/ScrollPopover.tsx`), matching `MorePopover`'s anchor positioning and Ink & Gold panel styling:
+  - **Scroll style**: segmented control (`Smooth (reading)` / `Paged (short videos)`).
+  - **Scroll speed**: select `Auto` (displaying `"Auto · <N>x"` using `get_scroll_multiplier` when a live multiplier is available) or `1x`–`5x`.
+  - **Smooth scrolling**: switch.
+  - **Touchpad speed**: select `0.5x`–`3x`.
+  - Under `Paged`, Scroll speed, Smooth scrolling, and Touchpad speed are disabled with `"Not used in Paged style."` linked via `aria-describedby`.
+  - Footer: `"Saved for <Mode>"` and `"All settings"` button that brings the main window to front (`show_main_window`) and navigates to Settings → Phone mirroring on that mode's tab.
+- Every change calls `editMode(mode, { scroll: ... })` (the same path as Settings), persisting to `modeDefaults`, calling `set_scroll_feel` live on matching running sessions, and broadcasting `"mode-defaults"` over Tauri events so Settings and mirror/control windows stay synchronized in both directions.
+- Mirror and floating control window URLs include `&preset=<mirror|flex|hifi>` so the popover edits the exact launched mode (including High fidelity).
+
+### 15.3 Keyboard accessibility & shortcuts
+- The popover implements a modal dialog (`role="dialog"`, `aria-modal="true"`) with a `Tab` / `Shift+Tab` focus trap, `Escape` to close and restore focus to the trigger button, and arrow-key navigation on the `Scroll style` segmented control.
+- While an embedded mirror window is focused (either the WebView or the embedded child viewport via `embed.rs` `WH_KEYBOARD_LL` checking `Ctrl` + Left `Alt` without `AltGr`/`Shift`/`Win`), `Ctrl+Alt+=` and `Ctrl+Alt+-` step the active mode's scroll speed by `0.25x` (`1x`–`5x`, seeding from the live `Auto` multiplier when on `Auto`) and show a transient toast (`"Scroll speed 2.5x · Flex"`). These do not clash with `ControlBar` or scrcpy's `Alt`-modified shortcuts.

@@ -57,6 +57,21 @@ export function toScrollConfig(s: ScrollSettings): ScrollConfigPayload {
   };
 }
 
+export function formatScrollMultiplier(m: number): string {
+  return Number(m.toFixed(2)).toString();
+}
+
+/** Step scroll speed by 0.25x within [1, 5], seeding from liveMultiplier when currently Auto. */
+export function stepScrollSpeed(
+  current: ScrollSpeed,
+  liveMultiplier: number | null,
+  delta: 1 | -1,
+): number {
+  const base = current === "auto" ? (liveMultiplier ?? 1) : current;
+  const rounded = Math.round(base * 4) / 4;
+  return Math.min(5, Math.max(1, rounded + delta * 0.25));
+}
+
 export type ModeSettings = Omit<CoreSettings, "flexDisplay"> & {
   scroll: ScrollSettings;
 };

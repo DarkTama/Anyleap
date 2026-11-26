@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmbeddedMirrorWindow } from "./EmbeddedMirrorWindow";
 import { useAppStore } from "@/store/useAppStore";
 import { embedMirror } from "@/lib/tauri";
+import { defaultModeDefaults } from "@/lib/modeSettings";
 import type { SessionExited, SessionInfo } from "@/lib/types";
 
 let startedHandler: ((e: { payload: SessionInfo }) => void) | null = null;
@@ -13,6 +14,7 @@ let exitedHandler: ((e: { payload: SessionExited }) => void) | null = null;
 let clipboardResultHandler:
   | ((e: { payload: { serial: string; dest?: string; error?: string } }) => void)
   | null = null;
+let scrollStepHandler: ((e: { payload: { serial: string; delta: 1 | -1 } }) => void) | null = null;
 const mockListSessions = vi.fn<() => Promise<SessionInfo[]>>();
 
 const mockWin = {
@@ -62,6 +64,14 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
         return Promise.resolve(() => {});
       },
     ),
+    onMirrorScrollStep: vi.fn(
+      (cb: (e: { payload: { serial: string; delta: 1 | -1 } }) => void) => {
+        scrollStepHandler = cb;
+        return Promise.resolve(() => {});
+      },
+    ),
+    getScrollMultiplier: vi.fn(() => Promise.resolve(2.75)),
+    setScrollFeel: vi.fn(() => Promise.resolve(null)),
     getPhoneToggles: vi.fn(() => Promise.resolve({ wifi: false, bluetooth: false, dnd: false })),
     getCallActive: vi.fn(() => Promise.resolve(false)),
   };
@@ -78,10 +88,11 @@ describe("EmbeddedMirrorWindow", () => {
     replacedHandler = null;
     exitedHandler = null;
     clipboardResultHandler = null;
+    scrollStepHandler = null;
     mockWin.destroy.mockClear();
     mockWin.close.mockClear();
     vi.mocked(embedMirror).mockClear();
-    useAppStore.getState().setSessions([]);
+    useAppStore.setState({ modeDefaults: defaultModeDefaults(), sessions: [], sessionModes: {} });
     mockListSessions.mockReset();
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -208,5 +219,48 @@ describe("EmbeddedMirrorWindow", () => {
       });
     });
     expect(mockWin.destroy).not.toHaveBeenCalled();
+  });
+
+  it("shows Scroll button in display mode, hides it in camera, and steps speed on Ctrl+Alt+-/+", async () => {
+    mockListSessions.mockResolvedValue([
+      { id: "sess-5", serial: "dev-5", pid: 300, started_at: 1, mode: "display", recording_path: null },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <EmbeddedMirrorWindow serial="dev-5" initialMode="display" flexDisplay={true} displayMode="flex" />,
+      );
+    });
+
+    expect(host.querySelector('button[aria-label="Scroll"]')).not.toBeNull();
+
+    // Backend mirror-scroll-step event (Ctrl+Alt+- while scrcpy focused) steps Auto (2.75x) -> 2.5x
+    await act(async () => {
+      scrollStepHandler?.({ payload: { serial: "dev-5", delta: -1 } });
+    });
+    expect(useAppStore.getState().modeDefaults.flex.scroll.speed).toBe(2.5);
+    expect(host.textContent).toContain("Scroll speed 2.5x · Flex");
+
+    // Keyboard Ctrl+Alt+= while webview focused steps 2.5x -> 2.75x
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "=", code: "Equal", ctrlKey: true, altKey: true, bubbles: true }),
+      );
+    });
+    expect(useAppStore.getState().modeDefaults.flex.scroll.speed).toBe(2.75);
+    expect(host.textContent).toContain("Scroll speed 2.75x · Flex");
+  });
+
+  it("hides Scroll button in Camera mode", async () => {
+    mockListSessions.mockResolvedValue([
+      { id: "sess-6", serial: "dev-cam", pid: 301, started_at: 1, mode: "camera", recording_path: null },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <EmbeddedMirrorWindow serial="dev-cam" initialMode="camera" flexDisplay={false} />,
+      );
+    });
+    expect(host.querySelector('button[aria-label="Scroll"]')).toBeNull();
   });
 });

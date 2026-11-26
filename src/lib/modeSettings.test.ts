@@ -8,6 +8,7 @@ import {
   defaultModeDefaults,
   deriveQuality,
   fileSyncMigrationPatch,
+  formatScrollMultiplier,
   keepsAspectRatio,
   migrateLegacy,
   nearestCameraBitrate,
@@ -17,6 +18,7 @@ import {
   segmentForBitrate,
   segmentForFps,
   segmentForResolution,
+  stepScrollSpeed,
   toCameraSettings,
   toScrollConfig,
   usesOnScreenKeyboard,
@@ -450,5 +452,16 @@ describe("scroll settings (SPEC-30)", () => {
       smooth: false,
       inertia: "off",
     });
+  });
+
+  it("stepScrollSpeed steps by 0.25 within [1, 5] and formatScrollMultiplier trims trailing zeros", () => {
+    expect(stepScrollSpeed("auto", 2.75, -1)).toBe(2.5);
+    expect(stepScrollSpeed("auto", 2.25, 1)).toBe(2.5);
+    expect(stepScrollSpeed("auto", null, 1)).toBe(1.25);
+    expect(stepScrollSpeed(1, null, -1)).toBe(1);
+    expect(stepScrollSpeed(5, null, 1)).toBe(5);
+    expect(formatScrollMultiplier(2.5)).toBe("2.5");
+    expect(formatScrollMultiplier(2.75)).toBe("2.75");
+    expect(formatScrollMultiplier(2.0)).toBe("2");
   });
 });

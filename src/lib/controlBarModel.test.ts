@@ -11,21 +11,24 @@ const st = (over: Partial<ControlBarState> = {}): ControlBarState => ({ ...DEFAU
 const ids = (m: ReturnType<typeof controlBarGroups>) => m.groups.map((g) => [g.id, g.items.map((i) => i.id)]);
 
 describe("controlBarGroups", () => {
-  it("orders groups Navigate, Sound, Screen, Capture", () => {
+  it("orders groups Navigate, Sound, Screen, Capture, Scroll", () => {
     const m = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st());
     expect(ids(m)).toEqual([
       ["navigate", ["back", "home", "recents"]],
       ["sound", ["volUp", "volDown"]],
       ["screen", ["power", "screenOff", "orientToggle"]],
       ["capture", ["screenshot", "record"]],
+      ["scroll", ["scroll"]],
     ]);
   });
 
-  it("has no Sleep button anywhere", () => {
+  it("has no Sleep or legacy swipeScroll button anywhere", () => {
     const m = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st({ inCall: true }));
     const all = [...m.groups.flatMap((g) => g.items), ...m.more].map((i) => i.id as string);
     expect(all).not.toContain("sleep");
+    expect(all).not.toContain("swipeScroll");
     expect((BUTTON_IDS as string[]).includes("sleep")).toBe(false);
+    expect((BUTTON_IDS as string[]).includes("swipeScroll")).toBe(false);
   });
 
   it("shows End call only during a call, in danger style", () => {
@@ -50,18 +53,22 @@ describe("controlBarGroups", () => {
     expect(items.find((i) => i.id === "screenOff")).toMatchObject({ kind: "toggle", pressed: true });
   });
 
-  it("hides Rotate in flex and keeps More contents in order", () => {
+  it("hides Rotate in flex, keeps More without Paged scrolling, and hides Scroll when disabled", () => {
     const m = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st({ showOrient: false }));
     expect(m.groups.flatMap((g) => g.items).some((i) => i.id === "orientToggle")).toBe(false);
-    expect(m.more.map((i) => i.id)).toEqual(["notifications", "wifi", "bluetooth", "dnd", "swipeScroll"]);
-    const swipe = m.more.find((i) => i.id === "swipeScroll");
-    expect(swipe?.label).toBe("Paged scrolling");
-    expect(swipe?.hint).toMatch(/short-video/);
-    const noSwipe = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st({ showSwipe: false }));
-    expect(noSwipe.more.map((i) => i.id)).not.toContain("swipeScroll");
+    expect(m.more.map((i) => i.id)).toEqual(["notifications", "wifi", "bluetooth", "dnd"]);
+    expect(m.more.some((i) => i.label === "Paged scrolling")).toBe(false);
+    const noScroll = controlBarGroups(
+      { ...DEFAULT_CONTROL_CONFIG, buttons: { ...DEFAULT_CONTROL_CONFIG.buttons, scroll: false } },
+      "display",
+      st(),
+    );
+    expect(noScroll.groups.flatMap((g) => g.items).some((i) => i.id === "scroll")).toBe(false);
+    const hiddenScroll = controlBarGroups(DEFAULT_CONTROL_CONFIG, "display", st({ showScroll: false }));
+    expect(hiddenScroll.groups.flatMap((g) => g.items).some((i) => i.id === "scroll")).toBe(false);
   });
 
-  it("camera mode has a camera group (torch, zoom, stop) and no More", () => {
+  it("camera mode has a camera group (torch, zoom, stop), no Scroll, and no More", () => {
     const m = controlBarGroups(DEFAULT_CONTROL_CONFIG, "camera", st({ torchOn: true }));
     expect(m.groups[0].id).toBe("camera");
     const cam = m.groups[0].items.map((i) => i.id);
@@ -69,6 +76,7 @@ describe("controlBarGroups", () => {
     expect(m.groups[0].items.find((i) => i.id === "torch")?.pressed).toBe(true);
     expect(m.more).toEqual([]);
     expect(m.groups.flatMap((g) => g.items).some((i) => i.id === "back")).toBe(false);
+    expect(m.groups.flatMap((g) => g.items).some((i) => i.id === "scroll")).toBe(false);
   });
 
   it("collapsed floating surface shows Navigate and More only", () => {
